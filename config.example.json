@@ -1,0 +1,6 @@
+{
+  "corpid": "ww...",
+  "corpsecret": "你的 corpsecret（通讯录或文档密钥）",
+  "webhook": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
+  "webhookName": "中控通知机器人"
+}
