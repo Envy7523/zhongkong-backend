@@ -419,6 +419,82 @@ const pages = {
     }
   },
 
+  // ======== 日报推送 ========
+  report: {
+    title: '日报推送',
+    render() {
+      const today = new Date().toLocaleDateString('zh-CN');
+      return `
+        <div class="card">
+          <div class="card-header">📊 图表配置</div>
+          <div class="form-group">
+            <label class="form-label">图表标题</label>
+            <input type="text" class="form-input" id="reportTitle" placeholder="每日工作汇报" value="每日工作汇报">
+          </div>
+          <div class="form-group">
+            <label class="form-label">副标题（日期等）</label>
+            <input type="text" class="form-input" id="reportSubtitle" placeholder="${today}" value="${today}">
+          </div>
+          <div class="form-group">
+            <label class="form-label">图表类型</label>
+            <select class="form-input" id="reportChartType">
+              <option value="bar">📊 柱状图（对比）</option>
+              <option value="line">📈 折线图（趋势）</option>
+              <option value="pie">🥧 饼图/环形图（占比）</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">X轴标签（逗号分隔，饼图为名称）</label>
+            <input type="text" class="form-input" id="reportLabels" placeholder="研发部,市场部,销售部,运营部,人事部" value="研发部,市场部,销售部,运营部,人事部">
+          </div>
+          <div class="form-group">
+            <label class="form-label">数据集（每行一组：<code>名称=数值,数值,...</code>；饼图只需一行数值）</label>
+            <textarea class="form-input" id="reportDatasets" rows="4" placeholder="已完成=42,28,35,20,15&#10;进行中=8,12,5,10,3" style="resize:vertical;min-height:80px;">已完成=42,28,35,20,15
+进行中=8,12,5,10,3</textarea>
+            <div class="form-hint">
+              每行格式：<code>名称=值1,值2,值3</code>。柱状图/折线图支持多组；饼图只需一行数值
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">📝 日报文字（Markdown）</div>
+          <div class="form-group">
+            <label class="form-label">日报内容（支持 Markdown 语法）</label>
+            <textarea class="form-input" id="reportText" rows="8" placeholder="## 📋 今日工作总结&#10;&#10;### ✅ 完成事项&#10;- 项目A进度更新至80%&#10;- 完成客户需求评审&#10;&#10;### ⚠️ 风险与问题&#10;- 暂无&#10;&#10;### 📌 明日计划&#10;- 继续推进项目A&#10;- 准备周报材料" style="resize:vertical;min-height:160px;">## 📋 今日工作总结
+
+### ✅ 完成事项
+- 项目A进度更新至80%
+- 完成客户需求评审
+
+### ⚠️ 风险与问题
+- 暂无
+
+### 📌 明日计划
+- 继续推进项目A
+- 准备周报材料</textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">推送选项</label>
+            <div style="display:flex;gap:16px;align-items:center;padding:8px 0;">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="checkbox" id="reportSendChart" checked> 发送图表
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                <input type="checkbox" id="reportSendText" checked> 发送文字日报
+              </label>
+            </div>
+          </div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <button class="btn btn-primary" id="btnSendReport">🚀 推送到群</button>
+            <button class="btn btn-default" id="btnFillDemo">📋 填充示例数据</button>
+          </div>
+          <div class="test-result" id="reportResult"></div>
+        </div>
+      `;
+    }
+  },
+
   // ======== 系统设置 ========
   settings: {
     title: '系统设置',
@@ -542,6 +618,13 @@ const pageBindings = {
       // 初始触发一次
       msgtypeSelect.dispatchEvent(new Event('change'));
     }
+  },
+
+  report: () => {
+    const btnSend = document.getElementById('btnSendReport');
+    const btnDemo = document.getElementById('btnFillDemo');
+    if (btnSend) btnSend.onclick = sendReport;
+    if (btnDemo) btnDemo.onclick = fillDemoReport;
   }
 };
 
@@ -843,4 +926,131 @@ async function tablePipeline() {
     el.className = 'test-result visible error';
     el.textContent = `❌ ${e.message}`;
   }
+}
+
+// ===== 日报推送 =====
+
+/** 解析数据集文本为 chart_config 所需格式 */
+function parseDatasets(raw, isPie) {
+  const lines = raw.trim().split('\n').filter(l => l.trim());
+  if (lines.length === 0) return isPie ? { labels: [], values: [] } : [];
+
+  if (isPie) {
+    // 饼图：每行 "名称=数值"，聚合成 labels + values
+    const labels = [];
+    const values = [];
+    lines.forEach(line => {
+      const idx = line.indexOf('=');
+      if (idx > 0) {
+        labels.push(line.substring(0, idx).trim());
+        values.push(parseFloat(line.substring(idx + 1).trim()) || 0);
+      }
+    });
+    return { labels, values };
+  }
+
+  // 柱状图/折线图：每行 "名称=值1,值2,..."
+  return lines.map(line => {
+    const idx = line.indexOf('=');
+    const label = idx > 0 ? line.substring(0, idx).trim() : line;
+    const rawVals = idx > 0 ? line.substring(idx + 1) : '0';
+    const data = rawVals.split(',').map(v => parseFloat(v.trim()) || 0);
+    return { label, data };
+  });
+}
+
+/** 发送日报 */
+async function sendReport() {
+  const el = document.getElementById('reportResult');
+  el.className = 'test-result visible loading';
+  el.textContent = '⏳ 正在生成日报并推送到群...';
+
+  const title = document.getElementById('reportTitle').value.trim() || '日报';
+  const subtitle = document.getElementById('reportSubtitle').value.trim();
+  const chartType = document.getElementById('reportChartType').value;
+  const labelsRaw = document.getElementById('reportLabels').value.trim();
+  const datasetsRaw = document.getElementById('reportDatasets').value.trim();
+  const reportText = document.getElementById('reportText').value.trim();
+  const sendChart = document.getElementById('reportSendChart').checked;
+  const sendText = document.getElementById('reportSendText').checked;
+
+  const isPie = chartType === 'pie';
+  const labels = labelsRaw ? labelsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const datasets = parseDatasets(datasetsRaw, isPie);
+
+  // 构建 chart_config
+  let chartConfig = { title, width: 800, height: 420 };
+  if (subtitle) chartConfig.subtitle = subtitle;
+
+  if (isPie) {
+    chartConfig.labels = datasets.labels || labels;
+    chartConfig.values = datasets.values || [];
+    chartConfig.size = 460;
+  } else {
+    chartConfig.labels = labels;
+    chartConfig.datasets = datasets;
+  }
+
+  // 构建请求体
+  const body = {
+    title,
+    chart_type: sendChart ? chartType : null,
+    chart_config: chartConfig,
+    report_text: sendText ? reportText : null,
+    send_text_only: !sendChart,
+  };
+
+  try {
+    const data = await apiPost('/api/wechat/report/send', body);
+    el.className = 'test-result visible success';
+    let summary = `✅ ${data.message}\n`;
+    (data.results || []).forEach(r => {
+      if (r.type === 'image') summary += `   📷 图表: ${r.ok ? '已发送' + (r.size ? ` (${r.size} 字节)` : '') : '失败'}\n`;
+      if (r.type === 'markdown') summary += `   📝 文字: ${r.ok ? '已发送' : '失败'}\n`;
+    });
+    el.textContent = summary;
+  } catch (e) {
+    el.className = 'test-result visible error';
+    el.textContent = `❌ 推送失败：${e.message}`;
+  }
+}
+
+/** 填充示例数据 */
+function fillDemoReport() {
+  const chartType = document.getElementById('reportChartType').value;
+  const today = new Date().toLocaleDateString('zh-CN');
+
+  document.getElementById('reportSubtitle').value = today;
+
+  if (chartType === 'pie') {
+    document.getElementById('reportTitle').value = '任务状态分布';
+    document.getElementById('reportLabels').value = '已完成,进行中,待分配,已取消';
+    document.getElementById('reportDatasets').value = '已完成=65\n进行中=20\n待分配=10\n已取消=5';
+  } else if (chartType === 'line') {
+    document.getElementById('reportTitle').value = '本周活跃用户趋势';
+    document.getElementById('reportLabels').value = '周一,周二,周三,周四,周五,周六,周日';
+    document.getElementById('reportDatasets').value = '用户数=120,145,132,168,200,178,155\n互动数=45,52,48,61,70,63,55';
+  } else {
+    document.getElementById('reportTitle').value = '各部门完成任务统计';
+    document.getElementById('reportLabels').value = '研发部,市场部,销售部,运营部,人事部';
+    document.getElementById('reportDatasets').value = '已完成=42,28,35,20,15\n进行中=8,12,5,10,3';
+  }
+
+  document.getElementById('reportText').value = `## 📋 今日工作总结
+
+### ✅ 完成事项
+- 项目A进度更新至80%
+- 完成客户需求评审
+
+### ⚠️ 风险与问题
+- 暂无
+
+### 📌 明日计划
+- 继续推进项目A
+- 准备周报材料`;
+
+  // 提示
+  const el = document.getElementById('reportResult');
+  el.className = 'test-result visible success';
+  el.textContent = '✅ 已填充「' + document.getElementById('reportTitle').value + '」示例数据';
 }

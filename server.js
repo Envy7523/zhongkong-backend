@@ -6,6 +6,9 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { drawBarChart, drawLineChart, drawPieChart } = require('./lib/chart');
+const { drawStoreDailyReport } = require('./lib/report');
 
 const app = express();
 const PORT = process.env.PORT || 3456;
@@ -563,6 +566,135 @@ app.post('/api/wechat/table/pipeline', async (req, res) => {
   }
 });
 
+// ===== API: 日报推送（图表 + 文字） =====
+
+/** 图表类型 → 绘制函数映射 */
+const CHART_DRAWERS = {
+  bar: drawBarChart,
+  line: drawLineChart,
+  pie: drawPieChart,
+};
+
+/** POST /api/wechat/report/send — 生成日报图表并推送到群 */
+app.post('/api/wechat/report/send', async (req, res) => {
+  const cfg = loadConfig();
+  if (!cfg.webhook) {
+    return res.status(400).json({ error: '请先配置 Webhook 地址' });
+  }
+
+  const {
+    title = '日报',
+    chart_type,
+    chart_config = {},
+    report_text,      // markdown 格式的文字日报（可选）
+    send_text_only = false,
+  } = req.body;
+
+  const results = [];
+
+  try {
+    // ---- 生成并发送图表 ----
+    if (!send_text_only && chart_type && CHART_DRAWERS[chart_type]) {
+      const drawer = CHART_DRAWERS[chart_type];
+      const { base64: imgBase64 } = drawer(chart_config);
+      const md5 = crypto.createHash('md5').update(Buffer.from(imgBase64, 'base64')).digest('hex');
+
+      const imgResp = await httpPost(cfg.webhook, {
+        msgtype: 'image',
+        image: { base64: imgBase64, md5 },
+      });
+
+      if (imgResp.errcode === 0) {
+        results.push({ type: 'image', ok: true, size: Math.round(imgBase64.length * 0.75) });
+      } else {
+        results.push({ type: 'image', ok: false, error: `[${imgResp.errcode}] ${imgResp.errmsg}` });
+        return res.status(400).json({
+          error: `图表发送失败: [${imgResp.errcode}] ${imgResp.errmsg}`,
+          results,
+        });
+      }
+    }
+
+    // ---- 发送文字日报 ----
+    if (report_text) {
+      const textResp = await httpPost(cfg.webhook, {
+        msgtype: 'markdown',
+        markdown: { content: report_text },
+      });
+
+      if (textResp.errcode === 0) {
+        results.push({ type: 'markdown', ok: true });
+      } else {
+        results.push({ type: 'markdown', ok: false, error: `[${textResp.errcode}] ${textResp.errmsg}` });
+      }
+    }
+
+    res.json({ ok: true, message: '日报推送完成', results });
+  } catch (err) {
+    res.status(500).json({ error: `日报推送失败: ${err.message}`, results });
+  }
+});
+
+// ===== API: 门店日报图片推送 =====
+
+/** 默认门店日报数据（用户提供的示例数据） */
+const DEFAULT_DAILY_DATA = {
+  storeName: '鹅太公烧鹅（龙岗万科店）',
+  date: '2026年7月9日',
+  revenue: 14525.57,
+  actualRevenue: 7433.53,
+  orderCount: 281,
+  sources: [
+    { label: '一键买单（尾款）', value: 3439.80 },
+    { label: '抖音团购', value: 2193.69 },
+    { label: '会员卡', value: 1771.24 },
+    { label: '美团团购', value: 28.80 },
+  ],
+  channels: [
+    { label: '京东外卖', value: 7092.04 },
+    { label: '淘宝闪购', value: 1950.40 },
+    { label: '店内销售', value: 443.40 },
+    { label: '自提销售', value: 183.30 },
+    { label: '美团外卖', value: 0.00 },
+  ],
+  discountAmount: 891.50,
+  discountRate: '48.82%',
+};
+
+/** POST /api/report/daily-image — 生成门店日报图片并通过 Webhook 推送到群 */
+app.post('/api/report/daily-image', async (req, res) => {
+  const cfg = loadConfig();
+  if (!cfg.webhook) {
+    return res.status(400).json({ error: '请先配置 Webhook 地址' });
+  }
+
+  // 合并用户数据与默认数据
+  const data = { ...DEFAULT_DAILY_DATA, ...req.body };
+  // 深度合并 sources 和 channels
+  if (req.body.sources) data.sources = req.body.sources;
+  if (req.body.channels) data.channels = req.body.channels;
+
+  try {
+    // 生成日报图片
+    const { base64: imgBase64 } = drawStoreDailyReport(data);
+    const md5 = crypto.createHash('md5').update(Buffer.from(imgBase64, 'base64')).digest('hex');
+
+    // 通过 Webhook 发送图片
+    const sendResult = await httpPost(cfg.webhook, {
+      msgtype: 'image',
+      image: { base64: imgBase64, md5 },
+    });
+
+    if (sendResult.errcode === 0) {
+      res.json({ ok: true, message: '日报图片已推送到群', storeName: data.storeName });
+    } else {
+      res.status(400).json({ error: `图片发送失败: [${sendResult.errcode}] ${sendResult.errmsg}` });
+    }
+  } catch (err) {
+    res.status(500).json({ error: `日报图片生成/发送失败: ${err.message}` });
+  }
+});
+
 // ===== 启动服务 =====
 app.listen(PORT, () => {
   console.log(`🚀 中控后台已启动: http://localhost:${PORT}`);
@@ -577,4 +709,6 @@ app.listen(PORT, () => {
   console.log(`   POST /api/wechat/table/sheets  — 获取工作表列表`);
   console.log(`   POST /api/wechat/table/records — 读取表格记录`);
   console.log(`   POST /api/wechat/table/pipeline— 读取表格并推送到群`);
+  console.log(`   POST /api/wechat/report/send   — 日报图表推送`);
+  console.log(`   POST /api/report/daily-image    — 门店日报图片推送`);
 });
