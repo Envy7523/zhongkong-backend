@@ -134,13 +134,54 @@ app.post('/api/wechat/send', async (req, res) => {
     return res.status(400).json({ error: '请先配置 Webhook 地址' });
   }
 
-  const { msgtype = 'text', content } = req.body;
+  const {
+    msgtype = 'text',
+    content,
+    title,
+    picurl,
+    url,
+    mentioned_list,
+    mentioned_mobile_list,
+  } = req.body;
+
+  // 构建 @提醒 数据
+  const mentions = {};
+  if (mentioned_list && mentioned_list.length) {
+    mentions.mentioned_list = mentioned_list;
+  }
+  if (mentioned_mobile_list && mentioned_mobile_list.length) {
+    mentions.mentioned_mobile_list = mentioned_mobile_list;
+  }
 
   let payload;
   if (msgtype === 'text') {
-    payload = { msgtype: 'text', text: { content: content || '（空消息）' } };
+    payload = {
+      msgtype: 'text',
+      text: { content: content || '（空消息）', ...mentions },
+    };
   } else if (msgtype === 'markdown') {
-    payload = { msgtype: 'markdown', markdown: { content: content || '' } };
+    payload = {
+      msgtype: 'markdown',
+      markdown: { content: content || '' },
+    };
+    // markdown 也支持 mentioned_list（企业微信部分版本支持）
+    if (Object.keys(mentions).length) {
+      payload.markdown = { ...payload.markdown, ...mentions };
+    }
+  } else if (msgtype === 'news') {
+    // news 类型必须提供 url，否则企业微信 API 返回 40039
+    if (!url) {
+      return res.status(400).json({
+        error: '图文消息(msgtype=news)缺少必填参数 url（文章跳转链接）。\n提示：请在前端自定义消息表单中填入链接地址。',
+      });
+    }
+    const article = {
+      title: title || content || '消息',
+      description: content || '',
+      url: url,
+    };
+    if (picurl) article.picurl = picurl;
+    payload = { msgtype: 'news', news: { articles: [article] } };
   } else {
     payload = { msgtype, ...req.body.extra };
   }

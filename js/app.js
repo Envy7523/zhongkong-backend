@@ -383,6 +383,30 @@ const pages = {
             <button class="btn btn-default" id="btnSendTest">🧪 发送测试消息</button>
           </div>
         </div>
+
+        <div class="card">
+          <div class="card-header">✏️ 自定义消息</div>
+          <div class="form-group">
+            <label class="form-label">标题（可选）</label>
+            <input type="text" class="form-input" id="customTitle" placeholder="消息标题，留空则用正文第一行">
+          </div>
+          <div class="form-group">
+            <label class="form-label">文案内容</label>
+            <textarea class="form-input" id="customContent" rows="4" placeholder="输入要发送的文字内容..." style="resize:vertical;min-height:80px;"></textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">跳转链接 <span style="color:var(--color-danger)">*必填</span></label>
+            <input type="text" class="form-input" id="customUrl" placeholder="https://example.com/article">
+            <div class="form-hint">图文消息必须提供跳转链接，点击消息将跳转到此地址</div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">图片链接（可选）</label>
+            <input type="text" class="form-input" id="customPicurl" placeholder="https://example.com/image.png">
+            <div class="form-hint">填入可公开访问的图片 URL，消息会附带封面图</div>
+          </div>
+          <button class="btn btn-primary" id="btnSendCustom">📨 发送自定义消息</button>
+          <div class="test-result" id="customMsgResult"></div>
+        </div>
       `;
     }
   },
@@ -484,6 +508,9 @@ const pageBindings = {
     if (btnDepts) btnDepts.onclick = () => doQuickPipeline('department_list');
     if (btnUsers) btnUsers.onclick = () => doQuickPipeline('user_list');
     if (btnTest) btnTest.onclick = testWebhookSend;
+
+    const btnCustom = document.getElementById('btnSendCustom');
+    if (btnCustom) btnCustom.onclick = sendCustomMessage;
   }
 };
 
@@ -610,6 +637,49 @@ async function doPipeline() {
   } catch (e) {
     el.className = 'test-result visible error';
     el.textContent = `❌ 推送失败：${e.message}`;
+  }
+}
+
+// 发送自定义消息
+async function sendCustomMessage() {
+  const title = document.getElementById('customTitle').value.trim();
+  const content = document.getElementById('customContent').value.trim();
+  const url = document.getElementById('customUrl').value.trim();
+  const picurl = document.getElementById('customPicurl').value.trim();
+  const el = document.getElementById('customMsgResult');
+
+  if (!content) {
+    el.className = 'test-result visible error';
+    el.textContent = '❌ 请输入文案内容';
+    return;
+  }
+  if (!url) {
+    el.className = 'test-result visible error';
+    el.textContent = '❌ 请输入跳转链接（图文消息必填）';
+    return;
+  }
+
+  el.className = 'test-result visible loading';
+  el.textContent = '⏳ 正在发送...';
+
+  try {
+    const data = await apiPost('/api/wechat/send', {
+      msgtype: 'news',
+      title: title || undefined,
+      content,
+      url,
+      picurl: picurl || undefined,
+    });
+    el.className = 'test-result visible success';
+    el.textContent = '✅ ' + data.message;
+    // 清空输入
+    document.getElementById('customContent').value = '';
+    document.getElementById('customTitle').value = '';
+    document.getElementById('customUrl').value = '';
+    document.getElementById('customPicurl').value = '';
+  } catch (e) {
+    el.className = 'test-result visible error';
+    el.textContent = '❌ 发送失败：' + e.message;
   }
 }
 
