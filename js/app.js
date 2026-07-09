@@ -387,17 +387,25 @@ const pages = {
         <div class="card">
           <div class="card-header">✏️ 自定义消息</div>
           <div class="form-group">
-            <label class="form-label">标题（可选）</label>
-            <input type="text" class="form-input" id="customTitle" placeholder="消息标题，留空则用正文第一行">
+            <label class="form-label">消息类型</label>
+            <select class="form-input" id="customMsgtype">
+              <option value="text">纯文本（无需链接）</option>
+              <option value="markdown">Markdown（无需链接）</option>
+              <option value="news">图文消息（需跳转链接）</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">标题（可选，仅图文）</label>
+            <input type="text" class="form-input" id="customTitle" placeholder="图文消息标题，留空则用正文第一行">
           </div>
           <div class="form-group">
             <label class="form-label">文案内容</label>
             <textarea class="form-input" id="customContent" rows="4" placeholder="输入要发送的文字内容..." style="resize:vertical;min-height:80px;"></textarea>
           </div>
           <div class="form-group">
-            <label class="form-label">跳转链接 <span style="color:var(--color-danger)">*必填</span></label>
+            <label class="form-label">跳转链接 <span style="color:var(--color-danger)" id="customUrlRequired">（图文必填）</span></label>
             <input type="text" class="form-input" id="customUrl" placeholder="https://example.com/article">
-            <div class="form-hint">图文消息必须提供跳转链接，点击消息将跳转到此地址</div>
+            <div class="form-hint">仅图文消息需要。纯文本 / Markdown 可留空</div>
           </div>
           <div class="form-group">
             <label class="form-label">图片链接（可选）</label>
@@ -511,6 +519,29 @@ const pageBindings = {
 
     const btnCustom = document.getElementById('btnSendCustom');
     if (btnCustom) btnCustom.onclick = sendCustomMessage;
+
+    // 消息类型切换：图文时显示链接必填，其他类型隐藏必填提示
+    const msgtypeSelect = document.getElementById('customMsgtype');
+    if (msgtypeSelect) {
+      msgtypeSelect.onchange = () => {
+        const isNews = msgtypeSelect.value === 'news';
+        const urlInput = document.getElementById('customUrl');
+        const urlReq = document.getElementById('customUrlRequired');
+        if (urlInput) {
+          urlInput.style.opacity = isNews ? '1' : '0.5';
+          urlInput.required = isNews;
+        }
+        if (urlReq) {
+          urlReq.textContent = isNews ? '（图文必填）' : '（可选）';
+        }
+        const titleInput = document.getElementById('customTitle');
+        if (titleInput) {
+          titleInput.placeholder = isNews ? '图文消息标题，留空则用正文第一行' : '（仅图文消息使用，可忽略）';
+        }
+      };
+      // 初始触发一次
+      msgtypeSelect.dispatchEvent(new Event('change'));
+    }
   }
 };
 
@@ -642,6 +673,7 @@ async function doPipeline() {
 
 // 发送自定义消息
 async function sendCustomMessage() {
+  const msgtype = document.getElementById('customMsgtype').value;
   const title = document.getElementById('customTitle').value.trim();
   const content = document.getElementById('customContent').value.trim();
   const url = document.getElementById('customUrl').value.trim();
@@ -653,9 +685,10 @@ async function sendCustomMessage() {
     el.textContent = '❌ 请输入文案内容';
     return;
   }
-  if (!url) {
+  // url 仅在图文消息时必填
+  if (msgtype === 'news' && !url) {
     el.className = 'test-result visible error';
-    el.textContent = '❌ 请输入跳转链接（图文消息必填）';
+    el.textContent = '❌ 图文消息必须填写跳转链接';
     return;
   }
 
@@ -663,13 +696,21 @@ async function sendCustomMessage() {
   el.textContent = '⏳ 正在发送...';
 
   try {
-    const data = await apiPost('/api/wechat/send', {
-      msgtype: 'news',
-      title: title || undefined,
+    const body = {
+      msgtype,
       content,
-      url,
-      picurl: picurl || undefined,
-    });
+    };
+    if (msgtype === 'news') {
+      // 图文消息：用 title/content/url/picurl 构建
+      body.title = title || undefined;
+      body.url = url;
+      body.picurl = picurl || undefined;
+    } else if (msgtype === 'markdown') {
+      body.content = content;
+    }
+    // text 类型只需要 content，已在上方设置
+
+    const data = await apiPost('/api/wechat/send', body);
     el.className = 'test-result visible success';
     el.textContent = '✅ ' + data.message;
     // 清空输入
