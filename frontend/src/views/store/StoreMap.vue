@@ -98,18 +98,13 @@ async function drillTo(name) {
     ])
     if (!chartRef.value || !geo) return
 
-    if (!stats.data || stats.data.length === 0) {
-      alert(`"${fullName}"暂无详细门店数据`)
-      loading.value = false
-      return
-    }
-
     isDrill.value = true
     provinceName.value = fullName
-    total.value = stats.data.reduce((s, d) => s + d.value, 0)
+    const list = stats.data || []
+    total.value = list.reduce((s, d) => s + d.value, 0)
 
     echarts.registerMap(fullName, geo)
-    renderMap(fullName, stats.data)
+    renderMap(fullName, list)
   } finally {
     loading.value = false
   }
