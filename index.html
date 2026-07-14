@@ -3,63 +3,124 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>中控后台</title>
+<title>鹅太公 · 中控后台</title>
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 <!-- 侧边栏 -->
 <aside class="sidebar" id="sidebar">
   <div class="sidebar-brand">
-    <span class="brand-icon">⚙️</span>
-    <span class="brand-text">中控后台</span>
+    <span class="brand-icon">🦆</span>
+    <span class="brand-text">鹅太公中控</span>
   </div>
   <nav class="sidebar-nav" id="sidebarNav">
     <a class="nav-item active" data-page="dashboard">
       <span class="nav-icon">📊</span>
-      <span class="nav-label">仪表盘</span>
+      <span class="nav-label">数据概括</span>
     </a>
+
+    <!-- 数据分析 — 子菜单折叠 -->
+    <div class="nav-group">
+      <a class="nav-item nav-parent" data-page="analysis" data-sub="revenue">
+        <span class="nav-icon">📈</span>
+        <span class="nav-label">数据分析</span>
+        <span class="nav-arrow">▾</span>
+      </a>
+      <div class="nav-sub">
+        <a class="nav-sub-item" data-page="analysis" data-sub="revenue">门店营收构成</a>
+        <a class="nav-sub-item" data-page="analysis" data-sub="cost">门店成本分析</a>
+        <a class="nav-sub-item" data-page="analysis" data-sub="sales">门店销量统计</a>
+        <a class="nav-sub-item" data-page="analysis" data-sub="supplies">门店耗材消耗</a>
+      </div>
+    </div>
+
     <a class="nav-item" data-page="api-config">
-      <span class="nav-icon">🔑</span>
-      <span class="nav-label">API 配置</span>
+      <span class="nav-icon">🔗</span>
+      <span class="nav-label">中控绑定</span>
     </a>
-    <a class="nav-item" data-page="data-query">
-      <span class="nav-icon">🔍</span>
-      <span class="nav-label">数据查询</span>
+
+    <a class="nav-item" data-page="ai-assistant">
+      <span class="nav-icon">🤖</span>
+      <span class="nav-label">AI助手</span>
     </a>
-    <a class="nav-item" data-page="table-reader">
-      <span class="nav-icon">📋</span>
-      <span class="nav-label">表格读取</span>
+
+    <!-- 门店管理 — 子菜单折叠 -->
+    <div class="nav-group">
+      <a class="nav-item nav-parent" data-page="store-management" data-sub="info">
+        <span class="nav-icon">🏪</span>
+        <span class="nav-label">门店管理</span>
+        <span class="nav-arrow">▾</span>
+      </a>
+      <div class="nav-sub">
+        <a class="nav-sub-item" data-page="store-management" data-sub="info">门店信息</a>
+        <a class="nav-sub-item" data-page="store-management" data-sub="fixed">固定成本</a>
+        <a class="nav-sub-item" data-page="store-management" data-sub="operating">运营成本</a>
+      </div>
+    </div>
+
+    <!-- 菜品管理 — 子菜单折叠 -->
+    <div class="nav-group">
+      <a class="nav-item nav-parent" data-page="menu-management" data-sub="overview">
+        <span class="nav-icon">🍽️</span>
+        <span class="nav-label">菜品管理</span>
+        <span class="nav-arrow">▾</span>
+      </a>
+      <div class="nav-sub">
+        <a class="nav-sub-item" data-page="menu-management" data-sub="overview">菜品总览</a>
+        <a class="nav-sub-item" data-page="menu-management" data-sub="cost">菜品成本</a>
+        <a class="nav-sub-item" data-page="menu-management" data-sub="expiry">效期管理</a>
+      </div>
+    </div>
+
+    <a class="nav-item" data-page="user-management">
+      <span class="nav-icon">👥</span>
+      <span class="nav-label">人员管理</span>
     </a>
+
+    <!-- 成本核算 — 子菜单折叠 -->
+    <div class="nav-group">
+      <a class="nav-item nav-parent" data-page="cost-accounting" data-sub="daily">
+        <span class="nav-icon">💰</span>
+        <span class="nav-label">成本核算</span>
+        <span class="nav-arrow">▾</span>
+      </a>
+      <div class="nav-sub">
+        <a class="nav-sub-item" data-page="cost-accounting" data-sub="daily">日成本核算</a>
+        <a class="nav-sub-item" data-page="cost-accounting" data-sub="weekly">周成本核算</a>
+        <a class="nav-sub-item" data-page="cost-accounting" data-sub="monthly">月成本核算</a>
+      </div>
+    </div>
+
+    <a class="nav-item" data-page="data-import">
+      <span class="nav-icon">📥</span>
+      <span class="nav-label">数据导入</span>
+    </a>
+
     <a class="nav-item" data-page="pipeline">
       <span class="nav-icon">📤</span>
       <span class="nav-label">一键推送</span>
     </a>
-    <a class="nav-item" data-page="report">
-      <span class="nav-icon">📈</span>
-      <span class="nav-label">日报推送</span>
-    </a>
+
     <a class="nav-item" data-page="settings">
       <span class="nav-icon">⚡</span>
-      <span class="nav-label">系统设置</span>
+      <span class="nav-label">网页设置</span>
     </a>
   </nav>
   <div class="sidebar-footer">
-    <span class="version">v0.2.0</span>
+    <span class="version">v0.3.0</span>
   </div>
 </aside>
 
 <!-- 主区域 -->
 <div class="main-wrapper">
-  <!-- 顶栏 -->
   <header class="topbar">
     <button class="menu-toggle" id="menuToggle" title="展开/收起侧边栏">☰</button>
-    <h1 class="page-title" id="pageTitle">仪表盘</h1>
+    <h1 class="page-title" id="pageTitle">数据概括</h1>
     <div class="topbar-actions">
       <span class="topbar-status" id="serverStatus">⏳ 检测中...</span>
     </div>
   </header>
 
-  <!-- 内容区 -->
   <main class="content" id="contentArea">
     <!-- 页面内容由 JS 动态渲染 -->
   </main>
