@@ -8,6 +8,7 @@ const API_BASE = ''; // 与静态页面同源，由 express.static 提供
 // ===== 全局状态 =====
 let currentPage = 'dashboard';
 let serverOnline = false;
+let currentSub = "";
 
 // ===== 初始化 =====
 document.addEventListener('DOMContentLoaded', () => {
@@ -42,7 +43,7 @@ function setServerStatus(cls, text) {
 
 // ===== 导航 =====
 function initNavigation() {
-  document.getElementById('sidebarNav').addEventListener('click', (e) => {
+  document.getElementById('sidebarNav').addEventListener('click', (e) => { const si = e.target.closest(".nav-sub-item"); if (si) { e.stopPropagation(); return; }
     const item = e.target.closest('.nav-item');
     if (!item) return;
     const page = item.dataset.page;
@@ -108,51 +109,48 @@ function showEl(id, html) {
 // ===== 页面定义 =====
 const pages = {
 
-  // ======== 仪表盘 ========
+  // ======== 数据概括(增强版) ========
   dashboard: {
-    title: '仪表盘',
+    title: '数据概括',
     async onRender() {
-      let apiOk = false, webhookOk = false;
       try {
-        const cfg = await apiGet('/api/config');
-        apiOk = cfg.configured;
-        webhookOk = cfg.webhookConfigured;
-      } catch {}
-
-      showEl('statApi', apiOk ? '已配置' : '未配置');
-      const apiEl = document.getElementById('statApi');
-      if (apiEl) apiEl.className = `stat-value ${apiOk ? 'success' : 'warning'}`;
-
-      showEl('statWebhook', webhookOk ? '已配置' : '未配置');
-      const whEl = document.getElementById('statWebhook');
-      if (whEl) whEl.className = `stat-value ${webhookOk ? 'success' : 'warning'}`;
+        const stats = await apiGet('/api/dashboard/stats');
+        const s = stats.stats;
+        showEl('statStores', s.storeCount);
+        showEl('statActive', s.activeStores);
+        showEl('statEmployees', s.employeeCount);
+        showEl('statMenu', s.menuCount);
+        showEl('statPush', s.pushSuccess + '/' + s.pushTotal);
+        let apiOk = false, webhookOk = false;
+        try { const cfg = await apiGet('/api/config'); apiOk = cfg.configured; webhookOk = cfg.webhookConfigured; } catch {}
+        const apiEl = document.getElementById("statApi");
+        showEl('statApi', apiOk ? '已配置' : '未配置');
+        if (apiEl) apiEl.className = 'stat-value ' + (apiOk ? 'success' : 'warning');
+        showEl('statWebhook', webhookOk ? '已配置' : '未配置');
+        const whEl = document.getElementById("statWebhook");
+        if (whEl) whEl.className = 'stat-value ' + (webhookOk ? 'success' : 'warning');
+      } catch {
+        showEl('statStores', '—');
+      }
     },
     render() {
       return `
         <div class="stat-grid">
-          <div class="stat-card">
-            <div class="stat-label">企业微信 API</div>
-            <div class="stat-value warning" id="statApi">检测中...</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">Webhook 连接</div>
-            <div class="stat-value warning" id="statWebhook">检测中...</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">活跃服务</div>
-            <div class="stat-value primary">1</div>
-          </div>
-          <div class="stat-card">
-            <div class="stat-label">后端状态</div>
-            <div class="stat-value" id="statBackend">${serverOnline ? '在线' : '离线'}</div>
-          </div>
+          <div class="stat-card"><div class="stat-label">门店总数</div><div class="stat-value primary" id="statStores">—</div></div>
+          <div class="stat-card"><div class="stat-label">正常营业</div><div class="stat-value success" id="statActive">—</div></div>
+          <div class="stat-card"><div class="stat-label">在职员工</div><div class="stat-value primary" id="statEmployees">—</div></div>
+          <div class="stat-card"><div class="stat-label">在售菜品</div><div class="stat-value" id="statMenu">—</div></div>
+          <div class="stat-card"><div class="stat-label">API 状态</div><div class="stat-value warning" id="statApi">检测中...</div></div>
+          <div class="stat-card"><div class="stat-label">Webhook</div><div class="stat-value warning" id="statWebhook">检测中...</div></div>
+          <div class="stat-card"><div class="stat-label">推送成功率</div><div class="stat-value success" id="statPush">—</div></div>
+          <div class="stat-card"><div class="stat-label">后端状态</div><div class="stat-value" id="statBackend">${serverOnline ? '在线' : '离线'}</div></div>
         </div>
-        <div class="card">
-          <div class="card-header">快速操作</div>
+        <div class="card"><div class="card-header">快速操作</div>
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <button class="btn btn-primary" onclick="navigateTo('api-config')">🔑 配置 API</button>
-            <button class="btn btn-default" onclick="navigateTo('data-query')">🔍 查询数据</button>
+            <button class="btn btn-primary" onclick="navigateTo('api-config')">🔑 中控绑定</button>
+            <button class="btn btn-default" onclick="switchTab('store-management','info')">🏪 门店管理</button>
             <button class="btn btn-default" onclick="navigateTo('pipeline')">📤 一键推送</button>
+            <button class="btn btn-default" onclick="switchTab('cost-accounting','daily')">💰 成本核算</button>
           </div>
         </div>
       `;
@@ -516,9 +514,159 @@ const pages = {
         </div>
       `;
     }
-  }
+  },
+
+  // ===== 数据分析 =====
+  analysis: {
+    title: '数据分析',
+    onRender() {
+      if (!currentSub) currentSub = 'revenue';
+      updateSubNav('analysis', currentSub);
+      analysisBindings[currentSub]?.();
+    },
+    render() {
+      if (!currentSub) currentSub = 'revenue';
+      const tabs = [
+        { key: 'revenue', label: '门店营收构成' },
+        { key: 'cost', label: '门店成本分析' },
+        { key: 'sales', label: '门店销量统计' },
+        { key: 'supplies', label: '门店耗材消耗' },
+      ];
+      const tabHtml = tabs.map(t => `<button class="tab-item${currentSub===t.key?' active':''}" onclick="switchTab('analysis','${t.key}')">${t.label}</button>`).join('');
+      return `<div class="tab-nav">${tabHtml}</div><div id="analysisContent"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+    }
+  },
+
+  // ===== AI助手 =====
+  'ai-assistant': {
+    title: 'AI助手',
+    render() {
+      return `
+        <div class="card"><div class="card-header">🤖 AI问答</div>
+        <div class="alert alert-info">输入问题，AI 助手将根据门店经营数据为您提供分析建议。</div>
+        <div class="form-group"><label class="form-label">你的问题</label><textarea class="form-input" id="aiQuestion" rows="3" placeholder="例如：哪个门店的利润率最高？" style="resize:vertical;min-height:80px;"></textarea></div>
+        <button class="btn btn-primary" id="btnAiAsk">💬 提问</button><div class="test-result" id="aiResult"></div>
+        </div>
+        <div class="card"><div class="card-header">📷 AI识别门店烤制</div>
+        <div class="alert alert-info">此功能将通过摄像头或上传图片，自动识别烤制品的成熟度和品质。开发中，敬请期待。</div>
+        <div class="form-group"><label class="form-label">上传图片（开发中）</label><input type="file" class="form-input" accept="image/*" disabled></div>
+        <button class="btn btn-default" disabled>🔍 开始识别</button></div>`;
+    }
+  },
+
+  // ===== 门店管理 =====
+  'store-management': {
+    title: '门店管理',
+    onRender() {
+      if (!currentSub) currentSub = 'info';
+      updateSubNav('store-management', currentSub);
+      storeMgmtBindings[currentSub]?.();
+    },
+    render() {
+      if (!currentSub) currentSub = 'info';
+      const tabs = [
+        { key: 'info', label: '门店信息' },
+        { key: 'fixed', label: '固定成本' },
+        { key: 'operating', label: '运营成本' },
+      ];
+      const tabHtml = tabs.map(t => `<button class="tab-item${currentSub===t.key?' active':''}" onclick="switchTab('store-management','${t.key}')">${t.label}</button>`).join('');
+      return `<div class="tab-nav">${tabHtml}</div><div id="storeMgmtContent"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+    }
+  },
+
+  // ===== 菜品管理 =====
+  'menu-management': {
+    title: '菜品管理',
+    onRender() {
+      if (!currentSub) currentSub = 'overview';
+      updateSubNav('menu-management', currentSub);
+      menuBindings[currentSub]?.();
+    },
+    render() {
+      if (!currentSub) currentSub = 'overview';
+      const tabs = [
+        { key: 'overview', label: '菜品总览' },
+        { key: 'cost', label: '菜品成本' },
+        { key: 'expiry', label: '效期管理' },
+      ];
+      const tabHtml = tabs.map(t => `<button class="tab-item${currentSub===t.key?' active':''}" onclick="switchTab('menu-management','${t.key}')">${t.label}</button>`).join('');
+      return `<div class="tab-nav">${tabHtml}</div><div id="menuContent"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+    }
+  },
+
+  // ===== 人员管理 =====
+  'user-management': {
+    title: '人员管理',
+    onRender() { loadUsers(); },
+    render() {
+      return `
+        <div class="card"><div class="card-header">👥 权限设置</div>
+        <div style="display:flex;gap:12px;margin-bottom:16px;">
+          <button class="btn btn-primary" id="btnAddUser">➕ 添加用户</button>
+          <button class="btn btn-default" id="btnRefreshUsers">🔄 刷新</button>
+        </div>
+        <div class="test-result" id="userResult"></div><div id="userTable"></div>
+        </div>`;
+    }
+  },
+
+  // ===== 成本核算 =====
+  'cost-accounting': {
+    title: '成本核算',
+    onRender() {
+      if (!currentSub) currentSub = 'daily';
+      updateSubNav('cost-accounting', currentSub);
+      costBindings[currentSub]?.();
+    },
+    render() {
+      if (!currentSub) currentSub = 'daily';
+      const tabs = [
+        { key: 'daily', label: '日成本核算' },
+        { key: 'weekly', label: '周成本核算' },
+        { key: 'monthly', label: '月成本核算' },
+      ];
+      const tabHtml = tabs.map(t => `<button class="tab-item${currentSub===t.key?' active':''}" onclick="switchTab('cost-accounting','${t.key}')">${t.label}</button>`).join('');
+      return `<div class="tab-nav">${tabHtml}</div><div id="costContent"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+    }
+  },
+
+  // ===== 数据导入 =====
+  'data-import': {
+    title: '数据导入',
+    onRender() { loadImportStores(); },
+    render() {
+      return `
+        <div class="card"><div class="card-header">📥 日报数据导入</div>
+        <div class="alert alert-info">选择 Excel 日报文件，将门店经营数据导入到数据库中。</div>
+        <div class="form-group"><label class="form-label">选择日报文件</label><input type="file" class="form-input" id="importFile" accept=".xlsx,.xls"></div>
+        <button class="btn btn-primary" id="btnImportDaily">📤 导入日报</button><div class="test-result" id="importResult"></div></div>
+        <div class="card"><div class="card-header">📋 耗材数据录入</div>
+        <div class="form-group"><label class="form-label">门店</label><select class="form-input" id="supplyStoreId"></select></div>
+        <div class="form-group"><label class="form-label">日期</label><input type="date" class="form-input" id="supplyDate"></div>
+        <div class="form-group"><label class="form-label">耗材名称</label><input type="text" class="form-input" id="supplyItem" placeholder="如：打包盒、竹签"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+          <div class="form-group"><label class="form-label">数量</label><input type="number" class="form-input" id="supplyQty" value="1" step="0.1"></div>
+          <div class="form-group"><label class="form-label">单位</label><input type="text" class="form-input" id="supplyUnit" value="个"></div>
+          <div class="form-group"><label class="form-label">单价（元）</label><input type="number" class="form-input" id="supplyPrice" value="0" step="0.01"></div>
+        </div>
+        <button class="btn btn-primary" id="btnAddSupply">➕ 记录耗材</button><div class="test-result" id="supplyResult"></div></div>`;
+    }
+  },
 };
 
+// ===== 子导航处理 =====
+function updateSubNav(page, sub) {
+  document.querySelectorAll('.nav-sub-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.page === page && el.dataset.sub === sub);
+  });
+}
+function switchTab(page, sub) {
+  currentSub = sub;
+  updateSubNav(page, sub);
+  navigateTo(page);
+}
+
+// ===== 页面事件绑定 =====
 // ===== 页面事件绑定 =====
 
 // 通用：页面渲染后查找按钮并绑定（避免重复绑定）
@@ -1053,4 +1201,335 @@ function fillDemoReport() {
   const el = document.getElementById('reportResult');
   el.className = 'test-result visible success';
   el.textContent = '✅ 已填充「' + document.getElementById('reportTitle').value + '」示例数据';
+}
+
+
+// ===== 分析页面绑定 =====
+const analysisBindings = {
+  revenue: async () => {
+    const el = document.getElementById('analysisContent');
+    try {
+      const data = await apiGet('/api/analysis/revenue');
+      const ch = data.channels;
+      const rows = [
+        ['店内销售', ch.instore], ['自提销售', ch.pickup], ['美团外卖', ch.mtWaimai],
+        ['淘宝闪购', ch.tbFlash], ['京东外卖', ch.jdWaimai], ['美团一键买单', ch.mtPay],
+        ['美团团购', ch.mtTuan], ['抖音团购', ch.dyTuan], ['储值消费', ch.stored], ['优惠券', ch.coupon]
+      ].filter(r => r[1] > 0).sort((a,b) => b[1]-a[1]);
+      const total = rows.reduce((s,r) => s+r[1], 0);
+      const tbody = rows.map(r => '<tr><td>'+r[0]+'</td><td>¥'+r[1].toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>'+(total>0?(r[1]/total*100).toFixed(1):0)+'%</td></tr>').join('');
+      el.innerHTML = '<div class="card"><div class="card-header">门店营收构成 <span style="font-weight:400;color:#999;font-size:13px;">合计 ¥'+total.toLocaleString('zh-CN',{minimumFractionDigits:2})+'</span></div>'+
+        (rows.length?'<table class="data-table"><thead><tr><th>渠道</th><th>金额</th><th>占比</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无营收数据，请先导入日报</p>')+'</div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  },
+  cost: async () => {
+    const el = document.getElementById('analysisContent');
+    try {
+      const stores = await apiGet('/api/db/stores');
+      const data = await apiGet('/api/analysis/cost');
+      const rows = (data.rows||[]).slice(0,20);
+      const tbody = rows.map(r => {
+        const store = stores.stores?.find(s=>s.id===r.store_id);
+        return '<tr><td>'+(store?.store_name||r.store_id||'—')+'</td><td>'+(r.date||'—')+'</td><td>¥'+(r.revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.food_cost||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td style="color:'+((r.net_profit||0)>=0?'var(--color-success)':'var(--color-danger)')+'">¥'+(r.net_profit||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>';
+      }).join('');
+      el.innerHTML = '<div class="card"><div class="card-header">门店成本分析</div>'+
+        (rows.length?'<table class="data-table"><thead><tr><th>门店</th><th>日期</th><th>营业额</th><th>食材成本</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无成本数据</p>')+'</div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  },
+  sales: async () => {
+    const el = document.getElementById('analysisContent');
+    try {
+      const data = await apiGet('/api/analysis/sales');
+      const rows = data.rows||[];
+      const tbody = rows.slice(0,30).map(r => '<tr><td>'+(r.store_name||'—')+'</td><td>'+(r.date||'—')+'</td><td>'+(r.order_count||0)+'</td><td>¥'+(r.revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.actual_revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.discount_amount||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>').join('');
+      el.innerHTML = '<div class="card"><div class="card-header">门店销量统计</div>'+
+        (rows.length?'<table class="data-table"><thead><tr><th>门店</th><th>日期</th><th>订单数</th><th>营业额</th><th>实收</th><th>优惠金额</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无销量数据</p>')+'</div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  },
+  supplies: async () => {
+    const el = document.getElementById('analysisContent');
+    try {
+      const data = await apiGet('/api/analysis/supplies');
+      const rows = data.rows||[];
+      const totalCost = rows.reduce((s,r)=>s+(r.total_cost||0),0);
+      const tbody = rows.map(r => '<tr><td>'+r.item+'</td><td>'+r.total_qty+' '+r.unit+'</td><td>¥'+(r.total_cost||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>'+(totalCost>0?(r.total_cost/totalCost*100).toFixed(1):0)+'%</td></tr>').join('');
+      el.innerHTML = '<div class="card"><div class="card-header">门店耗材消耗 <span style="font-weight:400;color:#999;font-size:13px;">合计 ¥'+totalCost.toLocaleString('zh-CN',{minimumFractionDigits:2})+'</span></div>'+
+        (rows.length?'<table class="data-table"><thead><tr><th>耗材</th><th>用量</th><th>金额</th><th>占比</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无耗材数据</p>')+'</div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  }
+};
+
+// ===== 门店管理绑定 =====
+const storeMgmtBindings = {
+  info: async () => {
+    const el = document.getElementById('storeMgmtContent');
+    try {
+      const data = await apiGet('/api/db/stores');
+      const stores = data.stores||[];
+      const tbody = stores.map(s => '<tr><td>'+s.store_name+'</td><td>'+(s.status||'—')+'</td><td>'+(s.store_type||'—')+'</td><td>'+(s.city||'—')+'</td><td>'+(s.store_size||'—')+'</td><td>'+(s.table_2person?'双人桌×'+s.table_2person:'—')+'</td><td>'+(s.table_4person?'四人桌×'+s.table_4person:'—')+'</td><td>'+(s.phone||'—')+'</td><td>'+(s.opening_date||'—')+'</td></tr>').join('');
+      el.innerHTML = '<div class="card"><div class="card-header">🏪 门店信息（共 '+stores.length+' 家）</div><table class="data-table"><thead><tr><th>门店名称</th><th>状态</th><th>店型</th><th>城市</th><th>面积</th><th>双人桌</th><th>四人桌</th><th>电话</th><th>开业日期</th></tr></thead><tbody>'+tbody+'</tbody></table></div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  },
+  fixed: async () => {
+    const el = document.getElementById('storeMgmtContent');
+    try {
+      const storesData = await apiGet('/api/db/stores');
+      const stores = storesData.stores||[];
+      let html = '<div class="card"><div class="card-header">📋 门店固定成本</div>';
+      for (const s of stores.slice(0,10)) {
+        try {
+          const costs = await apiGet('/api/stores/'+s.id+'/fixed-costs');
+          const rows = (costs.costs||[]).map(c => '<tr><td>'+c.cost_type+'</td><td>¥'+(c.amount||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>'+(c.period||'月度')+'</td></tr>').join('');
+          html += '<div style="margin-bottom:16px;"><strong>'+s.store_name+'</strong><table class="data-table"><thead><tr><th>成本类型</th><th>金额</th><th>周期</th></tr></thead><tbody>'+(rows||'<tr><td colspan="3">无数据</td></tr>')+'</tbody></table></div>';
+        } catch { html += '<div style="margin-bottom:16px;"><strong>'+s.store_name+'</strong><p style="color:#999;">加载失败</p></div>'; }
+      }
+      html += '</div>';
+      el.innerHTML = html;
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  },
+  operating: async () => {
+    const el = document.getElementById('storeMgmtContent');
+    try {
+      const storesData = await apiGet('/api/db/stores');
+      const stores = storesData.stores||[];
+      el.innerHTML = '<div class="card"><div class="card-header">📋 门店运营成本</div><div class="form-group"><label class="form-label">选择门店</label><select class="form-input" id="opStoreSelect" onchange="loadOperatingCosts()">'+stores.map(s=>'<option value="'+s.id+'">'+s.store_name+'</option>').join('')+'</select></div><div id="opCostTable"><p style="color:#999;">请选择门店查看运营成本</p></div></div>';
+      if (stores.length) setTimeout(loadOperatingCosts, 100);
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  }
+};
+
+// ===== 菜品管理绑定 =====
+const menuBindings = {
+  overview: async () => {
+    const el = document.getElementById('menuContent');
+    try {
+      const data = await apiGet('/api/menu');
+      const items = data.items||[];
+      const tbody = items.map(m => '<tr><td>'+m.name+'</td><td>'+(m.category||'—')+'</td><td>¥'+(m.price||0).toFixed(2)+'</td><td>'+(m.status||'—')+'</td></tr>').join('');
+      el.innerHTML = '<div class="card"><div class="card-header">🍽️ 菜品总览（共 '+items.length+' 道）</div><table class="data-table"><thead><tr><th>菜品名称</th><th>分类</th><th>售价</th><th>状态</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="4">无菜品数据</td></tr>')+'</tbody></table></div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  },
+  cost: async () => {
+    const el = document.getElementById('menuContent');
+    try {
+      const data = await apiGet('/api/menu');
+      const items = (data.items||[]).filter(m => m.status==='在售');
+      const tbody = items.map(m => {
+        const profit = (m.price||0)-(m.cost||0);
+        const rate = m.price>0?(profit/m.price*100).toFixed(1):'0.0';
+        return '<tr><td>'+m.name+'</td><td>¥'+(m.price||0).toFixed(2)+'</td><td>¥'+(m.cost||0).toFixed(2)+'</td><td>¥'+profit.toFixed(2)+'</td><td>'+rate+'%</td></tr>';
+      }).join('');
+      el.innerHTML = '<div class="card"><div class="card-header">💰 菜品成本分析</div><table class="data-table"><thead><tr><th>菜品</th><th>售价</th><th>成本</th><th>毛利</th><th>毛利率</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="5">无菜品数据</td></tr>')+'</tbody></table></div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  },
+  expiry: async () => {
+    const el = document.getElementById('menuContent');
+    try {
+      const data = await apiGet('/api/menu');
+      const items = (data.items||[]).filter(m => m.expiry_days);
+      const tbody = items.map(m => {
+        const days = m.expiry_days;
+        const cls = days<=1?'color:var(--color-danger)':days<=2?'color:var(--color-warning)':'';
+        return '<tr><td>'+m.name+'</td><td>'+(m.category||'—')+'</td><td style="'+cls+'">'+days+' 天</td><td>'+(m.status||'—')+'</td></tr>';
+      }).join('');
+      el.innerHTML = '<div class="card"><div class="card-header">⏰ 效期管理</div><table class="data-table"><thead><tr><th>菜品</th><th>分类</th><th>保质期</th><th>状态</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="4">无设置效期的菜品</td></tr>')+'</tbody></table></div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  }
+};
+
+// ===== 成本核算绑定 =====
+const costBindings = {
+  daily: async () => {
+    const el = document.getElementById('costContent');
+    try {
+      const storesData = await apiGet('/api/db/stores');
+      const stores = storesData.stores||[];
+      let html = '<div class="card"><div class="card-header">💡 日成本核算公式</div><div class="alert alert-info">当日门店营业额 − 优惠 = 当日门店实收 − 固定日均成本支出 − 当日食材成本 − 其他门店支出 = <strong>当日净利润</strong></div></div>';
+      html += '<div class="card"><div class="card-header">📊 选择门店并计算</div>';
+      html += '<div class="form-group"><label class="form-label">门店</label><select class="form-input" id="costStoreId">'+stores.map(s=>'<option value="'+s.id+'">'+s.store_name+'</option>').join('')+'</select></div>';
+      html += '<div class="form-group"><label class="form-label">日期</label><input type="date" class="form-input" id="costDate"></div>';
+      html += '<button class="btn btn-primary" id="btnCalcCost">🧮 计算日成本</button><div class="test-result" id="costCalcResult"></div></div>';
+      html += '<div class="card"><div class="card-header">📋 最近成本核算</div><div id="costRecentTable"><p style="color:#999;">点击按钮加载</p></div></div>';
+      el.innerHTML = html;
+      document.getElementById('costDate').value = new Date().toISOString().slice(0,10);
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  },
+  weekly: async () => {
+    const el = document.getElementById('costContent');
+    try {
+      const data = await apiGet('/api/cost-accounting/weekly');
+      const rows = data.rows||[];
+      const tbody = rows.map(r => '<tr><td>'+r.week+'</td><td>¥'+(r.revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.food_cost||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td style="color:'+((r.net_profit||0)>=0?'var(--color-success)':'var(--color-danger)')+'">¥'+(r.net_profit||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>').join('');
+      el.innerHTML = '<div class="card"><div class="card-header">📊 周成本核算</div>'+(rows.length?'<table class="data-table"><thead><tr><th>周</th><th>营业额</th><th>食材成本</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无周成本数据</p>')+'</div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  },
+  monthly: async () => {
+    const el = document.getElementById('costContent');
+    try {
+      const data = await apiGet('/api/cost-accounting/monthly');
+      const rows = data.rows||[];
+      const tbody = rows.map(r => '<tr><td>'+r.month+'</td><td>¥'+(r.revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.food_cost||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td style="color:'+((r.net_profit||0)>=0?'var(--color-success)':'var(--color-danger)')+'">¥'+(r.net_profit||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>').join('');
+      el.innerHTML = '<div class="card"><div class="card-header">📊 月成本核算</div>'+(rows.length?'<table class="data-table"><thead><tr><th>月</th><th>营业额</th><th>食材成本</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无月成本数据</p>')+'</div>';
+    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+  }
+};
+
+// ===== 页面事件绑定(新页面) =====
+const origBindingKeys = Object.keys(pageBindings);
+
+// 成本核算
+pageBindings['cost-accounting'] = () => {
+  const btn = document.getElementById('btnCalcCost');
+  if (btn) btn.onclick = calcDailyCost;
+};
+
+// 人员管理
+pageBindings['user-management'] = () => {
+  const btnAdd = document.getElementById('btnAddUser');
+  const btnRefresh = document.getElementById('btnRefreshUsers');
+  if (btnAdd) btnAdd.onclick = addUser;
+  if (btnRefresh) btnRefresh.onclick = loadUsers;
+};
+
+// 数据导入
+pageBindings['data-import'] = () => {
+  const btnImport = document.getElementById('btnImportDaily');
+  const btnSupply = document.getElementById('btnAddSupply');
+  if (btnImport) btnImport.onclick = importDailyExcel;
+  if (btnSupply) btnSupply.onclick = addSupply;
+};
+
+// AI助手
+pageBindings['ai-assistant'] = () => {
+  const btn = document.getElementById('btnAiAsk');
+  if (btn) btn.onclick = aiAsk;
+};
+
+// ===== 业务逻辑 =====
+
+// 加载用户列表
+async function loadUsers() {
+  const el = document.getElementById('userTable');
+  try {
+    const data = await apiGet('/api/users');
+    const users = data.users||[];
+    const tbody = users.map(u => '<tr><td>'+(u.username||'')+'</td><td>'+(u.role||'')+'</td><td>'+(u.display_name||'')+'</td><td>'+(u.created_at||'')+'</td></tr>').join('');
+    document.getElementById('userTable').innerHTML = '<table class="data-table"><thead><tr><th>用户名</th><th>角色</th><th>显示名称</th><th>创建时间</th></tr></thead><tbody>'+tbody+'</tbody></table>';
+  } catch(e) { document.getElementById('userTable').innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+}
+
+// 添加用户
+async function addUser() {
+  const username = prompt('请输入用户名:');
+  if (!username) return;
+  const password = prompt('请输入密码:');
+  if (!password) return;
+  const role = prompt('角色(管理员/督导/客服):', '客服');
+  const display_name = prompt('显示名称:', username);
+  try {
+    await apiPost('/api/users', { username, password, role, display_name });
+    loadUsers();
+  } catch(e) { alert('添加失败: '+e.message); }
+}
+
+// 加载运营成本
+async function loadOperatingCosts() {
+  const storeId = document.getElementById('opStoreSelect')?.value;
+  if (!storeId) return;
+  const el = document.getElementById('opCostTable');
+  try {
+    const data = await apiGet('/api/stores/'+storeId+'/operating-costs');
+    const rows = data.costs||[];
+    const tbody = rows.slice(0,20).map(r => '<tr><td>'+(r.date||'—')+'</td><td>'+(r.item||'—')+'</td><td>¥'+(r.amount||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>').join('');
+    el.innerHTML = '<table class="data-table"><thead><tr><th>日期</th><th>事项</th><th>金额</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="3">无数据</td></tr>')+'</tbody></table>';
+  } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+}
+
+// 加载导入页面门店列表
+async function loadImportStores() {
+  try {
+    const data = await apiGet('/api/db/stores');
+    const stores = data.stores||[];
+    const sel = document.getElementById('supplyStoreId');
+    if (sel) sel.innerHTML = stores.map(s => '<option value="'+s.id+'">'+s.store_name+'</option>').join('');
+    const dateEl = document.getElementById('supplyDate');
+    if (dateEl) dateEl.value = new Date().toISOString().slice(0,10);
+  } catch {}
+}
+
+// 日成本计算
+async function calcDailyCost() {
+  const storeId = document.getElementById('costStoreId')?.value;
+  const date = document.getElementById('costDate')?.value;
+  const el = document.getElementById('costCalcResult');
+  if (!storeId) return;
+  el.className = 'test-result visible loading';
+  el.textContent = '⏳ 正在计算...';
+  try {
+    const data = await apiPost('/api/cost-accounting/calculate', { store_id: parseInt(storeId), date });
+    el.className = 'test-result visible success';
+    const d = data.detail;
+    el.textContent = '✅ 计算完成！净利润: ¥'+data.net_profit.toLocaleString('zh-CN',{minimumFractionDigits:2})+'\n营业额 ¥'+(d.revenue||0).toLocaleString()+', 实收 ¥'+(d.actualRevenue||0).toLocaleString()+', 日均固定成本 ¥'+d.dailyFixed+', 食材成本 ¥'+d.foodCost+', 其他 ¥'+d.otherCost;
+    // 刷新最近列表
+    loadRecentCosts();
+  } catch(e) { el.className = 'test-result visible error'; el.textContent = '❌ '+e.message; }
+}
+
+async function loadRecentCosts() {
+  try {
+    const data = await apiGet('/api/cost-accounting?limit=10');
+    const rows = data.rows||[];
+    const tbody = rows.map(r => '<tr><td>'+r.date+'</td><td>'+(r.store_name||'—')+'</td><td>¥'+(r.revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td style="color:'+((r.net_profit||0)>=0?'var(--color-success)':'var(--color-danger)')+'">¥'+(r.net_profit||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>').join('');
+    document.getElementById('costRecentTable').innerHTML = rows.length?'<table class="data-table"><thead><tr><th>日期</th><th>门店</th><th>营业额</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;">暂无数据</p>';
+  } catch {}
+}
+
+// 导入日报 Excel
+async function importDailyExcel() {
+  const file = document.getElementById('importFile')?.files?.[0];
+  const el = document.getElementById('importResult');
+  if (!file) { el.className = 'test-result visible error'; el.textContent = '❌ 请选择文件'; return; }
+  el.className = 'test-result visible loading';
+  el.textContent = '⏳ 正在导入...';
+  try {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const b64 = e.target.result.split(',')[1];
+        const data = await apiPost('/api/reports/daily/import', { data: b64 });
+        el.className = 'test-result visible success';
+        el.textContent = '✅ '+data.message;
+      } catch(err) { el.className = 'test-result visible error'; el.textContent = '❌ '+err.message; }
+    };
+    reader.readAsDataURL(file);
+  } catch(e) { el.className = 'test-result visible error'; el.textContent = '❌ '+e.message; }
+}
+
+// 添加耗材
+async function addSupply() {
+  const storeId = document.getElementById('supplyStoreId')?.value;
+  const date = document.getElementById('supplyDate')?.value;
+  const item = document.getElementById('supplyItem')?.value.trim();
+  const qty = parseFloat(document.getElementById('supplyQty')?.value)||1;
+  const unit = document.getElementById('supplyUnit')?.value.trim()||'个';
+  const price = parseFloat(document.getElementById('supplyPrice')?.value)||0;
+  const el = document.getElementById('supplyResult');
+  if (!item) { el.className = 'test-result visible error'; el.textContent = '❌ 请输入耗材名称'; return; }
+  try {
+    const storesData = await apiGet('/api/db/stores');
+    const store = storesData.stores?.find(s=>s.id===parseInt(storeId));
+    await apiPost('/api/supplies', { store_id: parseInt(storeId)||null, store_name: store?.store_name||'', date, item, quantity: qty, unit, unit_price: price });
+    el.className = 'test-result visible success';
+    el.textContent = '✅ 已记录: '+item+' ×'+qty+unit+' ¥'+(qty*price).toFixed(2);
+    document.getElementById('supplyItem').value = '';
+  } catch(e) { el.className = 'test-result visible error'; el.textContent = '❌ '+e.message; }
+}
+
+// AI 问答(占位)
+async function aiAsk() {
+  const question = document.getElementById('aiQuestion')?.value.trim();
+  const el = document.getElementById('aiResult');
+  if (!question) { el.className = 'test-result visible error'; el.textContent = '❌ 请输入问题'; return; }
+  el.className = 'test-result visible success';
+  el.textContent = '🤖 AI助手正在积极学习中，此功能即将开放。您的问题:「'+question+'」已收到。';
 }
