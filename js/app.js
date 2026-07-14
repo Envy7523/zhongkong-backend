@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 中控后台 - 主逻辑 v0.2.0
  * 支持后端 API：企业微信数据读取 + Webhook 推送
  */
@@ -43,15 +43,52 @@ function setServerStatus(cls, text) {
 
 // ===== 导航 =====
 function initNavigation() {
-  document.getElementById('sidebarNav').addEventListener('click', (e) => { const si = e.target.closest(".nav-sub-item"); if (si) { e.stopPropagation(); return; }
+  const nav = document.getElementById('sidebarNav');
+  nav.addEventListener('click', (e) => {
+    // 子菜单项点击 → 切换子页面
+    const subItem = e.target.closest('.nav-sub-item');
+    if (subItem) {
+      e.stopPropagation();
+      const page = subItem.dataset.page;
+      const sub = subItem.dataset.sub;
+      if (page && sub) switchTab(page, sub);
+      return;
+    }
+
+    // 父菜单项点击 → 展开/折叠子菜单（手风琴）
     const item = e.target.closest('.nav-item');
     if (!item) return;
+
+    if (item.classList.contains('nav-parent')) {
+      e.stopPropagation();
+      const sub = item.closest('.nav-group').querySelector('.nav-sub');
+      const isOpen = sub.classList.contains('open');
+
+      // 收起所有其他子菜单
+      nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
+      nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
+
+      if (!isOpen) {
+        sub.classList.add('open');
+        item.classList.add('expanded');
+        const page = item.dataset.page;
+        if (page) navigateTo(page);
+      }
+      return;
+    }
+
+    // 普通菜单项 → 直接导航，收起所有子菜单
     const page = item.dataset.page;
-    if (page) navigateTo(page);
+    if (page) {
+      nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
+      nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
+      navigateTo(page);
+    }
   });
 }
 
 function navigateTo(page) {
+  const nav = document.getElementById('sidebarNav');
   currentPage = page;
   const pageDef = pages[page];
   if (!pageDef) return;
@@ -59,6 +96,21 @@ function navigateTo(page) {
   document.querySelectorAll('.nav-item').forEach(item => {
     item.classList.toggle('active', item.dataset.page === page);
   });
+
+  // 如果该页面有子页面，展开侧边栏子菜单
+  const parentItem = nav.querySelector(`.nav-parent[data-page="${page}"]`);
+  if (parentItem) {
+    const sub = parentItem.closest('.nav-group').querySelector('.nav-sub');
+    if (sub) {
+      nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
+      nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
+      sub.classList.add('open');
+      parentItem.classList.add('expanded');
+    }
+  } else {
+    nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
+    nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
+  }
 
   document.getElementById('pageTitle').textContent = pageDef.title;
   const contentArea = document.getElementById('contentArea');
@@ -519,22 +571,24 @@ const pages = {
   // ===== 数据分析 =====
   analysis: {
     title: '数据分析',
+    render() {
+      if (!currentSub) currentSub = 'revenue';
+      return `<div class="sub-tab-bar">
+        <button class="sub-tab" data-sub="revenue">📊 门店营收构成</button>
+        <button class="sub-tab" data-sub="cost">📉 门店成本分析</button>
+        <button class="sub-tab" data-sub="sales">📦 门店销量统计</button>
+        <button class="sub-tab" data-sub="supplies">🧴 门店耗材消耗</button>
+      </div><div id="analysisContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+    },
     onRender() {
       if (!currentSub) currentSub = 'revenue';
       updateSubNav('analysis', currentSub);
+      updateSubTabBar('analysis', currentSub);
+      document.querySelectorAll('.sub-tab-bar .sub-tab').forEach(tab => {
+        tab.onclick = () => switchTab('analysis', tab.dataset.sub);
+      });
       analysisBindings[currentSub]?.();
     },
-    render() {
-      if (!currentSub) currentSub = 'revenue';
-      const tabs = [
-        { key: 'revenue', label: '门店营收构成' },
-        { key: 'cost', label: '门店成本分析' },
-        { key: 'sales', label: '门店销量统计' },
-        { key: 'supplies', label: '门店耗材消耗' },
-      ];
-      const tabHtml = tabs.map(t => `<button class="tab-item${currentSub===t.key?' active':''}" onclick="switchTab('analysis','${t.key}')">${t.label}</button>`).join('');
-      return `<div class="tab-nav">${tabHtml}</div><div id="analysisContent"><div class="card"><div class="card-header">加载中...</div></div></div>`;
-    }
   },
 
   // ===== AI助手 =====
@@ -557,41 +611,45 @@ const pages = {
   // ===== 门店管理 =====
   'store-management': {
     title: '门店管理',
+    render() {
+      if (!currentSub) currentSub = 'info';
+      return `<div class="sub-tab-bar">
+        <button class="sub-tab" data-sub="info">📋 门店信息</button>
+        <button class="sub-tab" data-sub="fixed">🔒 固定成本</button>
+        <button class="sub-tab" data-sub="operating">⚙️ 运营成本</button>
+      </div><div id="storeMgmtContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+    },
     onRender() {
       if (!currentSub) currentSub = 'info';
       updateSubNav('store-management', currentSub);
+      updateSubTabBar('store-management', currentSub);
+      document.querySelectorAll('.sub-tab-bar .sub-tab').forEach(tab => {
+        tab.onclick = () => switchTab('store-management', tab.dataset.sub);
+      });
       storeMgmtBindings[currentSub]?.();
     },
-    render() {
-      if (!currentSub) currentSub = 'info';
-      const tabs = [
-        { key: 'info', label: '门店信息' },
-        { key: 'fixed', label: '固定成本' },
-        { key: 'operating', label: '运营成本' },
-      ];
-      const tabHtml = tabs.map(t => `<button class="tab-item${currentSub===t.key?' active':''}" onclick="switchTab('store-management','${t.key}')">${t.label}</button>`).join('');
-      return `<div class="tab-nav">${tabHtml}</div><div id="storeMgmtContent"><div class="card"><div class="card-header">加载中...</div></div></div>`;
-    }
   },
 
   // ===== 菜品管理 =====
   'menu-management': {
     title: '菜品管理',
+    render() {
+      if (!currentSub) currentSub = 'overview';
+      return `<div class="sub-tab-bar">
+        <button class="sub-tab" data-sub="overview">🍽️ 菜品总览</button>
+        <button class="sub-tab" data-sub="cost">💰 菜品成本</button>
+        <button class="sub-tab" data-sub="expiry">⏰ 效期管理</button>
+      </div><div id="menuContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+    },
     onRender() {
       if (!currentSub) currentSub = 'overview';
       updateSubNav('menu-management', currentSub);
+      updateSubTabBar('menu-management', currentSub);
+      document.querySelectorAll('.sub-tab-bar .sub-tab').forEach(tab => {
+        tab.onclick = () => switchTab('menu-management', tab.dataset.sub);
+      });
       menuBindings[currentSub]?.();
     },
-    render() {
-      if (!currentSub) currentSub = 'overview';
-      const tabs = [
-        { key: 'overview', label: '菜品总览' },
-        { key: 'cost', label: '菜品成本' },
-        { key: 'expiry', label: '效期管理' },
-      ];
-      const tabHtml = tabs.map(t => `<button class="tab-item${currentSub===t.key?' active':''}" onclick="switchTab('menu-management','${t.key}')">${t.label}</button>`).join('');
-      return `<div class="tab-nav">${tabHtml}</div><div id="menuContent"><div class="card"><div class="card-header">加载中...</div></div></div>`;
-    }
   },
 
   // ===== 人员管理 =====
@@ -613,21 +671,23 @@ const pages = {
   // ===== 成本核算 =====
   'cost-accounting': {
     title: '成本核算',
+    render() {
+      if (!currentSub) currentSub = 'daily';
+      return `<div class="sub-tab-bar">
+        <button class="sub-tab" data-sub="daily">📅 日成本核算</button>
+        <button class="sub-tab" data-sub="weekly">📆 周成本核算</button>
+        <button class="sub-tab" data-sub="monthly">🗓️ 月成本核算</button>
+      </div><div id="costContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+    },
     onRender() {
       if (!currentSub) currentSub = 'daily';
       updateSubNav('cost-accounting', currentSub);
+      updateSubTabBar('cost-accounting', currentSub);
+      document.querySelectorAll('.sub-tab-bar .sub-tab').forEach(tab => {
+        tab.onclick = () => switchTab('cost-accounting', tab.dataset.sub);
+      });
       costBindings[currentSub]?.();
     },
-    render() {
-      if (!currentSub) currentSub = 'daily';
-      const tabs = [
-        { key: 'daily', label: '日成本核算' },
-        { key: 'weekly', label: '周成本核算' },
-        { key: 'monthly', label: '月成本核算' },
-      ];
-      const tabHtml = tabs.map(t => `<button class="tab-item${currentSub===t.key?' active':''}" onclick="switchTab('cost-accounting','${t.key}')">${t.label}</button>`).join('');
-      return `<div class="tab-nav">${tabHtml}</div><div id="costContent"><div class="card"><div class="card-header">加载中...</div></div></div>`;
-    }
   },
 
   // ===== 数据导入 =====
@@ -660,9 +720,21 @@ function updateSubNav(page, sub) {
     el.classList.toggle('active', el.dataset.page === page && el.dataset.sub === sub);
   });
 }
+function updateSubTabBar(page, sub) {
+  document.querySelectorAll('.sub-tab-bar .sub-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.sub === sub);
+  });
+}
+function fadeContent(el, html) {
+  el.innerHTML = html;
+  el.classList.remove('sub-content');
+  void el.offsetWidth;
+  el.classList.add('sub-content');
+}
 function switchTab(page, sub) {
   currentSub = sub;
   updateSubNav(page, sub);
+  updateSubTabBar(page, sub);
   navigateTo(page);
 }
 
@@ -1218,9 +1290,9 @@ const analysisBindings = {
       ].filter(r => r[1] > 0).sort((a,b) => b[1]-a[1]);
       const total = rows.reduce((s,r) => s+r[1], 0);
       const tbody = rows.map(r => '<tr><td>'+r[0]+'</td><td>¥'+r[1].toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>'+(total>0?(r[1]/total*100).toFixed(1):0)+'%</td></tr>').join('');
-      el.innerHTML = '<div class="card"><div class="card-header">门店营收构成 <span style="font-weight:400;color:#999;font-size:13px;">合计 ¥'+total.toLocaleString('zh-CN',{minimumFractionDigits:2})+'</span></div>'+
-        (rows.length?'<table class="data-table"><thead><tr><th>渠道</th><th>金额</th><th>占比</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无营收数据，请先导入日报</p>')+'</div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">门店营收构成 <span style="font-weight:400;color:#999;font-size:13px;">合计 ¥'+total.toLocaleString('zh-CN',{minimumFractionDigits:2})+'</span></div>'+
+        (rows.length?'<table class="data-table"><thead><tr><th>渠道</th><th>金额</th><th>占比</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无营收数据，请先导入日报</p>')+'</div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   cost: async () => {
     const el = document.getElementById('analysisContent');
@@ -1232,9 +1304,9 @@ const analysisBindings = {
         const store = stores.stores?.find(s=>s.id===r.store_id);
         return '<tr><td>'+(store?.store_name||r.store_id||'—')+'</td><td>'+(r.date||'—')+'</td><td>¥'+(r.revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.food_cost||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td style="color:'+((r.net_profit||0)>=0?'var(--color-success)':'var(--color-danger)')+'">¥'+(r.net_profit||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>';
       }).join('');
-      el.innerHTML = '<div class="card"><div class="card-header">门店成本分析</div>'+
-        (rows.length?'<table class="data-table"><thead><tr><th>门店</th><th>日期</th><th>营业额</th><th>食材成本</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无成本数据</p>')+'</div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">门店成本分析</div>'+
+        (rows.length?'<table class="data-table"><thead><tr><th>门店</th><th>日期</th><th>营业额</th><th>食材成本</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无成本数据</p>')+'</div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   sales: async () => {
     const el = document.getElementById('analysisContent');
@@ -1242,9 +1314,9 @@ const analysisBindings = {
       const data = await apiGet('/api/analysis/sales');
       const rows = data.rows||[];
       const tbody = rows.slice(0,30).map(r => '<tr><td>'+(r.store_name||'—')+'</td><td>'+(r.date||'—')+'</td><td>'+(r.order_count||0)+'</td><td>¥'+(r.revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.actual_revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.discount_amount||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>').join('');
-      el.innerHTML = '<div class="card"><div class="card-header">门店销量统计</div>'+
-        (rows.length?'<table class="data-table"><thead><tr><th>门店</th><th>日期</th><th>订单数</th><th>营业额</th><th>实收</th><th>优惠金额</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无销量数据</p>')+'</div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">门店销量统计</div>'+
+        (rows.length?'<table class="data-table"><thead><tr><th>门店</th><th>日期</th><th>订单数</th><th>营业额</th><th>实收</th><th>优惠金额</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无销量数据</p>')+'</div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   supplies: async () => {
     const el = document.getElementById('analysisContent');
@@ -1253,9 +1325,9 @@ const analysisBindings = {
       const rows = data.rows||[];
       const totalCost = rows.reduce((s,r)=>s+(r.total_cost||0),0);
       const tbody = rows.map(r => '<tr><td>'+r.item+'</td><td>'+r.total_qty+' '+r.unit+'</td><td>¥'+(r.total_cost||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>'+(totalCost>0?(r.total_cost/totalCost*100).toFixed(1):0)+'%</td></tr>').join('');
-      el.innerHTML = '<div class="card"><div class="card-header">门店耗材消耗 <span style="font-weight:400;color:#999;font-size:13px;">合计 ¥'+totalCost.toLocaleString('zh-CN',{minimumFractionDigits:2})+'</span></div>'+
-        (rows.length?'<table class="data-table"><thead><tr><th>耗材</th><th>用量</th><th>金额</th><th>占比</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无耗材数据</p>')+'</div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">门店耗材消耗 <span style="font-weight:400;color:#999;font-size:13px;">合计 ¥'+totalCost.toLocaleString('zh-CN',{minimumFractionDigits:2})+'</span></div>'+
+        (rows.length?'<table class="data-table"><thead><tr><th>耗材</th><th>用量</th><th>金额</th><th>占比</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无耗材数据</p>')+'</div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   }
 };
 
@@ -1267,8 +1339,8 @@ const storeMgmtBindings = {
       const data = await apiGet('/api/db/stores');
       const stores = data.stores||[];
       const tbody = stores.map(s => '<tr><td>'+s.store_name+'</td><td>'+(s.status||'—')+'</td><td>'+(s.store_type||'—')+'</td><td>'+(s.city||'—')+'</td><td>'+(s.store_size||'—')+'</td><td>'+(s.table_2person?'双人桌×'+s.table_2person:'—')+'</td><td>'+(s.table_4person?'四人桌×'+s.table_4person:'—')+'</td><td>'+(s.phone||'—')+'</td><td>'+(s.opening_date||'—')+'</td></tr>').join('');
-      el.innerHTML = '<div class="card"><div class="card-header">🏪 门店信息（共 '+stores.length+' 家）</div><table class="data-table"><thead><tr><th>门店名称</th><th>状态</th><th>店型</th><th>城市</th><th>面积</th><th>双人桌</th><th>四人桌</th><th>电话</th><th>开业日期</th></tr></thead><tbody>'+tbody+'</tbody></table></div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">🏪 门店信息（共 '+stores.length+' 家）</div><table class="data-table"><thead><tr><th>门店名称</th><th>状态</th><th>店型</th><th>城市</th><th>面积</th><th>双人桌</th><th>四人桌</th><th>电话</th><th>开业日期</th></tr></thead><tbody>'+tbody+'</tbody></table></div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   fixed: async () => {
     const el = document.getElementById('storeMgmtContent');
@@ -1284,17 +1356,17 @@ const storeMgmtBindings = {
         } catch { html += '<div style="margin-bottom:16px;"><strong>'+s.store_name+'</strong><p style="color:#999;">加载失败</p></div>'; }
       }
       html += '</div>';
-      el.innerHTML = html;
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, html);
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   operating: async () => {
     const el = document.getElementById('storeMgmtContent');
     try {
       const storesData = await apiGet('/api/db/stores');
       const stores = storesData.stores||[];
-      el.innerHTML = '<div class="card"><div class="card-header">📋 门店运营成本</div><div class="form-group"><label class="form-label">选择门店</label><select class="form-input" id="opStoreSelect" onchange="loadOperatingCosts()">'+stores.map(s=>'<option value="'+s.id+'">'+s.store_name+'</option>').join('')+'</select></div><div id="opCostTable"><p style="color:#999;">请选择门店查看运营成本</p></div></div>';
+      fadeContent(el, '<div class="card"><div class="card-header">📋 门店运营成本</div><div class="form-group"><label class="form-label">选择门店</label><select class="form-input" id="opStoreSelect" onchange="loadOperatingCosts()">'+stores.map(s=>'<option value="'+s.id+'">'+s.store_name+'</option>').join('')+'</select></div><div id="opCostTable"><p style="color:#999;">请选择门店查看运营成本</p></div></div>');
       if (stores.length) setTimeout(loadOperatingCosts, 100);
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   }
 };
 
@@ -1306,8 +1378,8 @@ const menuBindings = {
       const data = await apiGet('/api/menu');
       const items = data.items||[];
       const tbody = items.map(m => '<tr><td>'+m.name+'</td><td>'+(m.category||'—')+'</td><td>¥'+(m.price||0).toFixed(2)+'</td><td>'+(m.status||'—')+'</td></tr>').join('');
-      el.innerHTML = '<div class="card"><div class="card-header">🍽️ 菜品总览（共 '+items.length+' 道）</div><table class="data-table"><thead><tr><th>菜品名称</th><th>分类</th><th>售价</th><th>状态</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="4">无菜品数据</td></tr>')+'</tbody></table></div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">🍽️ 菜品总览（共 '+items.length+' 道）</div><table class="data-table"><thead><tr><th>菜品名称</th><th>分类</th><th>售价</th><th>状态</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="4">无菜品数据</td></tr>')+'</tbody></table></div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   cost: async () => {
     const el = document.getElementById('menuContent');
@@ -1319,8 +1391,8 @@ const menuBindings = {
         const rate = m.price>0?(profit/m.price*100).toFixed(1):'0.0';
         return '<tr><td>'+m.name+'</td><td>¥'+(m.price||0).toFixed(2)+'</td><td>¥'+(m.cost||0).toFixed(2)+'</td><td>¥'+profit.toFixed(2)+'</td><td>'+rate+'%</td></tr>';
       }).join('');
-      el.innerHTML = '<div class="card"><div class="card-header">💰 菜品成本分析</div><table class="data-table"><thead><tr><th>菜品</th><th>售价</th><th>成本</th><th>毛利</th><th>毛利率</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="5">无菜品数据</td></tr>')+'</tbody></table></div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">💰 菜品成本分析</div><table class="data-table"><thead><tr><th>菜品</th><th>售价</th><th>成本</th><th>毛利</th><th>毛利率</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="5">无菜品数据</td></tr>')+'</tbody></table></div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   expiry: async () => {
     const el = document.getElementById('menuContent');
@@ -1332,8 +1404,8 @@ const menuBindings = {
         const cls = days<=1?'color:var(--color-danger)':days<=2?'color:var(--color-warning)':'';
         return '<tr><td>'+m.name+'</td><td>'+(m.category||'—')+'</td><td style="'+cls+'">'+days+' 天</td><td>'+(m.status||'—')+'</td></tr>';
       }).join('');
-      el.innerHTML = '<div class="card"><div class="card-header">⏰ 效期管理</div><table class="data-table"><thead><tr><th>菜品</th><th>分类</th><th>保质期</th><th>状态</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="4">无设置效期的菜品</td></tr>')+'</tbody></table></div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">⏰ 效期管理</div><table class="data-table"><thead><tr><th>菜品</th><th>分类</th><th>保质期</th><th>状态</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="4">无设置效期的菜品</td></tr>')+'</tbody></table></div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   }
 };
 
@@ -1350,9 +1422,9 @@ const costBindings = {
       html += '<div class="form-group"><label class="form-label">日期</label><input type="date" class="form-input" id="costDate"></div>';
       html += '<button class="btn btn-primary" id="btnCalcCost">🧮 计算日成本</button><div class="test-result" id="costCalcResult"></div></div>';
       html += '<div class="card"><div class="card-header">📋 最近成本核算</div><div id="costRecentTable"><p style="color:#999;">点击按钮加载</p></div></div>';
-      el.innerHTML = html;
+      fadeContent(el, html);
       document.getElementById('costDate').value = new Date().toISOString().slice(0,10);
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   weekly: async () => {
     const el = document.getElementById('costContent');
@@ -1360,8 +1432,8 @@ const costBindings = {
       const data = await apiGet('/api/cost-accounting/weekly');
       const rows = data.rows||[];
       const tbody = rows.map(r => '<tr><td>'+r.week+'</td><td>¥'+(r.revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.food_cost||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td style="color:'+((r.net_profit||0)>=0?'var(--color-success)':'var(--color-danger)')+'">¥'+(r.net_profit||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>').join('');
-      el.innerHTML = '<div class="card"><div class="card-header">📊 周成本核算</div>'+(rows.length?'<table class="data-table"><thead><tr><th>周</th><th>营业额</th><th>食材成本</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无周成本数据</p>')+'</div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">📊 周成本核算</div>'+(rows.length?'<table class="data-table"><thead><tr><th>周</th><th>营业额</th><th>食材成本</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无周成本数据</p>')+'</div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   monthly: async () => {
     const el = document.getElementById('costContent');
@@ -1369,8 +1441,8 @@ const costBindings = {
       const data = await apiGet('/api/cost-accounting/monthly');
       const rows = data.rows||[];
       const tbody = rows.map(r => '<tr><td>'+r.month+'</td><td>¥'+(r.revenue||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td>¥'+(r.food_cost||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td><td style="color:'+((r.net_profit||0)>=0?'var(--color-success)':'var(--color-danger)')+'">¥'+(r.net_profit||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>').join('');
-      el.innerHTML = '<div class="card"><div class="card-header">📊 月成本核算</div>'+(rows.length?'<table class="data-table"><thead><tr><th>月</th><th>营业额</th><th>食材成本</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无月成本数据</p>')+'</div>';
-    } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+      fadeContent(el, '<div class="card"><div class="card-header">📊 月成本核算</div>'+(rows.length?'<table class="data-table"><thead><tr><th>月</th><th>营业额</th><th>食材成本</th><th>净利润</th></tr></thead><tbody>'+tbody+'</tbody></table>':'<p style="color:#999;padding:20px;">暂无月成本数据</p>')+'</div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   }
 };
 
@@ -1441,8 +1513,8 @@ async function loadOperatingCosts() {
     const data = await apiGet('/api/stores/'+storeId+'/operating-costs');
     const rows = data.costs||[];
     const tbody = rows.slice(0,20).map(r => '<tr><td>'+(r.date||'—')+'</td><td>'+(r.item||'—')+'</td><td>¥'+(r.amount||0).toLocaleString('zh-CN',{minimumFractionDigits:2})+'</td></tr>').join('');
-    el.innerHTML = '<table class="data-table"><thead><tr><th>日期</th><th>事项</th><th>金额</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="3">无数据</td></tr>')+'</tbody></table>';
-  } catch(e) { el.innerHTML = '<div class="alert alert-error">加载失败: '+e.message+'</div>'; }
+    fadeContent(el, '<table class="data-table"><thead><tr><th>日期</th><th>事项</th><th>金额</th></tr></thead><tbody>'+(tbody||'<tr><td colspan="3">无数据</td></tr>')+'</tbody></table>');
+  } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
 }
 
 // 加载导入页面门店列表
