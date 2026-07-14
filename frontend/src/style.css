@@ -1,0 +1,373 @@
+/* ===== 全局变量 & 基础 ===== */
+:root {
+  --sidebar-width: 240px;
+  --sidebar-collapsed: 64px;
+  --topbar-height: 56px;
+  --primary-color: #409EFF;
+  --primary-light: #ecf5ff;
+  --bg-page: #f0f2f5;
+  --border-light: #e4e7ed;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-size: 14px;
+  background: var(--bg-page);
+  color: #303133;
+}
+
+/* ===== 全局滚动条美化 ===== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.22);
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.12) transparent;
+}
+
+/* ===== 主布局 ===== */
+.app-layout {
+  height: 100vh;
+  display: flex;
+}
+
+.app-sidebar {
+  flex-shrink: 0;
+  width: var(--sidebar-width);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+  background: #1e1e2f;
+  z-index: 20;
+}
+
+/* 折叠状态 */
+.app-sidebar.is-collapsed {
+  width: var(--sidebar-collapsed);
+}
+
+.app-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-page);
+}
+
+/* ===== 侧边栏品牌区 ===== */
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  height: var(--topbar-height);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+  background: transparent;
+}
+
+.sidebar-brand-text {
+  white-space: nowrap;
+  letter-spacing: 0.5px;
+  color: #fff;
+  opacity: 1;
+  transition: opacity 0.25s ease;
+}
+
+.sidebar-brand-text.collapsed {
+  opacity: 0;
+}
+
+/* ===== Element Plus 深色菜单微调 ===== */
+.el-menu-vertical:not(.el-menu--collapse) {
+  width: var(--sidebar-width);
+}
+
+.el-menu {
+  border-right: none !important;
+}
+
+.el-menu-item {
+  margin: 2px 8px;
+  border-radius: 6px;
+  transition: all 0.15s;
+}
+
+.el-menu-item:hover {
+  background-color: rgba(255,255,255,0.06) !important;
+}
+
+.el-menu-item.is-active {
+  background-color: var(--primary-color) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+/* 侧边栏版本号 */
+.sidebar-footer {
+  padding: 10px 20px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.25);
+  border-top: 1px solid rgba(255,255,255,0.06);
+  background: transparent;
+  white-space: nowrap;
+  opacity: 1;
+  transition: opacity 0.25s ease;
+}
+
+.sidebar-footer.collapsed {
+  opacity: 0;
+}
+
+/* ===== 顶部栏 ===== */
+.app-topbar {
+  height: var(--topbar-height);
+  background: #fff;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 12px;
+  box-shadow: 0 1px 0 var(--border-light);
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.topbar-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  flex: 1;
+}
+
+.topbar-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.topbar-status.online {
+  color: #67C23A;
+  background: #f0fdf4;
+}
+.topbar-status.offline {
+  color: #F56C6C;
+  background: #fff5f5;
+}
+
+/* ===== 标签栏 ===== */
+.tab-bar-wrapper {
+  background: #fff;
+  border-bottom: 1px solid var(--border-light);
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.tab-bar {
+  display: flex;
+  overflow-x: auto;
+  flex: 1;
+  gap: 2px;
+}
+
+.tab-item {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 6px 6px 0 0;
+  white-space: nowrap;
+  color: #909399;
+  transition: all 0.15s;
+  border-bottom: 2px solid transparent;
+  max-width: 180px;
+}
+
+.tab-item:hover { color: #303133; background: #f5f7fa; }
+.tab-item.active {
+  color: var(--primary-color);
+  border-bottom-color: var(--primary-color);
+  background: var(--primary-light);
+  font-weight: 500;
+}
+
+.tab-item .tab-close {
+  margin-left: 6px;
+  font-size: 14px;
+  color: #c0c4cc;
+  line-height: 1;
+  padding: 2px;
+  border-radius: 2px;
+}
+.tab-item .tab-close:hover { color: #F56C6C; background: #fef0f0; }
+
+.tab-actions { padding: 4px; }
+
+/* ===== 内容区 ===== */
+.content-area {
+  flex: 1;
+  overflow: auto;
+  padding: 24px;
+  background: var(--bg-page);
+  scrollbar-width: none;
+}
+.content-area::-webkit-scrollbar {
+  display: none;
+}
+
+/* ===== 统计卡片 ===== */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  border: none;
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+
+.stat-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+  transform: translateY(-2px);
+}
+
+.stat-card .stat-label {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 6px;
+}
+
+.stat-card .stat-value {
+  font-size: 26px;
+  font-weight: 700;
+  color: #303133;
+}
+
+.stat-value.primary { color: var(--primary-color); }
+.stat-value.success { color: #67C23A; }
+.stat-value.warning { color: #E6A23C; }
+.stat-value.danger  { color: #F56C6C; }
+
+/* ===== 仪表盘/门店统计卡片（图标+数值布局） ===== */
+.dash-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.dash-stat-card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 18px 16px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  transition: box-shadow 0.2s, transform 0.2s;
+}
+
+.dash-stat-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+  transform: translateY(-2px);
+}
+
+.dash-stat-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #409EFF;
+}
+
+.dash-stat-body {
+  min-width: 0;
+}
+
+.dash-stat-value {
+  font-size: 26px;
+  font-weight: 700;
+  color: #303133;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-stat-value.primary { color: #409EFF; }
+.dash-stat-value.success { color: #67C23A; }
+.dash-stat-value.warning { color: #E6A23C; }
+.dash-stat-value.danger  { color: #F56C6C; }
+
+.dash-stat-label {
+  font-size: 13px;
+  color: #909399;
+  margin-top: 4px;
+}
+
+/* ===== 通用卡片 ===== */
+.card-compact {
+  background: #fff;
+  border-radius: 10px;
+  padding: 18px;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  border: none;
+  margin-bottom: 14px;
+}
+
+.card-compact .card-header {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-light);
+  color: #303133;
+}
+
+/* ===== 子导航标签 ===== */
+.sub-tabs {
+  margin-bottom: 14px;
+}
+
+/* ===== 侧边栏箭头 ===== */
+.nav-arrow {
+  font-size: 11px;
+  margin-left: auto;
+  opacity: 0.5;
+  transition: transform 0.2s;
+}
+
+.el-menu-item.is-popup-open .nav-arrow {
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+/* ===== 隐藏折叠菜单的 tooltip 弹窗 =====
+   Element Plus 将 popper teleport 到 <body>，必须全局命中 */
+body > .el-popper.is-light {
+  display: none !important;
+}

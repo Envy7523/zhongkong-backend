@@ -3,6 +3,8 @@
  * 负责：代理企业微信 API 调用、Webhook 消息推送、SQLite 数据管理
  */
 const express = require('express');
+const os = require('os');
+const child_process = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -17,11 +19,32 @@ const CONFIG_PATH = path.join(__dirname, 'config.json');
 
 // ===== 中间件 =====
 app.use(express.json({ limit: '50mb' }));
-app.use(express.static(__dirname));
+
+// 静态文件：优先使用 Vue 前端构建产物，回退到旧版静态文件
+const vueDist = path.join(__dirname, 'frontend', 'dist');
+if (fs.existsSync(vueDist)) {
+  app.use(express.static(vueDist));
+  // SPA 回退：非 /api 路径返回 index.html
+  app.get(/^(?!\/api).*/, (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(vueDist, 'index.html'));
+  });
+} else {
+  app.use(express.static(__dirname));
+}
 
 // ===== 工具函数 =====
+/** 剥离 UTF-8 BOM 头 — 防止 Windows PowerShell / 记事本保存的 BOM 导致 JSON.parse 失败或首键乱码 */
+function stripBOM(str) {
+  if (typeof str !== 'string') return str;
+  return str.codePointAt(0) === 0xFEFF ? str.slice(1) : str;
+}
 function loadConfig() {
-  try { return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8')); }
+  try {
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+    const clean = stripBOM(raw);
+    return JSON.parse(clean);
+  }
   catch { return { corpid: '', corpsecret: '', webhook: '', webhookName: '' }; }
 }
 function saveConfig(config) { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8'); }
@@ -46,8 +69,8 @@ async function ensureToken() {
 
 // ===== 门店 JSON 兼容 =====
 const STORES_PATH = path.join(__dirname, 'stores.json');
-function loadStores() { try { return JSON.parse(fs.readFileSync(STORES_PATH, 'utf-8')); } catch { return []; } }
-function saveStores(stores) { fs.writeFileSync(STORES_PATH, JSON.stringify(stores, null, 2), 'utf-8'); }
+function loadStores() { try { const raw = fs.readFileSync(STORES_PATH, 'utf-8'); return JSON.parse(stripBOM(raw)); } catch { return []; } }
+function saveStores(stores) { fs.writeFileSync(STORES_PATH, JSON.stringify(stores, null, 2) + '\n', 'utf-8'); }
 const STORE_FIELDS = ['businessType','storeName','legalPerson','paymentType','status','openingDate','phone','province','city','district','address','businessHours','storeSize','monthlyRent','monthlyUtilities','employeeCount','laborCost','closingTime','businessDays'];
 
 // ===== 配置 API =====
@@ -252,6 +275,23 @@ app.post('/api/report/daily/push-all', async (req, res) => {
 
 // ===== 门店管理（JSON 兼容旧版）=====
 app.get('/api/stores', (req, res) => { try { const stores = loadStores(); res.json({ ok: true, stores }); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// 地图统计（必须在 :id 之前，否则 province-stats 被 :id 捕获）
+app.get('/api/stores/province-stats', (req, res) => {
+  try {
+    const rows = db.queryAll(`SELECT province as name, COUNT(*) as value FROM stores WHERE province IS NOT NULL AND province != '' GROUP BY province ORDER BY value DESC`);
+    res.json({ ok: true, data: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/stores/city-stats', (req, res) => {
+  try {
+    const { province } = req.query;
+    if (!province) return res.status(400).json({ error: '缺少 province 参数' });
+    const rows = db.queryAll(`SELECT city as name, COUNT(*) as value FROM stores WHERE province=? AND city IS NOT NULL AND city != '' GROUP BY city ORDER BY value DESC`, [province]);
+    res.json({ ok: true, data: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const s = stores.find(s => s.id === req.params.id); if (!s) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, store: s }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const idx = stores.findIndex(s => s.id === req.params.id); if (idx === -1) return res.status(404).json({ error: '门店不存在' }); STORE_FIELDS.forEach(f => { if (req.body[f] !== undefined) stores[idx][f] = String(req.body[f]).trim(); }); saveStores(stores); res.json({ ok: true, store: stores[idx] }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const idx = stores.findIndex(s => s.id === req.params.id); if (idx === -1) return res.status(404).json({ error: '门店不存在' }); STORE_FIELDS.forEach(f => { if (req.body[f] !== undefined) stores[idx][f] = String(req.body[f]).trim(); }); saveStores(stores); res.json({ ok: true, store: stores[idx] }); } catch (e) { res.status(500).json({ error: e.message }); } });
@@ -261,20 +301,89 @@ app.post('/api/stores/init', (req, res) => { try { const excelStores = parseDail
 // ==========================================
 //  SQLite 版门店管理（新路由，路径 /api/db/stores）
 // ==========================================
-app.get('/api/db/stores', (req, res) => {
-  try { const { status, store_type, keyword } = req.query; let sql = 'SELECT * FROM stores WHERE 1=1'; const params = []; if (status) { sql += ' AND status=?'; params.push(status); } if (store_type) { sql += ' AND store_type=?'; params.push(store_type); } if (keyword) { sql += ' AND store_name LIKE ?'; params.push('%'+keyword+'%'); } sql += ' ORDER BY id'; res.json({ ok: true, stores: db.queryAll(sql, params), count: db.queryOne('SELECT COUNT(*) as cnt FROM stores').cnt }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+
+// 统计卡片
+app.get('/api/db/stores/stats', (req, res) => {
+  try {
+    const row = db.queryOne(`
+      SELECT
+        SUM(CASE WHEN status='正常营业' THEN 1 ELSE 0 END) as open_count,
+        SUM(CASE WHEN status='筹建中' THEN 1 ELSE 0 END) as planning_count,
+        SUM(CASE WHEN status IN ('已闭店','闭店','迁址') THEN 1 ELSE 0 END) as closed_count,
+        SUM(CASE WHEN store_type='直营店' THEN 1 ELSE 0 END) as direct_count,
+        SUM(CASE WHEN store_type='加盟店' THEN 1 ELSE 0 END) as franchise_count,
+        SUM(CASE WHEN store_type='联营店' THEN 1 ELSE 0 END) as joint_count,
+        COUNT(*) as total
+      FROM stores
+    `);
+    res.json({ ok: true, stats: row });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// 按市统计（旧版兼容）
+app.get('/api/db/stores/by-city', (req, res) => {
+  try {
+    const { province } = req.query;
+    if (!province) return res.status(400).json({ error: '缺少 province 参数' });
+    const rows = db.queryAll(`
+      SELECT city, COUNT(*) as cnt
+      FROM stores
+      WHERE province=? AND city IS NOT NULL AND city != ''
+      GROUP BY city
+      ORDER BY cnt DESC
+    `, [province]);
+    const map = {};
+    rows.forEach(r => { map[r.city] = r.cnt; });
+    res.json({ ok: true, data: map, total: rows.reduce((s, r) => s + r.cnt, 0) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 按省份统计
+app.get('/api/db/stores/by-province', (req, res) => {
+  try {
+    const rows = db.queryAll(`
+      SELECT province, COUNT(*) as cnt
+      FROM stores
+      WHERE province IS NOT NULL AND province != ''
+      GROUP BY province
+      ORDER BY cnt DESC
+    `);
+    const map = {};
+    rows.forEach(r => { map[r.province] = r.cnt; });
+    res.json({ ok: true, data: map, total: rows.reduce((s, r) => s + r.cnt, 0) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 列表（分页+搜索）
+app.get('/api/db/stores', (req, res) => {
+  try {
+    const { keyword, status, store_type, legal_person, page, page_size } = req.query;
+    let where = 'WHERE 1=1';
+    const params = [];
+    if (keyword) { where += ' AND store_name LIKE ?'; params.push('%' + keyword + '%'); }
+    if (status) { where += ' AND status=?'; params.push(status); }
+    if (store_type) { where += ' AND store_type=?'; params.push(store_type); }
+    if (legal_person) { where += ' AND legal_person LIKE ?'; params.push('%' + legal_person + '%'); }
+    const total = db.queryOne(`SELECT COUNT(*) as cnt FROM stores ${where}`, params).cnt;
+    const psize = parseInt(page_size) || 10;
+    const pg = parseInt(page) || 1;
+    const offset = (pg - 1) * psize;
+    params.push(psize, offset);
+    const stores = db.queryAll(`SELECT * FROM stores ${where} ORDER BY id LIMIT ? OFFSET ?`, params);
+    res.json({ ok: true, stores, total, page: pg, page_size: psize });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/db/stores/:id', (req, res) => {
   try { const store = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const platforms = db.queryAll('SELECT * FROM store_platforms WHERE store_id=?', [req.params.id]); const fixedCosts = db.queryAll('SELECT * FROM store_fixed_costs WHERE store_id=?', [req.params.id]); const employees = db.queryAll('SELECT * FROM employees WHERE store_id=?', [req.params.id]); res.json({ ok: true, store, platforms, fixedCosts, employees }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/db/stores', (req, res) => {
-  try { const { store_name, status, store_type, region, province, city, district, address, phone, business_hours, opening_date, table_2person, table_4person, store_size } = req.body; if (!store_name) return res.status(400).json({ error: '门店名称不能为空' }); const id = db.insert('INSERT INTO stores (store_name,status,store_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [store_name, status||'正常营业', store_type||'直营店', region||'', province||'', city||'', district||'', address||'', phone||'', business_hours||'', opening_date||null, table_2person||0, table_4person||0, store_size||'']); db.save(); res.json({ ok: true, id }); }
+  try { const { store_name, status, store_type, legal_person, payment_type, region, province, city, district, address, phone, business_hours, opening_date, table_2person, table_4person, store_size } = req.body; if (!store_name) return res.status(400).json({ error: '门店名称不能为空' }); const id = db.insert('INSERT INTO stores (store_name,status,store_type,legal_person,payment_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [store_name, status||'正常营业', store_type||'直营店', legal_person||'', payment_type||'法人收款', region||'', province||'', city||'', district||'', address||'', phone||'', business_hours||'', opening_date||null, table_2person||0, table_4person||0, store_size||'']); db.save(); res.json({ ok: true, id }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/db/stores/:id', (req, res) => {
-  try { const fields = ['store_name','status','store_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
+  try { const allowedFields = ['store_name','status','store_type','legal_person','payment_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size']; const sets = [], params = []; allowedFields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/db/stores/:id', (req, res) => {
@@ -393,10 +502,29 @@ app.get('/api/data/export', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ===== 设置 Windows 控制台编码 =====
+function setupConsoleEncoding() {
+  if (os.platform() === 'win32') {
+    try {
+      child_process.execSync('chcp 65001', { stdio: 'ignore', timeout: 2000 });
+    } catch {
+      // chcp 可能失败（非管理员等场景），静默忽略
+    }
+  }
+}
+
 // ===== 启动 =====
 (async () => {
+  setupConsoleEncoding();
   await db.init();
   db.seed();
+
+  console.log('═'.repeat(50));
+  console.log('  编码环境确认');
+  console.log('  系统平台 :', os.platform());
+  console.log('  文件编码 : UTF-8 (所有 fs 读写均显式指定)');
+  console.log('  响应编码 : Content-Type + charset=utf-8');
+  console.log('═'.repeat(50));
   app.listen(PORT, () => {
     console.log(`🚀 中控后台已启动: http://localhost:${PORT}`);
     console.log(`📦 数据库: data/database.sqlite`);

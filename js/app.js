@@ -326,6 +326,17 @@ async function apiPost(path, body) {
   return data;
 }
 
+async function apiPut(path, body) {
+  const resp = await fetch(API_BASE + path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  return data;
+}
+
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
@@ -1474,15 +1485,170 @@ const analysisBindings = {
 };
 
 // ===== 门店管理绑定 =====
+// ===== 门店基本信息（含统计卡片、搜索、分页表格、编辑） =====
+let _storeState = { page: 1, page_size: 10, keyword: '', status: '', store_type: '', legal_person: '' };
+
+async function loadStoreBasic() {
+  const el = getPanelEl('storeMgmtContent');
+  try {
+    const [statsData, listData] = await Promise.all([
+      apiGet('/api/db/stores/stats'),
+      apiGet('/api/db/stores?page=' + _storeState.page + '&page_size=' + _storeState.page_size
+        + (_storeState.keyword ? '&keyword=' + encodeURIComponent(_storeState.keyword) : '')
+        + (_storeState.status ? '&status=' + encodeURIComponent(_storeState.status) : '')
+        + (_storeState.store_type ? '&store_type=' + encodeURIComponent(_storeState.store_type) : '')
+        + (_storeState.legal_person ? '&legal_person=' + encodeURIComponent(_storeState.legal_person) : ''))
+    ]);
+    renderStoreBasic(el, statsData.stats || {}, listData);
+  } catch (e) { fadeContent(el, '<div class="alert alert-error">加载失败: ' + escapeHtml(e.message) + '</div>'); }
+}
+
+function renderStoreBasic(el, stats, listData) {
+  const stores = listData.stores || [];
+  const total = listData.total || 0;
+  const pg = listData.page || 1;
+  const psize = listData.page_size || 10;
+
+  const statusClass = s => {
+    if (s === '正常营业') return 'status-open';
+    if (s === '筹建中') return 'status-planning';
+    if (s === '迁址') return 'status-moving';
+    return 'status-closed';
+  };
+
+  const tbody = stores.map(s => '<tr>'
+    + '<td>' + escapeHtml(s.store_name) + '</td>'
+    + '<td><span class="store-status-tag ' + statusClass(s.status) + '">' + escapeHtml(s.status || '—') + '</span></td>'
+    + '<td>' + escapeHtml(s.store_type || '—') + '</td>'
+    + '<td>' + escapeHtml(s.legal_person || '—') + '</td>'
+    + '<td>' + escapeHtml(s.phone || '—') + '</td>'
+    + '<td>' + escapeHtml((s.province || '') + (s.city || '') + (s.district || '') || '—') + '</td>'
+    + '<td>' + escapeHtml(s.opening_date || '—') + '</td>'
+    + '<td><button class="btn btn-default btn-sm" onclick="openStoreEdit(' + s.id + ')">✏️ 编辑</button></td>'
+    + '</tr>').join('');
+
+  const totalPages = Math.ceil(total / psize);
+  const pageOpts = [10, 20, 50, 100].map(n =>
+    '<option value="' + n + '"' + (n === psize ? ' selected' : '') + '>' + n + ' 条/页</option>'
+  ).join('');
+
+  let pagination = '';
+  if (totalPages > 1) {
+    pagination = '<div class="pagination" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;">';
+    for (let i = 1; i <= totalPages; i++) {
+      pagination += '<button class="btn ' + (i === pg ? 'btn-primary' : 'btn-default') + ' btn-sm" onclick="changeStorePage(' + i + ')">' + i + '</button>';
+    }
+    pagination += '</div>';
+  }
+
+  const html =
+    '<div class="store-stats-grid">'
+    + '<div class="store-stat-card"><div class="store-stat-num">' + (stats.open_count || 0) + '</div><div class="store-stat-label">已开业门店</div></div>'
+    + '<div class="store-stat-card"><div class="store-stat-num">' + (stats.planning_count || 0) + '</div><div class="store-stat-label">筹建中门店</div></div>'
+    + '<div class="store-stat-card"><div class="store-stat-num">' + (stats.closed_count || 0) + '</div><div class="store-stat-label">已闭店门店</div></div>'
+    + '<div class="store-stat-card store-stat-card-blue"><div class="store-stat-num">' + (stats.direct_count || 0) + '</div><div class="store-stat-label">直营店</div></div>'
+    + '<div class="store-stat-card store-stat-card-blue"><div class="store-stat-num">' + (stats.franchise_count || 0) + '</div><div class="store-stat-label">加盟店</div></div>'
+    + '<div class="store-stat-card store-stat-card-blue"><div class="store-stat-num">' + (stats.joint_count || 0) + '</div><div class="store-stat-label">联营店</div></div>'
+    + '</div>'
+
+    + '<div class="card"><div class="card-header">🔍 搜索门店</div>'
+    + '<div class="store-search-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;">'
+    + '<div class="form-group"><label class="form-label">门店名称</label><input type="text" class="form-input" id="sKeyword" placeholder="输入门店名称" value="' + escapeHtml(_storeState.keyword) + '"></div>'
+    + '<div class="form-group"><label class="form-label">门店状态</label><select class="form-input" id="sStatus"><option value="">全部</option><option value="正常营业"' + (_storeState.status === '正常营业' ? ' selected' : '') + '>开业</option><option value="筹建中"' + (_storeState.status === '筹建中' ? ' selected' : '') + '>筹建</option><option value="迁址"' + (_storeState.status === '迁址' ? ' selected' : '') + '>迁址</option><option value="已闭店"' + (_storeState.status === '已闭店' ? ' selected' : '') + '>闭店</option></select></div>'
+    + '<div class="form-group"><label class="form-label">门店类型</label><select class="form-input" id="sType"><option value="">全部</option><option value="直营店"' + (_storeState.store_type === '直营店' ? ' selected' : '') + '>直营</option><option value="加盟店"' + (_storeState.store_type === '加盟店' ? ' selected' : '') + '>加盟</option><option value="联营店"' + (_storeState.store_type === '联营店' ? ' selected' : '') + '>联营</option></select></div>'
+    + '<div class="form-group"><label class="form-label">法人</label><input type="text" class="form-input" id="sLegalPerson" placeholder="输入法人姓名" value="' + escapeHtml(_storeState.legal_person) + '"></div>'
+    + '</div>'
+    + '<button class="btn btn-primary" id="btnSearchStores">🔍 查询</button></div>'
+
+    + '<div class="card"><div class="card-header">🏪 门店基本信息（共 ' + total + ' 家）</div>'
+    + '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;"><span style="font-size:13px;color:#999;">每页</span><select class="form-input" style="width:auto;" id="sPageSize" onchange="changeStorePageSize()">' + pageOpts + '</select></div>'
+    + '<table class="data-table"><thead><tr><th>门店名称</th><th>状态</th><th>店型</th><th>法人</th><th>电话</th><th>所在地区</th><th>开业日期</th><th>操作</th></tr></thead>'
+    + '<tbody>' + (tbody || '<tr><td colspan="8" style="text-align:center;color:#999;">暂无数据</td></tr>') + '</tbody></table>'
+    + pagination + '</div>';
+
+  fadeContent(el, html);
+
+  document.getElementById('btnSearchStores').onclick = () => {
+    _storeState.keyword = document.getElementById('sKeyword')?.value?.trim() || '';
+    _storeState.status = document.getElementById('sStatus')?.value || '';
+    _storeState.store_type = document.getElementById('sType')?.value || '';
+    _storeState.legal_person = document.getElementById('sLegalPerson')?.value?.trim() || '';
+    _storeState.page = 1;
+    loadStoreBasic();
+  };
+}
+
+function changeStorePage(p) { _storeState.page = p; loadStoreBasic(); }
+function changeStorePageSize() {
+  _storeState.page_size = parseInt(document.getElementById('sPageSize')?.value) || 10;
+  _storeState.page = 1;
+  loadStoreBasic();
+}
+
+// ===== 编辑弹窗 =====
+async function openStoreEdit(id) {
+  try {
+    const data = await apiGet('/api/db/stores/' + id);
+    const s = data.store || {};
+    const fields = [
+      ['store_name', '门店名称', 'text', true],
+      ['status', '门店状态', 'select', false, ['正常营业','筹建中','迁址','已闭店']],
+      ['store_type', '门店类型', 'select', false, ['直营店','加盟店','联营店']],
+      ['legal_person', '法人', 'text', false],
+      ['payment_type', '收款性质', 'text', false],
+      ['province', '省', 'text', false],
+      ['city', '市', 'text', false],
+      ['district', '区', 'text', false],
+      ['address', '详细地址', 'text', false],
+      ['phone', '手机号', 'text', false],
+      ['business_hours', '营业时间', 'text', false],
+      ['opening_date', '开业日期', 'date', false],
+    ];
+    const formHtml = fields.map(f => {
+      const val = escapeHtml(String(s[f[0]] || ''));
+      const label = f[1];
+      if (f[2] === 'select') {
+        const opts = f[4].map(o => '<option value="' + escapeHtml(o) + '"' + (val === o ? ' selected' : '') + '>' + escapeHtml(o) + '</option>').join('');
+        return '<div class="form-group"><label class="form-label">' + label + '</label><select class="form-input" id="edit_' + f[0] + '">' + opts + '</select></div>';
+      }
+      return '<div class="form-group"><label class="form-label">' + label + '</label><input type="' + (f[2] === 'date' ? 'date' : 'text') + '" class="form-input" id="edit_' + f[0] + '" value="' + val + '"' + (f[3] ? ' required' : '') + '></div>';
+    }).join('');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML =
+      '<div class="modal-card" style="max-width:600px;max-height:80vh;overflow-y:auto;">'
+      + '<div class="modal-header"><h3>✏️ 编辑门店 — ' + escapeHtml(s.store_name) + '</h3>'
+      + '<button class="modal-close" onclick="this.closest(\'.modal-overlay\').remove()">✕</button></div>'
+      + '<div class="modal-body">' + formHtml + '</div>'
+      + '<div class="modal-footer"><button class="btn btn-default" onclick="this.closest(\'.modal-overlay\').remove()">取消</button>'
+      + '<button class="btn btn-primary" id="btnSaveStoreEdit" data-id="' + id + '">💾 保存</button></div></div>';
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById('btnSaveStoreEdit').onclick = () => saveStoreEdit(id);
+  } catch (e) { alert('加载门店信息失败: ' + e.message); }
+}
+
+async function saveStoreEdit(id) {
+  const fields = ['store_name','status','store_type','legal_person','payment_type','province','city','district','address','phone','business_hours','opening_date'];
+  const body = {};
+  fields.forEach(f => {
+    const el = document.getElementById('edit_' + f);
+    if (el && el.value !== undefined) body[f] = el.value;
+  });
+  if (!body.store_name) { alert('门店名称不能为空'); return; }
+  try {
+    await apiPut('/api/db/stores/' + id, body);
+    document.querySelector('.modal-overlay')?.remove();
+    loadStoreBasic();
+  } catch (e) { alert('保存失败: ' + e.message); }
+}
+
+// ===== 门店管理绑定 =====
 const storeMgmtBindings = {
   'info-basic': async () => {
-    const el = getPanelEl('storeMgmtContent');
-    try {
-      const data = await apiGet('/api/db/stores');
-      const stores = data.stores||[];
-      const tbody = stores.map(s => '<tr><td>'+s.store_name+'</td><td>'+(s.status||'—')+'</td><td>'+(s.store_type||'—')+'</td><td>'+(s.city||'—')+'</td><td>'+(s.store_size||'—')+'</td><td>'+(s.table_2person?'双人桌×'+s.table_2person:'—')+'</td><td>'+(s.table_4person?'四人桌×'+s.table_4person:'—')+'</td><td>'+(s.phone||'—')+'</td><td>'+(s.opening_date||'—')+'</td></tr>').join('');
-      fadeContent(el, '<div class="card"><div class="card-header">🏪 门店基本信息（共 '+stores.length+' 家）</div><table class="data-table"><thead><tr><th>门店名称</th><th>状态</th><th>店型</th><th>城市</th><th>面积</th><th>双人桌</th><th>四人桌</th><th>电话</th><th>开业日期</th></tr></thead><tbody>'+tbody+'</tbody></table></div>');
-    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
+    loadStoreBasic();
   },
   'info-platform': async () => {
     const el = getPanelEl('storeMgmtContent');
