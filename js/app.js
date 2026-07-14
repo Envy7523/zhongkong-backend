@@ -13,14 +13,14 @@ let currentSub = "";
 // ===== 多标签页管理 =====
 const PAGE_DEFAULT_SUB = {
   'analysis': 'revenue',
-  'store-management': 'info',
+  'store-management': 'info-basic',
   'menu-management': 'overview',
   'cost-accounting': 'daily',
 };
 
 const SUB_LABELS = {
   'analysis': { revenue: '门店营收构成', cost: '门店成本分析', sales: '门店销量统计', supplies: '门店耗材消耗' },
-  'store-management': { info: '门店信息', fixed: '固定成本', operating: '运营成本' },
+  'store-management': { 'info-basic': '门店基本信息', 'info-platform': '第三方平台', 'info-config': '门店配置', fixed: '固定成本', operating: '运营成本' },
   'menu-management': { overview: '菜品总览', cost: '菜品成本', expiry: '效期管理' },
   'cost-accounting': { daily: '日成本核算', weekly: '周成本核算', monthly: '月成本核算' },
 };
@@ -129,7 +129,7 @@ const TabManager = {
     document.querySelectorAll('.nav-item').forEach(item => {
       item.classList.toggle('active', item.dataset.page === tab.page);
     });
-    document.querySelectorAll('.nav-sub-item').forEach(item => {
+    document.querySelectorAll('.popup-item').forEach(item => {
       item.classList.toggle('active',
         item.dataset.page === tab.page && item.dataset.sub === tab.sub);
     });
@@ -218,46 +218,65 @@ function setServerStatus(cls, text) {
 // ===== 导航 =====
 function initNavigation() {
   const nav = document.getElementById('sidebarNav');
+
+  // 弹出菜单：hover 显示，离开隐藏
+  nav.querySelectorAll('.nav-group').forEach(group => {
+    const popup = group.querySelector('.nav-popup');
+    const parent = group.querySelector('.nav-parent');
+    if (!popup || !parent) return;
+
+    let hideTimer = null;
+
+    group.addEventListener('mouseenter', () => {
+      clearTimeout(hideTimer);
+      // 关闭其他弹出菜单
+      nav.querySelectorAll('.nav-popup.visible').forEach(p => {
+        if (p !== popup) p.classList.remove('visible');
+      });
+      nav.querySelectorAll('.nav-parent.popup-open').forEach(p => {
+        if (p !== parent) p.classList.remove('popup-open');
+      });
+      // 定位弹出菜单
+      const rect = parent.getBoundingClientRect();
+      popup.style.top = rect.top + 'px';
+      popup.classList.add('visible');
+      parent.classList.add('popup-open');
+    });
+
+    group.addEventListener('mouseleave', () => {
+      hideTimer = setTimeout(() => {
+        popup.classList.remove('visible');
+        parent.classList.remove('popup-open');
+      }, 150);
+    });
+  });
+
+  // 弹出菜单项点击 → 切换页面
   nav.addEventListener('click', (e) => {
-    // 子菜单项点击 → 切换子页面
-    const subItem = e.target.closest('.nav-sub-item');
-    if (subItem) {
-      e.stopPropagation();
-      const page = subItem.dataset.page;
-      const sub = subItem.dataset.sub;
+    const popupItem = e.target.closest('.popup-item');
+    if (popupItem) {
+      const page = popupItem.dataset.page;
+      const sub = popupItem.dataset.sub;
       if (page && sub) switchTab(page, sub);
+      // 关闭弹出菜单
+      popupItem.closest('.nav-popup').classList.remove('visible');
+      popupItem.closest('.nav-group').querySelector('.nav-parent').classList.remove('popup-open');
       return;
     }
 
-    // 父菜单项点击 → 展开/折叠子菜单（手风琴）
     const item = e.target.closest('.nav-item');
     if (!item) return;
 
+    // 父菜单项点击 → 打开默认子页面
     if (item.classList.contains('nav-parent')) {
-      e.stopPropagation();
-      const sub = item.closest('.nav-group').querySelector('.nav-sub');
-      const isOpen = sub.classList.contains('open');
-
-      // 收起所有其他子菜单
-      nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
-      nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
-
-      if (!isOpen) {
-        sub.classList.add('open');
-        item.classList.add('expanded');
-        const page = item.dataset.page;
-        if (page) navigateTo(page);
-      }
+      const page = item.dataset.page;
+      if (page) navigateTo(page);
       return;
     }
 
-    // 普通菜单项 → 直接导航，收起所有子菜单
+    // 普通菜单项 → 直接导航
     const page = item.dataset.page;
-    if (page) {
-      nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
-      nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
-      navigateTo(page);
-    }
+    if (page) navigateTo(page);
   });
 }
 
@@ -769,11 +788,11 @@ const pages = {
   'store-management': {
     title: '门店管理',
     render() {
-      if (!currentSub) currentSub = 'info';
+      if (!currentSub) currentSub = 'info-basic';
       return `<div id="storeMgmtContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
     },
     onRender() {
-      if (!currentSub) currentSub = 'info';
+      if (!currentSub) currentSub = 'info-basic';
       updateSubNav('store-management', currentSub);
       storeMgmtBindings[currentSub]?.();
     },
@@ -849,7 +868,7 @@ const pages = {
 
 // ===== 子导航处理 =====
 function updateSubNav(page, sub) {
-  document.querySelectorAll('.nav-sub-item').forEach(el => {
+  document.querySelectorAll('.popup-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === page && el.dataset.sub === sub);
   });
 }
@@ -1456,6 +1475,23 @@ const analysisBindings = {
 
 // ===== 门店管理绑定 =====
 const storeMgmtBindings = {
+  'info-basic': async () => {
+    const el = getPanelEl('storeMgmtContent');
+    try {
+      const data = await apiGet('/api/db/stores');
+      const stores = data.stores||[];
+      const tbody = stores.map(s => '<tr><td>'+s.store_name+'</td><td>'+(s.status||'—')+'</td><td>'+(s.store_type||'—')+'</td><td>'+(s.city||'—')+'</td><td>'+(s.store_size||'—')+'</td><td>'+(s.table_2person?'双人桌×'+s.table_2person:'—')+'</td><td>'+(s.table_4person?'四人桌×'+s.table_4person:'—')+'</td><td>'+(s.phone||'—')+'</td><td>'+(s.opening_date||'—')+'</td></tr>').join('');
+      fadeContent(el, '<div class="card"><div class="card-header">🏪 门店基本信息（共 '+stores.length+' 家）</div><table class="data-table"><thead><tr><th>门店名称</th><th>状态</th><th>店型</th><th>城市</th><th>面积</th><th>双人桌</th><th>四人桌</th><th>电话</th><th>开业日期</th></tr></thead><tbody>'+tbody+'</tbody></table></div>');
+    } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
+  },
+  'info-platform': async () => {
+    const el = getPanelEl('storeMgmtContent');
+    fadeContent(el, '<div class="card"><div class="card-header">🔗 第三方平台</div><div class="alert alert-info">第三方平台对接功能开发中。支持美团、饿了么、抖音等平台的订单和评价数据同步。</div><p style="color:#999;padding:12px;">敬请期待...</p></div>');
+  },
+  'info-config': async () => {
+    const el = getPanelEl('storeMgmtContent');
+    fadeContent(el, '<div class="card"><div class="card-header">⚙️ 门店配置</div><div class="alert alert-info">门店配置功能开发中。支持各门店独立配置营业时间、桌位、打印机等信息。</div><p style="color:#999;padding:12px;">敬请期待...</p></div>');
+  },
   info: async () => {
     const el = getPanelEl('storeMgmtContent');
     try {

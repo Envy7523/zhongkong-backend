@@ -19,18 +19,24 @@
       <span class="nav-label">数据概括</span>
     </a>
 
-    <!-- 数据分析 — 子菜单折叠 -->
+    <!-- 数据分析 — 弹出菜单 -->
     <div class="nav-group">
-      <a class="nav-item nav-parent" data-page="analysis" data-sub="revenue">
+      <a class="nav-item nav-parent" data-page="analysis">
         <span class="nav-icon">📈</span>
         <span class="nav-label">数据分析</span>
-        <span class="nav-arrow">▾</span>
+        <span class="nav-arrow">▸</span>
       </a>
-      <div class="nav-sub">
-        <a class="nav-sub-item" data-page="analysis" data-sub="revenue">门店营收构成</a>
-        <a class="nav-sub-item" data-page="analysis" data-sub="cost">门店成本分析</a>
-        <a class="nav-sub-item" data-page="analysis" data-sub="sales">门店销量统计</a>
-        <a class="nav-sub-item" data-page="analysis" data-sub="supplies">门店耗材消耗</a>
+      <div class="nav-popup">
+        <div class="popup-section">
+          <div class="popup-section-title">📊 营收分析</div>
+          <a class="popup-item" data-page="analysis" data-sub="revenue">门店营收构成</a>
+          <a class="popup-item" data-page="analysis" data-sub="cost">门店成本分析</a>
+        </div>
+        <div class="popup-section">
+          <div class="popup-section-title">📋 销售分析</div>
+          <a class="popup-item" data-page="analysis" data-sub="sales">门店销量统计</a>
+          <a class="popup-item" data-page="analysis" data-sub="supplies">门店耗材消耗</a>
+        </div>
       </div>
     </div>
 
@@ -44,31 +50,42 @@
       <span class="nav-label">AI助手</span>
     </a>
 
-    <!-- 门店管理 — 子菜单折叠 -->
+    <!-- 门店管理 — 弹出菜单（含二级路由） -->
     <div class="nav-group">
-      <a class="nav-item nav-parent" data-page="store-management" data-sub="info">
+      <a class="nav-item nav-parent" data-page="store-management">
         <span class="nav-icon">🏪</span>
         <span class="nav-label">门店管理</span>
-        <span class="nav-arrow">▾</span>
+        <span class="nav-arrow">▸</span>
       </a>
-      <div class="nav-sub">
-        <a class="nav-sub-item" data-page="store-management" data-sub="info">门店信息</a>
-        <a class="nav-sub-item" data-page="store-management" data-sub="fixed">固定成本</a>
-        <a class="nav-sub-item" data-page="store-management" data-sub="operating">运营成本</a>
+      <div class="nav-popup">
+        <div class="popup-section">
+          <div class="popup-section-title">门店信息</div>
+          <a class="popup-item" data-page="store-management" data-sub="info-basic">门店基本信息</a>
+          <a class="popup-item" data-page="store-management" data-sub="info-platform">第三方平台</a>
+          <a class="popup-item" data-page="store-management" data-sub="info-config">门店配置</a>
+        </div>
+        <div class="popup-section">
+          <div class="popup-section-title">门店成本</div>
+          <a class="popup-item" data-page="store-management" data-sub="fixed">固定成本</a>
+          <a class="popup-item" data-page="store-management" data-sub="operating">运营成本</a>
+        </div>
       </div>
     </div>
 
-    <!-- 菜品管理 — 子菜单折叠 -->
+    <!-- 菜品管理 — 弹出菜单 -->
     <div class="nav-group">
-      <a class="nav-item nav-parent" data-page="menu-management" data-sub="overview">
+      <a class="nav-item nav-parent" data-page="menu-management">
         <span class="nav-icon">🍽️</span>
         <span class="nav-label">菜品管理</span>
-        <span class="nav-arrow">▾</span>
+        <span class="nav-arrow">▸</span>
       </a>
-      <div class="nav-sub">
-        <a class="nav-sub-item" data-page="menu-management" data-sub="overview">菜品总览</a>
-        <a class="nav-sub-item" data-page="menu-management" data-sub="cost">菜品成本</a>
-        <a class="nav-sub-item" data-page="menu-management" data-sub="expiry">效期管理</a>
+      <div class="nav-popup">
+        <div class="popup-section">
+          <div class="popup-section-title">菜品数据</div>
+          <a class="popup-item" data-page="menu-management" data-sub="overview">菜品总览</a>
+          <a class="popup-item" data-page="menu-management" data-sub="cost">菜品成本</a>
+          <a class="popup-item" data-page="menu-management" data-sub="expiry">效期管理</a>
+        </div>
       </div>
     </div>
 
@@ -77,17 +94,20 @@
       <span class="nav-label">人员管理</span>
     </a>
 
-    <!-- 成本核算 — 子菜单折叠 -->
+    <!-- 成本核算 — 弹出菜单 -->
     <div class="nav-group">
-      <a class="nav-item nav-parent" data-page="cost-accounting" data-sub="daily">
+      <a class="nav-item nav-parent" data-page="cost-accounting">
         <span class="nav-icon">💰</span>
         <span class="nav-label">成本核算</span>
-        <span class="nav-arrow">▾</span>
+        <span class="nav-arrow">▸</span>
       </a>
-      <div class="nav-sub">
-        <a class="nav-sub-item" data-page="cost-accounting" data-sub="daily">日成本核算</a>
-        <a class="nav-sub-item" data-page="cost-accounting" data-sub="weekly">周成本核算</a>
-        <a class="nav-sub-item" data-page="cost-accounting" data-sub="monthly">月成本核算</a>
+      <div class="nav-popup">
+        <div class="popup-section">
+          <div class="popup-section-title">成本分析</div>
+          <a class="popup-item" data-page="cost-accounting" data-sub="daily">日成本核算</a>
+          <a class="popup-item" data-page="cost-accounting" data-sub="weekly">周成本核算</a>
+          <a class="popup-item" data-page="cost-accounting" data-sub="monthly">月成本核算</a>
+        </div>
       </div>
     </div>
 
