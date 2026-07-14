@@ -29,6 +29,9 @@ const TabManager = {
   tabs: [],
   activeId: null,
 
+  // 当前正在渲染的面板 ID（供 getPanelEl 使用）
+  _renderingId: null,
+
   _title(page, sub) {
     const pageDef = pages[page];
     if (!pageDef) return page;
@@ -39,23 +42,16 @@ const TabManager = {
   },
 
   open(page, sub) {
-    const id = page;
-
+    const id = sub ? page + '-' + sub : page;
     const existing = this.tabs.find(t => t.id === id);
     if (existing) {
-      if (sub) {
-        currentSub = sub;
-        updateSubNav(page, sub);
-        updateSubTabBar(page, sub);
-        this._rerender(existing);
-      }
       this._activate(existing);
       return;
     }
 
     if (!sub && PAGE_DEFAULT_SUB[page]) {
       sub = PAGE_DEFAULT_SUB[page];
-      currentSub = sub;
+      return this.open(page, sub);
     }
 
     const title = this._title(page, sub);
@@ -84,20 +80,17 @@ const TabManager = {
     if (tab.rendered) return;
     const pageDef = pages[tab.page];
     if (!pageDef) return;
-    tab.el.innerHTML = pageDef.render();
+    let html = pageDef.render();
+    html = html.replace(/id="analysisContent"/g, 'id="analysisContent-' + tab.id + '"');
+    html = html.replace(/id="storeMgmtContent"/g, 'id="storeMgmtContent-' + tab.id + '"');
+    html = html.replace(/id="menuContent"/g, 'id="menuContent-' + tab.id + '"');
+    html = html.replace(/id="costContent"/g, 'id="costContent-' + tab.id + '"');
+    tab.el.innerHTML = html;
     tab.rendered = true;
+    this._renderingId = tab.id;
     if (pageDef.onRender) pageDef.onRender();
+    this._renderingId = null;
     if (pageBindings[tab.page]) pageBindings[tab.page]();
-  },
-
-  _rerender(tab) {
-    const pageDef = pages[tab.page];
-    if (!pageDef) return;
-    tab.el.innerHTML = pageDef.render();
-    tab.title = this._title(tab.page, currentSub);
-    if (pageDef.onRender) pageDef.onRender();
-    document.getElementById('pageTitle').textContent = tab.title;
-    this._renderTabBar();
   },
 
   switchTo(id) {
@@ -318,6 +311,12 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+// 多标签页下获取当前渲染面板内的元素（避免 ID 冲突）
+function getPanelEl(baseId) {
+  const id = TabManager._renderingId ? baseId + '-' + TabManager._renderingId : baseId;
+  return document.getElementById(id);
 }
 
 function showEl(id, html) {
@@ -1403,7 +1402,7 @@ function fillDemoReport() {
 // ===== 分析页面绑定 =====
 const analysisBindings = {
   revenue: async () => {
-    const el = document.getElementById('analysisContent');
+    const el = getPanelEl('analysisContent');
     try {
       const data = await apiGet('/api/analysis/revenue');
       const ch = data.channels;
@@ -1419,7 +1418,7 @@ const analysisBindings = {
     } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   cost: async () => {
-    const el = document.getElementById('analysisContent');
+    const el = getPanelEl('analysisContent');
     try {
       const stores = await apiGet('/api/db/stores');
       const data = await apiGet('/api/analysis/cost');
@@ -1433,7 +1432,7 @@ const analysisBindings = {
     } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   sales: async () => {
-    const el = document.getElementById('analysisContent');
+    const el = getPanelEl('analysisContent');
     try {
       const data = await apiGet('/api/analysis/sales');
       const rows = data.rows||[];
@@ -1443,7 +1442,7 @@ const analysisBindings = {
     } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   supplies: async () => {
-    const el = document.getElementById('analysisContent');
+    const el = getPanelEl('analysisContent');
     try {
       const data = await apiGet('/api/analysis/supplies');
       const rows = data.rows||[];
@@ -1458,7 +1457,7 @@ const analysisBindings = {
 // ===== 门店管理绑定 =====
 const storeMgmtBindings = {
   info: async () => {
-    const el = document.getElementById('storeMgmtContent');
+    const el = getPanelEl('storeMgmtContent');
     try {
       const data = await apiGet('/api/db/stores');
       const stores = data.stores||[];
@@ -1467,7 +1466,7 @@ const storeMgmtBindings = {
     } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   fixed: async () => {
-    const el = document.getElementById('storeMgmtContent');
+    const el = getPanelEl('storeMgmtContent');
     try {
       const storesData = await apiGet('/api/db/stores');
       const stores = storesData.stores||[];
@@ -1484,7 +1483,7 @@ const storeMgmtBindings = {
     } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   operating: async () => {
-    const el = document.getElementById('storeMgmtContent');
+    const el = getPanelEl('storeMgmtContent');
     try {
       const storesData = await apiGet('/api/db/stores');
       const stores = storesData.stores||[];
@@ -1497,7 +1496,7 @@ const storeMgmtBindings = {
 // ===== 菜品管理绑定 =====
 const menuBindings = {
   overview: async () => {
-    const el = document.getElementById('menuContent');
+    const el = getPanelEl('menuContent');
     try {
       const data = await apiGet('/api/menu');
       const items = data.items||[];
@@ -1506,7 +1505,7 @@ const menuBindings = {
     } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   cost: async () => {
-    const el = document.getElementById('menuContent');
+    const el = getPanelEl('menuContent');
     try {
       const data = await apiGet('/api/menu');
       const items = (data.items||[]).filter(m => m.status==='在售');
@@ -1519,7 +1518,7 @@ const menuBindings = {
     } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   expiry: async () => {
-    const el = document.getElementById('menuContent');
+    const el = getPanelEl('menuContent');
     try {
       const data = await apiGet('/api/menu');
       const items = (data.items||[]).filter(m => m.expiry_days);
@@ -1536,7 +1535,7 @@ const menuBindings = {
 // ===== 成本核算绑定 =====
 const costBindings = {
   daily: async () => {
-    const el = document.getElementById('costContent');
+    const el = getPanelEl('costContent');
     try {
       const storesData = await apiGet('/api/db/stores');
       const stores = storesData.stores||[];
@@ -1551,7 +1550,7 @@ const costBindings = {
     } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   weekly: async () => {
-    const el = document.getElementById('costContent');
+    const el = getPanelEl('costContent');
     try {
       const data = await apiGet('/api/cost-accounting/weekly');
       const rows = data.rows||[];
@@ -1560,7 +1559,7 @@ const costBindings = {
     } catch(e) { fadeContent(el, '<div class="alert alert-error">加载失败: '+e.message+'</div>'); }
   },
   monthly: async () => {
-    const el = document.getElementById('costContent');
+    const el = getPanelEl('costContent');
     try {
       const data = await apiGet('/api/cost-accounting/monthly');
       const rows = data.rows||[];
