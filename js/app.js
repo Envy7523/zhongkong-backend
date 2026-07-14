@@ -10,10 +10,191 @@ let currentPage = 'dashboard';
 let serverOnline = false;
 let currentSub = "";
 
-// ===== 初始化 =====
+// ===== 多标签页管理 =====
+const PAGE_DEFAULT_SUB = {
+  'analysis': 'revenue',
+  'store-management': 'info',
+  'menu-management': 'overview',
+  'cost-accounting': 'daily',
+};
+
+const SUB_LABELS = {
+  'analysis': { revenue: '门店营收构成', cost: '门店成本分析', sales: '门店销量统计', supplies: '门店耗材消耗' },
+  'store-management': { info: '门店信息', fixed: '固定成本', operating: '运营成本' },
+  'menu-management': { overview: '菜品总览', cost: '菜品成本', expiry: '效期管理' },
+  'cost-accounting': { daily: '日成本核算', weekly: '周成本核算', monthly: '月成本核算' },
+};
+
+const TabManager = {
+  tabs: [],
+  activeId: null,
+
+  _title(page, sub) {
+    const pageDef = pages[page];
+    if (!pageDef) return page;
+    if (sub && SUB_LABELS[page] && SUB_LABELS[page][sub]) {
+      return pageDef.title + ' · ' + SUB_LABELS[page][sub];
+    }
+    return pageDef.title;
+  },
+
+  open(page, sub) {
+    const id = page;
+
+    const existing = this.tabs.find(t => t.id === id);
+    if (existing) {
+      if (sub) {
+        currentSub = sub;
+        updateSubNav(page, sub);
+        updateSubTabBar(page, sub);
+        this._rerender(existing);
+      }
+      this._activate(existing);
+      return;
+    }
+
+    if (!sub && PAGE_DEFAULT_SUB[page]) {
+      sub = PAGE_DEFAULT_SUB[page];
+      currentSub = sub;
+    }
+
+    const title = this._title(page, sub);
+    const panel = document.createElement('div');
+    panel.className = 'tab-content-panel';
+    panel.id = 'tab-content-' + id;
+    document.getElementById('contentArea').appendChild(panel);
+
+    const tab = {
+      id: id, page: page,
+      sub: sub || null,
+      title: title,
+      el: panel,
+      rendered: false,
+      closable: page !== 'dashboard',
+    };
+
+    this.tabs.push(tab);
+    this._renderTab(tab);
+    this._activate(tab);
+    this._renderTabBar();
+    setTimeout(() => this._scrollToTab(id), 50);
+  },
+
+  _renderTab(tab) {
+    if (tab.rendered) return;
+    const pageDef = pages[tab.page];
+    if (!pageDef) return;
+    tab.el.innerHTML = pageDef.render();
+    tab.rendered = true;
+    if (pageDef.onRender) pageDef.onRender();
+    if (pageBindings[tab.page]) pageBindings[tab.page]();
+  },
+
+  _rerender(tab) {
+    const pageDef = pages[tab.page];
+    if (!pageDef) return;
+    tab.el.innerHTML = pageDef.render();
+    tab.title = this._title(tab.page, currentSub);
+    if (pageDef.onRender) pageDef.onRender();
+    document.getElementById('pageTitle').textContent = tab.title;
+    this._renderTabBar();
+  },
+
+  switchTo(id) {
+    const tab = this.tabs.find(t => t.id === id);
+    if (tab) this._activate(tab);
+  },
+
+  _activate(tab) {
+    if (this.activeId === tab.id) return;
+    if (this.activeId) {
+      const old = this.tabs.find(t => t.id === this.activeId);
+      if (old) old.el.classList.remove('active');
+    }
+    this.activeId = tab.id;
+    tab.el.classList.add('active');
+    document.getElementById('contentArea').classList.add('visible');
+    document.getElementById('pageTitle').textContent = tab.title;
+    currentPage = tab.page;
+
+    // 展开侧边栏子菜单
+    const nav = document.getElementById('sidebarNav');
+    const parentItem = nav.querySelector('.nav-parent[data-page="' + tab.page + '"]');
+    if (parentItem) {
+      const sub = parentItem.closest('.nav-group').querySelector('.nav-sub');
+      if (sub) {
+        nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
+        nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
+        sub.classList.add('open');
+        parentItem.classList.add('expanded');
+      }
+    } else {
+      nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
+      nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
+    }
+
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.classList.toggle('active', item.dataset.page === tab.page);
+    });
+    document.querySelectorAll('.nav-sub-item').forEach(item => {
+      item.classList.toggle('active',
+        item.dataset.page === tab.page && item.dataset.sub === tab.sub);
+    });
+
+    this._renderTabBar();
+    this._scrollToTab(tab.id);
+  },
+
+  close(id) {
+    const idx = this.tabs.findIndex(t => t.id === id);
+    if (idx === -1) return;
+    const tab = this.tabs[idx];
+    if (!tab.closable) return;
+    tab.el.remove();
+    this.tabs.splice(idx, 1);
+    if (this.activeId === id) {
+      const next = this.tabs[Math.min(idx, this.tabs.length - 1)];
+      if (next) this._activate(next);
+      else { document.getElementById('contentArea').classList.remove('visible'); this.activeId = null; }
+    }
+    this._renderTabBar();
+  },
+
+  closeOthers() {
+    const active = this.tabs.find(t => t.id === this.activeId);
+    if (!active) return;
+    const toClose = this.tabs.filter(t => t.id !== this.activeId && t.closable);
+    toClose.forEach(t => t.el.remove());
+    this.tabs = this.tabs.filter(t => !toClose.includes(t));
+    this._renderTabBar();
+  },
+
+  _renderTabBar() {
+    const bar = document.getElementById('tabBar');
+    if (!bar) return;
+    bar.innerHTML = this.tabs.map(t => {
+      const isActive = t.id === this.activeId;
+      const closeBtn = t.closable
+        ? '<span class="tab-close" data-close="' + t.id + '" title="关闭">×</span>'
+        : '';
+      return '<div class="tab-item' + (isActive ? ' active' : '') + '" data-tab="' + t.id + '" title="' + escapeHtml(t.title) + '">'
+        + '<span class="tab-title">' + escapeHtml(t.title) + '</span>' + closeBtn
+        + '</div>';
+    }).join('');
+  },
+
+  _scrollToTab(id) {
+    const bar = document.getElementById('tabBar');
+    const item = bar ? bar.querySelector('.tab-item[data-tab="' + id + '"]') : null;
+    if (item) item.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+  },
+};
+
+
 document.addEventListener('DOMContentLoaded', () => {
   initNavigation();
-  navigateTo('dashboard');
+  TabManager.open('dashboard');
+  initTabBarEvents();
   initMenuToggle();
   checkServerStatus();
 });
@@ -88,37 +269,7 @@ function initNavigation() {
 }
 
 function navigateTo(page) {
-  const nav = document.getElementById('sidebarNav');
-  currentPage = page;
-  const pageDef = pages[page];
-  if (!pageDef) return;
-
-  document.querySelectorAll('.nav-item').forEach(item => {
-    item.classList.toggle('active', item.dataset.page === page);
-  });
-
-  // 如果该页面有子页面，展开侧边栏子菜单
-  const parentItem = nav.querySelector(`.nav-parent[data-page="${page}"]`);
-  if (parentItem) {
-    const sub = parentItem.closest('.nav-group').querySelector('.nav-sub');
-    if (sub) {
-      nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
-      nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
-      sub.classList.add('open');
-      parentItem.classList.add('expanded');
-    }
-  } else {
-    nav.querySelectorAll('.nav-sub.open').forEach(s => s.classList.remove('open'));
-    nav.querySelectorAll('.nav-parent.expanded').forEach(p => p.classList.remove('expanded'));
-  }
-
-  document.getElementById('pageTitle').textContent = pageDef.title;
-  const contentArea = document.getElementById('contentArea');
-  contentArea.innerHTML = pageDef.render();
-  contentArea.classList.add('visible');
-
-  // 页面渲染后绑定事件
-  if (pageDef.onRender) pageDef.onRender();
+  TabManager.open(page, null);
 }
 
 // ===== 侧边栏折叠 =====
@@ -126,6 +277,22 @@ function initMenuToggle() {
   document.getElementById('menuToggle').addEventListener('click', () => {
     document.getElementById('sidebar').classList.toggle('collapsed');
   });
+}
+
+// ===== 标签栏事件 =====
+function initTabBarEvents() {
+  const bar = document.getElementById('tabBar');
+  if (!bar) return;
+  bar.addEventListener('click', (e) => {
+    const closeBtn = e.target.closest('.tab-close');
+    if (closeBtn) { e.stopPropagation(); TabManager.close(closeBtn.dataset.close); return; }
+    const item = e.target.closest('.tab-item');
+    if (item) TabManager.switchTo(item.dataset.tab);
+  });
+  const btnClose = document.getElementById('btnCloseAllTabs');
+  if (btnClose) {
+    btnClose.addEventListener('click', () => TabManager.closeOthers());
+  }
 }
 
 // ===== API 工具函数 =====
@@ -573,20 +740,11 @@ const pages = {
     title: '数据分析',
     render() {
       if (!currentSub) currentSub = 'revenue';
-      return `<div class="sub-tab-bar">
-        <button class="sub-tab" data-sub="revenue">📊 门店营收构成</button>
-        <button class="sub-tab" data-sub="cost">📉 门店成本分析</button>
-        <button class="sub-tab" data-sub="sales">📦 门店销量统计</button>
-        <button class="sub-tab" data-sub="supplies">🧴 门店耗材消耗</button>
-      </div><div id="analysisContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+      return `<div id="analysisContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
     },
     onRender() {
       if (!currentSub) currentSub = 'revenue';
       updateSubNav('analysis', currentSub);
-      updateSubTabBar('analysis', currentSub);
-      document.querySelectorAll('.sub-tab-bar .sub-tab').forEach(tab => {
-        tab.onclick = () => switchTab('analysis', tab.dataset.sub);
-      });
       analysisBindings[currentSub]?.();
     },
   },
@@ -613,19 +771,11 @@ const pages = {
     title: '门店管理',
     render() {
       if (!currentSub) currentSub = 'info';
-      return `<div class="sub-tab-bar">
-        <button class="sub-tab" data-sub="info">📋 门店信息</button>
-        <button class="sub-tab" data-sub="fixed">🔒 固定成本</button>
-        <button class="sub-tab" data-sub="operating">⚙️ 运营成本</button>
-      </div><div id="storeMgmtContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+      return `<div id="storeMgmtContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
     },
     onRender() {
       if (!currentSub) currentSub = 'info';
       updateSubNav('store-management', currentSub);
-      updateSubTabBar('store-management', currentSub);
-      document.querySelectorAll('.sub-tab-bar .sub-tab').forEach(tab => {
-        tab.onclick = () => switchTab('store-management', tab.dataset.sub);
-      });
       storeMgmtBindings[currentSub]?.();
     },
   },
@@ -635,19 +785,11 @@ const pages = {
     title: '菜品管理',
     render() {
       if (!currentSub) currentSub = 'overview';
-      return `<div class="sub-tab-bar">
-        <button class="sub-tab" data-sub="overview">🍽️ 菜品总览</button>
-        <button class="sub-tab" data-sub="cost">💰 菜品成本</button>
-        <button class="sub-tab" data-sub="expiry">⏰ 效期管理</button>
-      </div><div id="menuContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+      return `<div id="menuContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
     },
     onRender() {
       if (!currentSub) currentSub = 'overview';
       updateSubNav('menu-management', currentSub);
-      updateSubTabBar('menu-management', currentSub);
-      document.querySelectorAll('.sub-tab-bar .sub-tab').forEach(tab => {
-        tab.onclick = () => switchTab('menu-management', tab.dataset.sub);
-      });
       menuBindings[currentSub]?.();
     },
   },
@@ -673,19 +815,11 @@ const pages = {
     title: '成本核算',
     render() {
       if (!currentSub) currentSub = 'daily';
-      return `<div class="sub-tab-bar">
-        <button class="sub-tab" data-sub="daily">📅 日成本核算</button>
-        <button class="sub-tab" data-sub="weekly">📆 周成本核算</button>
-        <button class="sub-tab" data-sub="monthly">🗓️ 月成本核算</button>
-      </div><div id="costContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
+      return `<div id="costContent" class="sub-content"><div class="card"><div class="card-header">加载中...</div></div></div>`;
     },
     onRender() {
       if (!currentSub) currentSub = 'daily';
       updateSubNav('cost-accounting', currentSub);
-      updateSubTabBar('cost-accounting', currentSub);
-      document.querySelectorAll('.sub-tab-bar .sub-tab').forEach(tab => {
-        tab.onclick = () => switchTab('cost-accounting', tab.dataset.sub);
-      });
       costBindings[currentSub]?.();
     },
   },
@@ -735,7 +869,7 @@ function switchTab(page, sub) {
   currentSub = sub;
   updateSubNav(page, sub);
   updateSubTabBar(page, sub);
-  navigateTo(page);
+  TabManager.open(page, sub);
 }
 
 // ===== 页面事件绑定 =====
@@ -846,16 +980,6 @@ const pageBindings = {
     if (btnSend) btnSend.onclick = sendReport;
     if (btnDemo) btnDemo.onclick = fillDemoReport;
   }
-};
-
-// 在 navigateTo 中，渲染完成后调用对应绑定
-const origNavigateTo = navigateTo;
-navigateTo = function(page) {
-  origNavigateTo(page);
-  // 延迟绑定，确保 DOM 已渲染
-  setTimeout(() => {
-    if (pageBindings[page]) pageBindings[page]();
-  }, 50);
 };
 
 // ===== 业务逻辑 =====
