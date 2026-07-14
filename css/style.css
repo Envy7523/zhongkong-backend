@@ -129,12 +129,12 @@ html, body {
   position: fixed;
   left: calc(var(--sidebar-width) + 6px);
   top: 0;
-  min-width: 200px;
-  max-width: 260px;
+  min-width: 420px;
+  max-width: 540px;
   background: #252538;
   border-radius: 10px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3);
-  padding: 10px 0;
+  padding: 8px 0;
   z-index: 200;
   opacity: 0;
   visibility: hidden;
@@ -152,33 +152,43 @@ html, body {
   left: calc(var(--sidebar-collapsed) + 6px);
 }
 
-/* 弹出菜单的分组 */
+/* 弹出菜单的分组：Grid 布局 — 标题占第1列，二级路由占第2-4列（每行最多3个） */
 .popup-section {
-  padding: 6px 0;
+  display: grid;
+  grid-template-columns: 105px repeat(3, 1fr);
+  gap: 2px 6px;
+  align-items: center;
+  padding: 6px 14px;
 }
 .popup-section + .popup-section {
   border-top: 1px solid rgba(255,255,255,0.08);
 }
 
 .popup-section-title {
-  padding: 8px 18px 4px;
+  grid-column: 1;
+  grid-row: 1;
+  padding: 4px 0;
   font-size: 12px;
   font-weight: 700;
   color: #8888a0;
   text-transform: none;
   letter-spacing: 0.5px;
+  white-space: nowrap;
 }
 
 /* 弹出菜单项 */
 .popup-item {
   display: flex;
   align-items: center;
-  padding: 9px 18px;
+  padding: 6px 10px;
   color: #b0b0c8;
   text-decoration: none;
-  font-size: 13.5px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 4px;
   transition: all 0.15s ease;
 }
 .popup-item:hover {
