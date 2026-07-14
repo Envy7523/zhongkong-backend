@@ -56,6 +56,7 @@ export const getStoreByCity = (province) => http.get('/api/db/stores/by-city', {
 // ===== 地图统计（数组格式）=====
 export const getProvinceStats = () => http.get('/api/stores/province-stats')
 export const getCityStats = (province) => http.get('/api/stores/city-stats', { params: { province } })
+export const getDistrictStats = (province, city) => http.get('/api/stores/district-stats', { params: { province, city } })
 
 // ===== 用户管理 =====
 export const getUsers = () => http.get('/api/users')

@@ -291,6 +291,14 @@ app.get('/api/stores/city-stats', (req, res) => {
     res.json({ ok: true, data: rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+app.get('/api/stores/district-stats', (req, res) => {
+  try {
+    const { province, city } = req.query;
+    if (!province || !city) return res.status(400).json({ error: '缺少 province 或 city 参数' });
+    const rows = db.queryAll(`SELECT district as name, COUNT(*) as value FROM stores WHERE province=? AND city=? AND district IS NOT NULL AND district != '' GROUP BY district ORDER BY value DESC`, [province, city]);
+    res.json({ ok: true, data: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 app.get('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const s = stores.find(s => s.id === req.params.id); if (!s) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, store: s }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const idx = stores.findIndex(s => s.id === req.params.id); if (idx === -1) return res.status(404).json({ error: '门店不存在' }); STORE_FIELDS.forEach(f => { if (req.body[f] !== undefined) stores[idx][f] = String(req.body[f]).trim(); }); saveStores(stores); res.json({ ok: true, store: stores[idx] }); } catch (e) { res.status(500).json({ error: e.message }); } });
