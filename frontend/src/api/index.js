@@ -79,6 +79,7 @@ export const getCityStats = (province) => http.get('/api/stores/city-stats', { p
 export const getDistrictStats = (province, city) => http.get('/api/stores/district-stats', { params: { province, city } })
 export const getStoreLocations = (params) => http.get('/api/stores/locations', { params })
 export const geocodeAddress = (params) => http.get('/api/geocode', { params })
+export const searchAround = (params) => http.get('/api/amap/around', { params })
 
 // ===== 地图自定义点位 =====
 export const getMapPins = (params) => http.get('/api/map-pins', { params })

@@ -344,16 +344,35 @@ app.get('/api/geocode', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 高德周边搜索代理（商圈调查核心）
+app.get('/api/amap/around', async (req, res) => {
+  try {
+    const { location, radius, types, keywords, offset, page } = req.query;
+    if (!location) return res.status(400).json({ error: '缺少 location 参数（格式: lng,lat）' });
+    const cfg = loadConfig();
+    const key = cfg.amapWebKey;
+    if (!key) return res.status(400).json({ error: '未配置 amapWebKey' });
+    const qs = { key, location, radius: radius || '3000', offset: offset || '25', page: page || '1' };
+    if (types) qs.types = types;
+    if (keywords) qs.keywords = keywords;
+    if (cfg.amapWebSecret) qs.sig = amapSign(qs, cfg.amapWebSecret);
+    const qstr = Object.entries(qs).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+    const data = await httpGet(`https://restapi.amap.com/v3/place/around?${qstr}`);
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // 按区域获取门店经纬度（必须在 :id 之前）
 app.get('/api/stores/locations', (req, res) => {
   try {
-    const { province, city, district } = req.query;
+    const { province, city, district, store_type } = req.query;
     let where = 'WHERE lat IS NOT NULL AND lng IS NOT NULL AND lat != 0 AND lng != 0';
     const params = [];
-    if (province) { where += ' AND province=?'; params.push(province); }
-    if (city)     { where += ' AND city=?';     params.push(city); }
-    if (district) { where += ' AND district=?'; params.push(district); }
-    const rows = db.queryAll(`SELECT id, store_name, lat, lng, status, remark FROM stores ${where}`, params);
+    if (province)   { where += ' AND province=?';   params.push(province); }
+    if (city)       { where += ' AND city=?';       params.push(city); }
+    if (district)   { where += ' AND district=?';   params.push(district); }
+    if (store_type) { where += ' AND store_type=?'; params.push(store_type); }
+    const rows = db.queryAll(`SELECT id, store_name, lat, lng, status, store_type, remark, COALESCE(radius,3000) as radius FROM stores ${where}`, params);
     res.json({ ok: true, data: rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -449,7 +468,7 @@ app.post('/api/db/stores', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/db/stores/:id', (req, res) => {
-  try { const allowedFields = ['store_name','status','store_type','legal_person','payment_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size','lat','lng','remark']; const sets = [], params = []; allowedFields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
+  try { const allowedFields = ['store_name','status','store_type','legal_person','payment_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size','lat','lng','remark','radius']; const sets = [], params = []; allowedFields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/db/stores/:id', (req, res) => {
@@ -611,18 +630,18 @@ app.get('/api/map-pins', (req, res) => {
 });
 app.post('/api/map-pins', (req, res) => {
   try {
-    const { lng, lat, name, remark, color, radius, store_id } = req.body;
+    const { lng, lat, name, remark, color, radius, shape, store_id } = req.body;
     if (lng == null || lat == null) return res.status(400).json({ error: '缺少经纬度' });
     const created_by = req.user?.display_name || req.user?.username || '';
-    const id = db.insert('INSERT INTO map_pins (lng,lat,name,remark,color,radius,created_by,store_id) VALUES (?,?,?,?,?,?,?,?)',
-      [lng, lat, name||'', remark||'', color||'#409EFF', radius||3000, created_by, store_id||null]);
+    const id = db.insert('INSERT INTO map_pins (lng,lat,name,remark,color,radius,shape,created_by,store_id) VALUES (?,?,?,?,?,?,?,?,?)',
+      [lng, lat, name||'', remark||'', color||'#F56C6C', radius||3000, shape||'circle', created_by, store_id||null]);
     db.save();
     res.json({ ok: true, id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/map-pins/:id', (req, res) => {
   try {
-    const allowed = ['name','remark','color','radius','lat','lng'];
+    const allowed = ['name','remark','color','radius','shape','lat','lng'];
     const sets = [], params = [];
     allowed.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } });
     if (!sets.length) return res.status(400).json({ error: '无更新字段' });

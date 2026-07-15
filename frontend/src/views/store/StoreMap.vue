@@ -8,36 +8,103 @@
     </div>
     <!-- 高德地图工具栏（仅区级显示） -->
     <div v-if="drillLevel === 'district'" class="map-toolbar" style="display:flex;align-items:center;gap:12px;padding:8px 16px;background:#fafafa;border-bottom:1px solid #eee;">
-      <el-select v-model="statusFilter" size="small" style="width:150px;" placeholder="状态筛选" clearable>
+      <el-select v-model="statusFilter" size="small" style="width:140px;" placeholder="状态筛选" clearable>
         <el-option label="全部状态" value="" />
         <el-option label="🟢 正常营业" value="正常营业" />
         <el-option label="🟡 筹建中" value="筹建中" />
         <el-option label="⚫ 已闭店/迁址" value="closed" />
       </el-select>
+      <el-select v-model="storeTypeFilter" size="small" style="width:120px;" placeholder="门店类型" clearable>
+        <el-option label="全部类型" value="" />
+        <el-option label="直营店" value="直营店" />
+        <el-option label="加盟店" value="加盟店" />
+        <el-option label="联营店" value="联营店" />
+      </el-select>
       <el-button size="small" :type="placingMode ? 'warning' : 'primary'" @click="togglePlacingMode">
         {{ placingMode ? '✅ 标点中（点击退出）' : '📌 自定义标点' }}
       </el-button>
       <el-button v-if="customPins.length" size="small" type="danger" plain @click="clearAllPins">🗑 清空所有标记</el-button>
+      <el-select v-if="customPins.length" v-model="selectedPin" size="small" style="width:220px;" placeholder="📍 点位列表" clearable filterable @change="onPinSelect">
+        <el-option v-for="p in customPins" :key="p.id" :label="p.name" :value="p.id">
+          <span :style="{display:'inline-block',width:10,height:10,borderRadius:(p.shape==='square'||p.shape==='diamond'?'2px':'50%'),background:p.color||'#F56C6C',marginRight:'6px',verticalAlign:'middle',transform:p.shape==='diamond'?'rotate(45deg)':''}"></span>
+          {{ p.name }}
+        </el-option>
+      </el-select>
     </div>
-    <div v-loading="loading" style="min-height:620px;position:relative;">
-      <div v-show="drillLevel !== 'district'" ref="chartRef" style="width:100%;height:620px;"></div>
-      <div v-show="drillLevel === 'district'" ref="amapRef" style="width:100%;height:620px;position:relative;"></div>
+    <div v-loading="loading" style="min-height:620px;position:relative;display:flex;">
+      <div style="flex:1;position:relative;">
+        <div v-show="drillLevel !== 'district'" ref="chartRef" style="width:100%;height:620px;"></div>
+        <div v-show="drillLevel === 'district'" ref="amapRef" style="width:100%;height:620px;position:relative;"></div>
+      </div>
     </div>
 
     <!-- 自定义点位编辑弹窗 -->
-    <el-dialog v-model="pinDialogVisible" :title="pinType==='store' ? '门店备注' : '编辑点位'" width="420px">
+    <el-dialog v-model="pinDialogVisible" :title="pinType==='store' ? '门店备注' : '编辑点位'" width="460px">
       <el-form label-width="70px" v-if="pinForm">
         <el-form-item v-if="pinType==='store'" label="门店名称">
           <el-input :model-value="pinForm.store_name" disabled />
         </el-form-item>
-        <el-form-item v-if="pinType==='pin'" label="名称"><el-input v-model="pinForm.name" placeholder="点位名称" /></el-form-item>
-        <el-form-item label="备注"><el-input v-model="pinForm.remark" type="textarea" :rows="2" placeholder="备注信息" /></el-form-item>
+        <el-form-item v-if="pinType==='pin'" label="名称">
+          <el-input v-model="pinForm.name" placeholder="点位名称" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input v-model="pinForm.remark" type="textarea" :rows="2" placeholder="备注信息" />
+        </el-form-item>
+        <el-form-item label="坐标">
+          <el-input :model-value="pinForm.lng != null ? pinForm.lng.toFixed(6) + ', ' + pinForm.lat.toFixed(6) : '—'" disabled size="small">
+            <template #append>
+              <el-button @click="copyCoord" size="small">复制</el-button>
+            </template>
+          </el-input>
+        </el-form-item>
+        <el-form-item label="形状">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <div v-for="s in shapeOptions" :key="s.value"
+              :style="{
+                display:'flex',flexDirection:'column',alignItems:'center',gap:'4px',padding:'6px 8px',
+                borderRadius:'8px',cursor:pinType==='store'?'default':'pointer',
+                opacity:pinType==='store'&&pinForm.shape!==s.value?'0.4':'1',
+                border:'2px solid '+(pinForm.shape===s.value?'#409EFF':'#dcdfe6'),
+                background:pinForm.shape===s.value?'#ecf5ff':'#fff',
+                transition:'all .2s',
+              }"
+              @click="pinType!=='store' && (pinForm.shape = s.value)">
+              <div :style="{
+                width:'22px',height:'22px',display:'flex',alignItems:'center',justifyContent:'center',
+                borderRadius: s.value==='circle'?'50%':s.value==='square'?'3px':s.value==='diamond'?'3px':'50%',
+                background: s.value!=='star'?(pinForm.color||'#409EFF'):'transparent',
+                transform: s.value==='diamond'?'rotate(45deg)':'none',
+                fontSize:'18px',lineHeight:'1',color:s.value==='star'?(pinForm.color||'#409EFF'):'#fff',
+              }">
+                <span v-if="s.value==='star'" style="transform:translateY(-1px);">★</span>
+              </div>
+              <span style="font-size:12px;color:#606266;">{{ s.label }}</span>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="颜色">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <div v-for="c in presetColors" :key="c"
+              :style="{
+                width:'32px',height:'32px',borderRadius:'6px',background:c,
+                cursor:pinType==='store'?'default':'pointer',
+                opacity:pinType==='store'&&pinForm.color!==c?'0.4':'1',
+                border:pinForm.color===c?'3px solid #303133':'2px solid #dcdfe6',
+                boxShadow:pinForm.color===c?'0 0 0 2px #fff, 0 0 0 4px #409EFF':'none',
+                transition:'all .15s',
+              }"
+              @click="pinType!=='store' && (pinForm.color = c)"
+              :title="c">
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="商圈半径">
+          <el-input-number v-model="pinForm.radius" :min="500" :max="10000" :step="500" size="small" /> 米
+        </el-form-item>
         <template v-if="pinType==='pin'">
-          <el-form-item label="颜色"><el-color-picker v-model="pinForm.color" /></el-form-item>
-          <el-form-item label="商圈半径">
-            <el-input-number v-model="pinForm.radius" :min="500" :max="10000" :step="500" size="small" /> 米
+          <el-form-item label="创建人">
+            <el-input v-model="pinForm.created_by" disabled size="small" />
           </el-form-item>
-          <el-form-item label="创建人"><el-input v-model="pinForm.created_by" disabled /></el-form-item>
         </template>
       </el-form>
       <template #footer>
@@ -82,6 +149,7 @@ const FULL_TO_SHORT = {
 
 const chartRef = ref(null)
 const amapRef = ref(null)
+const selectedPin = ref(null)
 const total = ref(0)
 const drillLevel = ref('china')
 const provinceName = ref('')
@@ -93,6 +161,7 @@ const customPins = ref([])
 
 // 工具栏状态
 const statusFilter = ref('')
+const storeTypeFilter = ref('')
 
 // 自定义点位
 const placingMode = ref(false)
@@ -102,6 +171,14 @@ const pinSaving = ref(false)
 const pinForm = ref(null)
 const editingPinId = ref(null)
 const editingStoreId = ref(null)
+
+const presetColors = ['#F56C6C','#E6A23C','#F2D024','#67C23A','#409EFF','#9B59B6','#909399','#333333']
+const shapeOptions = [
+  { value: 'circle',  label: '圆形' },
+  { value: 'square',  label: '方形' },
+  { value: 'star',    label: '星形' },
+  { value: 'diamond', label: '菱形' },
+]
 
 let chart = null
 let amap = null
@@ -173,6 +250,21 @@ function destroyAmap() {
 function applyCursor() {
   if (amap) amap.getContainer().style.cursor = placingMode.value ? PIN_CURSOR : ''
 }
+
+// 标点模式公共逻辑（map click / circle click 共用）
+async function handlePlacingClick(lng, lat) {
+  if (!placingMode.value) return
+  try {
+    const existing = customPins.value.filter(p => /^自定义点位\d+$/.test(p.name||''))
+    const maxN = existing.reduce((max, p) => Math.max(max, parseInt((p.name||'').replace('自定义点位','')) || 0), 0)
+    const autoName = `自定义点位${maxN + 1}`
+    await createMapPin({ lng, lat, name: autoName, remark: '', color: '#F56C6C', radius: 3000, shape: 'circle' })
+    ElMessage.success(`${autoName} 已添加`)
+    await loadCustomPins()
+    refreshMarkers()
+  } catch (err) { ElMessage.error('保存失败: ' + (err?.message || err)) }
+}
+
 function refreshMarkers() {
   if (!amap) return
   clearMarkers()
@@ -186,28 +278,41 @@ function addMarkersToMap() {
     return '#909399'
   }
   function statusMatch(s) {
-    if (!statusFilter.value) return true
-    if (statusFilter.value === 'closed') return !['正常营业','筹建中'].includes(s.status)
-    return s.status === statusFilter.value
+    if (statusFilter.value) {
+      if (statusFilter.value === 'closed') { if (['正常营业','筹建中'].includes(s.status)) return false }
+      else if (s.status !== statusFilter.value) return false
+    }
+    if (storeTypeFilter.value && s.store_type !== storeTypeFilter.value) return false
+    return true
   }
   const filteredLocs = storesLocs.value.filter(statusMatch)
   filteredLocs.forEach(s => {
     try {
       const color = storeColor(s)
       const circle = new window.AMap.Circle({
-        center: [s.lng, s.lat], radius: 3000,
+        center: [s.lng, s.lat], radius: s.radius || 3000,
         fillColor: color, fillOpacity: 0.06,
-        strokeColor: color, strokeWeight: 2, strokeOpacity: 0.6,
+        strokeColor: color, strokeWeight: 4, strokeOpacity: 0.9,
         zIndex: 50,
       })
       circle.setMap(amap); amapMarkers.push(circle)
+      circle.on('click', (e) => handlePlacingClick(e.lnglat.lng, e.lnglat.lat))
+      circle.on('rightclick', () => { if (placingMode.value) { placingMode.value = false; applyCursor() } })
+      // 波纹动画
+      const ripple = new window.AMap.Marker({
+        position: [s.lng, s.lat],
+        offset: new window.AMap.Pixel(0, 0),
+        content: `<div style="position:relative;width:0;height:0;pointer-events:none;"><div class="map-ripple-ring" style="border-color:${color};animation-delay:0s;"></div><div class="map-ripple-ring" style="border-color:${color};animation-delay:1.75s;"></div></div>`,
+        zIndex: 51,
+      })
+      ripple.setMap(amap); amapMarkers.push(ripple)
       const marker = new window.AMap.Marker({
         position: [s.lng, s.lat],
         title: `${s.store_name}（${s.status||'未知'}）`,
         offset: new window.AMap.Pixel(0, 0),
         content: `<div style="position:relative;width:0;height:0;">`
           + `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.35);"></div>`
-          + `<div style="position:absolute;left:0;top:7px;white-space:nowrap;transform:translateX(-50%);font-size:10px;color:#333;text-shadow:0 0 2px #fff;">${s.store_name}</div>`
+          + `<div style="position:absolute;left:0;top:7px;white-space:nowrap;transform:translateX(-50%);font-size:10px;color:#333;background:rgba(255,255,255,0.85);padding:1px 4px;border-radius:2px;">${s.store_name}</div>`
           + `</div>`,
         zIndex: 200,
       })
@@ -223,17 +328,36 @@ function addMarkersToMap() {
       const circle = new window.AMap.Circle({
         center: [p.lng, p.lat], radius: r,
         fillColor: c, fillOpacity: 0.06,
-        strokeColor: c, strokeWeight: 2, strokeOpacity: 0.6,
+        strokeColor: c, strokeWeight: 4, strokeOpacity: 0.9,
         zIndex: 49,
       })
       circle.setMap(amap); amapMarkers.push(circle)
+      circle.on('click', (e) => handlePlacingClick(e.lnglat.lng, e.lnglat.lat))
+      circle.on('rightclick', () => { if (placingMode.value) { placingMode.value = false; applyCursor() } })
+      // 波纹动画
+      const ripple = new window.AMap.Marker({
+        position: [p.lng, p.lat],
+        offset: new window.AMap.Pixel(0, 0),
+        content: `<div style="position:relative;width:0;height:0;pointer-events:none;"><div class="map-ripple-ring" style="border-color:${c};animation-delay:0s;"></div><div class="map-ripple-ring" style="border-color:${c};animation-delay:1.75s;"></div></div>`,
+        zIndex: 50,
+      })
+      ripple.setMap(amap); amapMarkers.push(ripple)
+      const shape = p.shape || 'circle'
+      const shapeHtml = {
+        circle:   `width:14px;height:14px;border-radius:50%;`,
+        square:   `width:14px;height:14px;border-radius:2px;`,
+        star:     `width:16px;height:16px;font-size:14px;line-height:16px;text-align:center;`,
+        diamond:  `width:12px;height:12px;transform:translate(-50%,-50%) rotate(45deg);border-radius:2px;`,
+      }[shape] || `width:14px;height:14px;border-radius:50%;`
+      const shapeIcon = shape === 'star' ? '★' : '+'
+
       const marker = new window.AMap.Marker({
         position: [p.lng, p.lat],
         title: (p.name||'点位') + (p.remark ? ' — ' + p.remark : ''),
         offset: new window.AMap.Pixel(0, 0),
         content: `<div style="position:relative;width:0;height:0;">`
-          + `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);width:14px;height:14px;border-radius:50%;background:${c};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;font-size:8px;color:#fff;">+</div>`
-          + `<div style="position:absolute;left:0;top:8px;white-space:nowrap;transform:translateX(-50%);font-size:10px;color:#333;text-shadow:0 0 2px #fff;">${p.name||'点位'}</div>`
+          + `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);${shapeHtml}background:${c};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;font-size:8px;color:#fff;">${shapeIcon}</div>`
+          + `<div style="position:absolute;left:0;top:8px;white-space:nowrap;transform:translateX(-50%);font-size:10px;color:#333;background:rgba(255,255,255,0.85);padding:1px 4px;border-radius:2px;">${p.name||'点位'}</div>`
           + `</div>`,
         zIndex: 201,
       })
@@ -253,45 +377,48 @@ function renderAmap(geo, dataList, highlightFeature, locs = []) {
   destroyAmap()
   amap = new window.AMap.Map(amapRef.value, { zoom: 10, resizeEnable: true })
 
+  // 收集 bounds + 渲染区域边框 Polygon（低 zIndex，click 转发到标点逻辑）
+  const bounds = new window.AMap.Bounds()
   const dataMap = {}
   dataList.forEach(d => { dataMap[d.name] = d.value || 0 })
   const pick = v => v > 0
 
-  const bounds = new window.AMap.Bounds()
-
-  // 逐区渲染 Polygon：选中区透明无填充，有门店非选中区透明，无门店非选中区灰色
   ;(geo.features || []).forEach(f => {
     const name = f.properties?.name || ''
     const val = dataMap[name] || 0
     const type = f.geometry?.type
     const coords = f.geometry?.coordinates
     if (!coords) return
-    try {
-      const isHL = highlightFeature && (name === (highlightFeature.properties?.name || ''))
-      const hasStore = pick(val)
-      const fillColor = (isHL || hasStore) ? 'transparent' : '#999'
-      const fillOpacity = (isHL || hasStore) ? 0 : 0.55
-      const strokeColor = (isHL || hasStore) ? '#409EFF' : '#ccc'
-      const strokeWeight = (isHL || hasStore) ? 2 : 1
-      const zIdx = (isHL || hasStore) ? 150 : 10
+    const isHL = highlightFeature && (name === (highlightFeature.properties?.name || ''))
+    const hasStore = pick(val)
+    const strokeColor = (isHL || hasStore) ? '#F56C6C' : '#ccc'
+    const strokeWeight = (isHL || hasStore) ? 2 : 1
 
-      const addPoly = (path) => {
-        path.forEach(p => bounds.extend(p))
-        const poly = new window.AMap.Polygon({
-          path, fillColor, fillOpacity,
-          strokeColor, strokeWeight, strokeOpacity: 1, zIndex: zIdx,
-        })
-        poly.setMap(amap)
-        amapPolygons.push(poly)
-      }
+    const makePoly = (path, opts) => {
+      const p = new window.AMap.Polygon({ path, fillColor: 'transparent', fillOpacity: 0, ...opts })
+      p.on('click', (e) => handlePlacingClick(e.lnglat.lng, e.lnglat.lat))
+      p.on('rightclick', () => { if (placingMode.value) { placingMode.value = false; applyCursor() } })
+      p.setMap(amap)
+      amapPolygons.push(p)
+    }
 
-      if (type === 'Polygon') coords.forEach(r => addPoly(r.map(c => [c[0], c[1]])))
-      else if (type === 'MultiPolygon') {
-        coords.forEach(polygonCoords => {
-          polygonCoords.forEach(r => addPoly(r.map(c => [c[0], c[1]])))
-        })
+    const addBorder = (path) => {
+      path.forEach(p => bounds.extend(p))
+      if (isHL) {
+        // 选中区：光晕 + 粗核心线
+        makePoly(path, { strokeColor, strokeWeight: 10, strokeOpacity: 0.2, zIndex: 25 })
+        makePoly(path, { strokeColor, strokeWeight: 3, strokeOpacity: 1, zIndex: 26 })
+      } else {
+        makePoly(path, { strokeColor, strokeWeight, strokeOpacity: 1, zIndex: 30 })
       }
-    } catch {}
+    }
+
+    if (type === 'Polygon') coords.forEach(r => addBorder(r.map(c => [c[0], c[1]])))
+    else if (type === 'MultiPolygon') {
+      coords.forEach(polygonCoords => {
+        polygonCoords.forEach(r => addBorder(r.map(c => [c[0], c[1]])))
+      })
+    }
   })
 
   // 阻止浏览器右键菜单
@@ -310,20 +437,7 @@ function renderAmap(geo, dataList, highlightFeature, locs = []) {
   })
 
   // 地图点击 → 标点模式
-  amap.on('click', async (e) => {
-    if (!placingMode.value) return
-    const lng = e.lnglat.lng
-    const lat = e.lnglat.lat
-    try {
-      const existing = customPins.value.filter(p => /^自定义点位\d+$/.test(p.name||''))
-      const maxN = existing.reduce((max, p) => Math.max(max, parseInt((p.name||'').replace('自定义点位','')) || 0), 0)
-      const autoName = `自定义点位${maxN + 1}`
-      await createMapPin({ lng, lat, name: autoName, remark: '', color: '#409EFF', radius: 3000 })
-      ElMessage.success(`${autoName} 已添加`)
-      await loadCustomPins()
-      refreshMarkers()
-    } catch (err) { ElMessage.error('保存失败: ' + (err?.message || err)) }
-  })
+  amap.on('click', (e) => handlePlacingClick(e.lnglat.lng, e.lnglat.lat))
 
   // 右键 → 退出标点模式（静默，无弹窗）
   amap.on('rightclick', () => {
@@ -485,6 +599,10 @@ function backToPrevious() {
 }
 
 // ═══ 自定义点位 CRUD ═══
+function flyToPin(p) {
+  if (amap) amap.setZoomAndCenter(15, [p.lng, p.lat])
+}
+
 function togglePlacingMode() {
   if (placingMode.value) {
     placingMode.value = false
@@ -499,13 +617,23 @@ function togglePlacingMode() {
 function editPin(p) {
   pinType.value = 'pin'
   editingPinId.value = p.id
-  pinForm.value = { name: p.name, remark: p.remark, color: p.color, radius: p.radius, created_by: p.created_by, lng: p.lng, lat: p.lat }
+  pinForm.value = { name: p.name, remark: p.remark, color: p.color, radius: p.radius, shape: p.shape||'circle', created_by: p.created_by, lng: p.lng, lat: p.lat }
   pinDialogVisible.value = true
 }
 function editStoreMarker(s) {
   pinType.value = 'store'
   editingStoreId.value = s.id
-  pinForm.value = { store_name: s.store_name, remark: s.remark || '' }
+  const color = s.status === '正常营业' ? '#67C23A' : s.status === '筹建中' ? '#E6A23C' : '#909399'
+  pinForm.value = {
+    store_name: s.store_name,
+    remark: s.remark || '',
+    lng: s.lng,
+    lat: s.lat,
+    status: s.status,
+    radius: s.radius || 3000,
+    color: color,
+    shape: 'circle',
+  }
   pinDialogVisible.value = true
 }
 async function savePin() {
@@ -513,11 +641,14 @@ async function savePin() {
   pinSaving.value = true
   try {
     if (pinType.value === 'store') {
-      await updateStore(editingStoreId.value, { remark: pinForm.value.remark })
-      // 同步更新本地 storesLocs 中的 remark
+      await updateStore(editingStoreId.value, { remark: pinForm.value.remark, radius: pinForm.value.radius })
+      // 同步更新本地 storesLocs 中的 remark 和 radius
       const idx = storesLocs.value.findIndex(s => s.id === editingStoreId.value)
-      if (idx >= 0) storesLocs.value[idx].remark = pinForm.value.remark
-      ElMessage.success('备注已保存')
+      if (idx >= 0) {
+        storesLocs.value[idx].remark = pinForm.value.remark
+        storesLocs.value[idx].radius = pinForm.value.radius
+      }
+      ElMessage.success('已保存')
     } else {
       await updateMapPin(editingPinId.value, pinForm.value)
       ElMessage.success('点位已更新')
@@ -527,6 +658,15 @@ async function savePin() {
     refreshMarkers()
   } catch (e) { ElMessage.error('保存失败: ' + e.message) }
   finally { pinSaving.value = false }
+}
+function copyCoord() {
+  if (!pinForm.value || pinForm.value.lng == null) return
+  const text = `${pinForm.value.lng.toFixed(6)}, ${pinForm.value.lat.toFixed(6)}`
+  navigator.clipboard.writeText(text).then(() => {
+    ElMessage.success('坐标已复制')
+  }).catch(() => {
+    ElMessage.warning('复制失败，请手动复制')
+  })
 }
 async function deletePin() {
   try {
@@ -544,8 +684,15 @@ async function loadCustomPins() {
   customPins.value = data || []
 }
 
-// 监听状态筛选变化 → 只刷新标记，不重建地图
-watch(statusFilter, () => { refreshMarkers() })
+// 监听状态/类型筛选变化 → 只刷新标记，不重建地图
+watch([statusFilter, storeTypeFilter], () => { refreshMarkers() })
+
+function onPinSelect(id) {
+  if (!id) return
+  const p = customPins.value.find(x => x.id === id)
+  if (p && amap) amap.setZoomAndCenter(15, [p.lng, p.lat])
+  selectedPin.value = null
+}
 
 // ESC 退出标点模式
 function onKeyDown(e) { if (e.key === 'Escape' && placingMode.value) { placingMode.value = false; applyCursor(); ElMessage.info('已退出标点模式') } }
@@ -565,3 +712,21 @@ async function clearAllPins() {
 }
 
 </script>
+
+<style>
+/* 波纹扩散动画 — 从圆心向外扩散，舒缓节奏 */
+@keyframes mapRipple {
+  0%   { width:0; height:0; opacity:0.55; transform:translate(-50%,-50%); }
+  65%  { opacity:0.10; }
+  100% { width:130px; height:130px; opacity:0; transform:translate(-50%,-50%); }
+}
+.map-ripple-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  border: 2px solid;
+  animation: mapRipple 3.5s ease-out infinite;
+  pointer-events: none;
+}
+</style>

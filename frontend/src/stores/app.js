@@ -20,7 +20,7 @@ const PAGE_TITLES = {
 
 const SUB_LABELS = {
   analysis: { revenue: '门店营收构成', cost: '门店成本分析', sales: '门店销量统计', supplies: '门店耗材消耗' },
-  'store-management': { 'info-basic': '门店基本信息', 'info-platform': '第三方平台', 'info-config': '门店配置', map: '全国地图', fixed: '固定成本', operating: '运营成本' },
+  'store-management': { 'info-basic': '门店基本信息', 'info-circle': '门店商圈', 'info-platform': '第三方平台', 'info-config': '门店配置', map: '全国地图', fixed: '固定成本', operating: '运营成本' },
   'menu-management': { overview: '菜品总览', cost: '菜品成本', expiry: '效期管理' },
   'cost-accounting': { daily: '日成本核算', weekly: '周成本核算', monthly: '月成本核算' },
 }

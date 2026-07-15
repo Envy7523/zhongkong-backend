@@ -204,6 +204,7 @@ import StorePlatform from '@/views/store/StorePlatform.vue'
 import StoreConfig from '@/views/store/StoreConfig.vue'
 import StoreFixedCost from '@/views/store/StoreFixedCost.vue'
 import StoreOperatingCost from '@/views/store/StoreOperatingCost.vue'
+import StoreBusinessCircle from '@/views/store/StoreBusinessCircle.vue'
 import StoreMap from '@/views/store/StoreMap.vue'
 import MenuOverview from '@/views/menu/MenuOverview.vue'
 import MenuCost from '@/views/menu/MenuCost.vue'
@@ -225,6 +226,7 @@ const COMPONENT_MAP = {
   'analysis-sales': SalesAnalysis,
   'analysis-supplies': SuppliesAnalysis,
   'store-management-info-basic': StoreBasic,
+  'store-management-info-circle': StoreBusinessCircle,
   'store-management-info-platform': StorePlatform,
   'store-management-info-config': StoreConfig,
   'store-management-map': StoreMap,
@@ -264,6 +266,7 @@ const POPUP_CONFIG = {
         title: '门店信息',
         items: [
           { index: 'store-management-info-basic', label: '门店基本信息' },
+          { index: 'store-management-info-circle', label: '门店商圈' },
           { index: 'store-management-info-platform', label: '第三方平台' },
           { index: 'store-management-info-config', label: '门店配置' },
         ],
@@ -420,9 +423,9 @@ onMounted(async () => {
 .popup-section {
   display: grid;
   grid-template-columns: 105px repeat(3, 1fr);
-  gap: 2px 6px;
+  gap: 0 6px;
   align-items: center;
-  padding: 6px 14px;
+  padding: 2px 14px;
 }
 
 .popup-section + .popup-section {
@@ -431,11 +434,13 @@ onMounted(async () => {
 
 .popup-section-title {
   grid-column: 1;
+  grid-row: 1 / 100;
   padding: 4px 0;
   font-size: 12px;
   font-weight: 700;
   color: #909399;
   white-space: nowrap;
+  align-self: start;
 }
 
 .popup-item {
