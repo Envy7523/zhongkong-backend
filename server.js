@@ -1,5 +1,5 @@
 /**
- * 中控后台 - 后端服务 v0.3.0
+ * 中控后台 - 后端服务 v0.4.0
  * 负责：代理企业微信 API 调用、Webhook 消息推送、SQLite 数据管理
  */
 const express = require('express');
@@ -505,8 +505,8 @@ app.get('/api/menu', (req, res) => {
   try { const { store_id, category, status } = req.query; let sql = 'SELECT m.*, s.store_name FROM menu_items m LEFT JOIN stores s ON m.store_id=s.id WHERE 1=1'; const params = []; if (store_id) { sql += ' AND m.store_id=?'; params.push(store_id); } if (category) { sql += ' AND m.category=?'; params.push(category); } if (status) { sql += ' AND m.status=?'; params.push(status); } sql += ' ORDER BY m.id'; res.json({ ok: true, items: db.queryAll(sql, params), count: db.queryAll(sql, params).length }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/menu', (req, res) => { try { const { store_id, name, category, price, cost, expiry_days } = req.body; if (!name) return res.status(400).json({ error: '菜品名称不能为空' }); const id = db.insert('INSERT INTO menu_items (store_id,name,category,price,cost,expiry_days) VALUES (?,?,?,?,?,?)', [store_id||1, name, category||'', price||0, cost||0, expiry_days||null]); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.put('/api/menu/:id', (req, res) => { try { const fields = ['name','category','price','cost','expiry_days','status']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE menu_items SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post('/api/menu', (req, res) => { try { const { store_id, name, category, method, spec, price, dine_in_price, member_price, takeout_price, spec_unit, spec_weight } = req.body; if (!name) return res.status(400).json({ error: '菜品名称不能为空' }); const id = db.insert('INSERT INTO menu_items (store_id,name,category,method,spec,price,dine_in_price,member_price,takeout_price,spec_unit,spec_weight) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [store_id||1, name, category||'', method||'', spec||'', price||0, dine_in_price||0, member_price||0, takeout_price||0, spec_unit||'份', spec_weight||'']); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.put('/api/menu/:id', (req, res) => { try { const fields = ['name','category','method','spec','price','dine_in_price','member_price','takeout_price','spec_unit','spec_weight','cost','expiry_days','status']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE menu_items SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.delete('/api/menu/:id', (req, res) => { try { db.run('DELETE FROM menu_items WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 耗材消耗 =====

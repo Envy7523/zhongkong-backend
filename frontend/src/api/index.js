@@ -94,10 +94,10 @@ export const updateUser = (id, data) => http.put(`/api/users/${id}`, data)
 export const deleteUser = (id) => http.delete(`/api/users/${id}`)
 
 // ===== 菜品管理 =====
-export const getMenuItems = (params) => http.get('/api/db/menu-items', { params })
-export const createMenuItem = (data) => http.post('/api/db/menu-items', data)
-export const updateMenuItem = (id, data) => http.put(`/api/db/menu-items/${id}`, data)
-export const deleteMenuItem = (id) => http.delete(`/api/db/menu-items/${id}`)
+export const getMenuItems = (params) => http.get('/api/menu', { params })
+export const createMenuItem = (data) => http.post('/api/menu', data)
+export const updateMenuItem = (id, data) => http.put(`/api/menu/${id}`, data)
+export const deleteMenuItem = (id) => http.delete(`/api/menu/${id}`)
 
 // ===== 成本核算 =====
 export const getCostAccounting = (params) => http.get('/api/cost-accounting', { params })

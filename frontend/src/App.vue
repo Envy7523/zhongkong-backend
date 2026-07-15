@@ -106,7 +106,7 @@
           <template #title>网页设置</template>
         </el-menu-item>
       </el-menu>
-      <div :class="['sidebar-footer', { collapsed: store.sidebarCollapsed }]">v0.3.0</div>
+      <div :class="['sidebar-footer', { collapsed: store.sidebarCollapsed }]">v0.4.0</div>
     </div>
 
     <!-- 浮动弹出菜单面板 -->
