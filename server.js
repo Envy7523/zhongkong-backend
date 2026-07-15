@@ -12,6 +12,10 @@ const { drawBarChart, drawLineChart, drawPieChart } = require('./lib/chart');
 const { drawStoreDailyReport } = require('./lib/report');
 const { parseDailyExcel, toReportData } = require('./lib/daily-data');
 const db = require('./lib/db');
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = 'etaigong-zhongkong-jwt-secret-2024';
+const JWT_EXPIRES = '24h';
 
 const app = express();
 const PORT = process.env.PORT || 3456;
@@ -19,6 +23,22 @@ const CONFIG_PATH = path.join(__dirname, 'config.json');
 
 // ===== 中间件 =====
 app.use(express.json({ limit: '50mb' }));
+
+// JWT 认证中间件（保护 /api/*，放行登录接口）
+app.use((req, res, next) => {
+  if (req.path === '/api/auth/login') return next();
+  if (!req.path.startsWith('/api/')) return next();
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: '未登录' });
+  }
+  try {
+    req.user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+    next();
+  } catch {
+    return res.status(401).json({ error: '登录已过期，请重新登录' });
+  }
+});
 
 // 静态文件：优先使用 Vue 前端构建产物，回退到旧版静态文件
 const vueDist = path.join(__dirname, 'frontend', 'dist');
@@ -300,6 +320,44 @@ app.get('/api/stores/district-stats', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 高德签名辅助：参数名排序后拼接，追加 secret 取 MD5
+function amapSign(params, secret) {
+  const sorted = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join('&');
+  return crypto.createHash('md5').update(sorted + secret).digest('hex');
+}
+
+// 高德地理编码代理（后端转发，避免前端 JS key 无 Web API 权限）
+app.get('/api/geocode', async (req, res) => {
+  try {
+    const { address, city } = req.query;
+    if (!address) return res.status(400).json({ error: '缺少 address 参数' });
+    const cfg = loadConfig();
+    const key = cfg.amapWebKey;
+    if (!key) return res.status(400).json({ error: '未配置 amapWebKey，请在 config.json 中填入高德 Web API key（需开通 Web服务 API 权限）' });
+    const qs = { key, address };
+    if (city) qs.city = city;
+    // 如果配置了安全密钥则计算签名
+    if (cfg.amapWebSecret) qs.sig = amapSign(qs, cfg.amapWebSecret);
+    const qstr = Object.entries(qs).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+    const data = await httpGet(`https://restapi.amap.com/v3/geocode/geo?${qstr}`);
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 按区域获取门店经纬度（必须在 :id 之前）
+app.get('/api/stores/locations', (req, res) => {
+  try {
+    const { province, city, district } = req.query;
+    let where = 'WHERE lat IS NOT NULL AND lng IS NOT NULL AND lat != 0 AND lng != 0';
+    const params = [];
+    if (province) { where += ' AND province=?'; params.push(province); }
+    if (city)     { where += ' AND city=?';     params.push(city); }
+    if (district) { where += ' AND district=?'; params.push(district); }
+    const rows = db.queryAll(`SELECT id, store_name, lat, lng, status, remark FROM stores ${where}`, params);
+    res.json({ ok: true, data: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const s = stores.find(s => s.id === req.params.id); if (!s) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, store: s }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const idx = stores.findIndex(s => s.id === req.params.id); if (idx === -1) return res.status(404).json({ error: '门店不存在' }); STORE_FIELDS.forEach(f => { if (req.body[f] !== undefined) stores[idx][f] = String(req.body[f]).trim(); }); saveStores(stores); res.json({ ok: true, store: stores[idx] }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const idx = stores.findIndex(s => s.id === req.params.id); if (idx === -1) return res.status(404).json({ error: '门店不存在' }); STORE_FIELDS.forEach(f => { if (req.body[f] !== undefined) stores[idx][f] = String(req.body[f]).trim(); }); saveStores(stores); res.json({ ok: true, store: stores[idx] }); } catch (e) { res.status(500).json({ error: e.message }); } });
@@ -387,11 +445,11 @@ app.get('/api/db/stores/:id', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/db/stores', (req, res) => {
-  try { const { store_name, status, store_type, legal_person, payment_type, region, province, city, district, address, phone, business_hours, opening_date, table_2person, table_4person, store_size } = req.body; if (!store_name) return res.status(400).json({ error: '门店名称不能为空' }); const id = db.insert('INSERT INTO stores (store_name,status,store_type,legal_person,payment_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [store_name, status||'正常营业', store_type||'直营店', legal_person||'', payment_type||'法人收款', region||'', province||'', city||'', district||'', address||'', phone||'', business_hours||'', opening_date||null, table_2person||0, table_4person||0, store_size||'']); db.save(); res.json({ ok: true, id }); }
+  try { const { store_name, status, store_type, legal_person, payment_type, region, province, city, district, address, phone, business_hours, opening_date, table_2person, table_4person, store_size, lat, lng } = req.body; if (!store_name) return res.status(400).json({ error: '门店名称不能为空' }); const id = db.insert('INSERT INTO stores (store_name,status,store_type,legal_person,payment_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size,lat,lng) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [store_name, status||'正常营业', store_type||'直营店', legal_person||'', payment_type||'法人收款', region||'', province||'', city||'', district||'', address||'', phone||'', business_hours||'', opening_date||null, table_2person||0, table_4person||0, store_size||'', lat||null, lng||null]); db.save(); res.json({ ok: true, id }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/db/stores/:id', (req, res) => {
-  try { const allowedFields = ['store_name','status','store_type','legal_person','payment_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size']; const sets = [], params = []; allowedFields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
+  try { const allowedFields = ['store_name','status','store_type','legal_person','payment_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size','lat','lng','remark']; const sets = [], params = []; allowedFields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/db/stores/:id', (req, res) => {
@@ -490,6 +548,23 @@ app.get('/api/dashboard/stats', (req, res) => {
 app.get('/api/push-logs', (req, res) => { try { const { status, limit } = req.query; let sql = 'SELECT * FROM push_logs WHERE 1=1'; const params = []; if (status) { sql += ' AND status=?'; params.push(status); } sql += ' ORDER BY id DESC LIMIT ?'; params.push(limit || 50); res.json({ ok: true, logs: db.queryAll(sql, params) }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/push-logs', (req, res) => { try { const { push_type, target, content_preview, status, error_msg } = req.body; const id = db.insert('INSERT INTO push_logs (push_type,target,content_preview,status,error_msg) VALUES (?,?,?,?,?)', [push_type||'', target||'', content_preview||'', status||'success', error_msg||'']); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
+// ===== 认证 =====
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
+    const hash = crypto.createHash('md5').update(password).digest('hex');
+    const user = db.queryOne('SELECT id,username,role,display_name FROM users WHERE username=? AND password_hash=?', [username, hash]);
+    if (!user) return res.status(401).json({ error: '用户名或密码错误' });
+    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+    res.json({ ok: true, token, user });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/auth/me', (req, res) => {
+  res.json({ ok: true, user: req.user });
+});
+
 // ===== 用户管理 =====
 app.get('/api/users', (req, res) => { try { res.json({ ok: true, users: db.queryAll('SELECT id,username,role,display_name,created_at FROM users ORDER BY id') }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/users', (req, res) => { try { const { username, password, role, display_name } = req.body; if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' }); const hash = crypto.createHash('md5').update(password).digest('hex'); const id = db.insert('INSERT INTO users (username,password_hash,role,display_name) VALUES (?,?,?,?)', [username, hash, role||'客服', display_name||username]); db.save(); res.json({ ok: true, id }); } catch (e) { if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '用户名已存在' }); res.status(500).json({ error: e.message }); } });
@@ -521,11 +596,76 @@ function setupConsoleEncoding() {
   }
 }
 
+// ===== 地图自定义点位 =====
+app.get('/api/map-pins', (req, res) => {
+  try {
+    const { province, city } = req.query;
+    // 按门店所在省市过滤（通过 store_id 关联 stores 表）
+    let sql = 'SELECT p.* FROM map_pins p LEFT JOIN stores s ON p.store_id = s.id WHERE 1=1';
+    const params = [];
+    if (province) { sql += ' AND (s.province=? OR p.store_id IS NULL)'; params.push(province); }
+    if (city)     { sql += ' AND (s.city=? OR p.store_id IS NULL)';     params.push(city); }
+    sql += ' ORDER BY p.id';
+    res.json({ ok: true, data: db.queryAll(sql, params) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/map-pins', (req, res) => {
+  try {
+    const { lng, lat, name, remark, color, radius, store_id } = req.body;
+    if (lng == null || lat == null) return res.status(400).json({ error: '缺少经纬度' });
+    const created_by = req.user?.display_name || req.user?.username || '';
+    const id = db.insert('INSERT INTO map_pins (lng,lat,name,remark,color,radius,created_by,store_id) VALUES (?,?,?,?,?,?,?,?)',
+      [lng, lat, name||'', remark||'', color||'#409EFF', radius||3000, created_by, store_id||null]);
+    db.save();
+    res.json({ ok: true, id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/map-pins/:id', (req, res) => {
+  try {
+    const allowed = ['name','remark','color','radius','lat','lng'];
+    const sets = [], params = [];
+    allowed.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } });
+    if (!sets.length) return res.status(400).json({ error: '无更新字段' });
+    sets.push("updated_at=datetime('now','localtime')");
+    params.push(req.params.id);
+    db.run(`UPDATE map_pins SET ${sets.join(',')} WHERE id=?`, params);
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/map-pins/:id', (req, res) => {
+  try {
+    db.run('DELETE FROM map_pins WHERE id=?', [req.params.id]);
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ===== 启动 =====
 (async () => {
   setupConsoleEncoding();
   await db.init();
   db.seed();
+
+  // 确保 admin 和 agent 用户存在并密码正确（兼容旧数据库）
+  (function ensureUsers() {
+    const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
+    const adminHash = md5('admin123');
+    const agentHash = md5('agent123');
+    const admin = db.queryOne("SELECT * FROM users WHERE username='admin'");
+    if (!admin) {
+      db.insert("INSERT INTO users (username,password_hash,role,display_name) VALUES ('admin',?,'管理员','系统管理员')", [adminHash]);
+    } else if (admin.password_hash !== adminHash || admin.role !== '管理员') {
+      db.run("UPDATE users SET password_hash=?, role='管理员', display_name='系统管理员' WHERE username='admin'", [adminHash]);
+    }
+    const agent = db.queryOne("SELECT * FROM users WHERE username='agent'");
+    if (!agent) {
+      db.insert("INSERT INTO users (username,password_hash,role,display_name) VALUES ('agent',?,'专员','数据专员')", [agentHash]);
+    } else if (agent.password_hash !== agentHash || agent.role !== '专员') {
+      db.run("UPDATE users SET password_hash=?, role='专员', display_name='数据专员' WHERE username='agent'", [agentHash]);
+    }
+    db.save();
+  })();
 
   console.log('═'.repeat(50));
   console.log('  编码环境确认');

@@ -1,11 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import LoginView from '@/views/LoginView.vue'
 
 const routes = [
+  {
+    path: '/login',
+    name: 'login',
+    component: LoginView,
+  },
   {
     path: '/',
     redirect: '/dashboard',
   },
-  // 有子页的页面使用嵌套路由 + redirect
   {
     path: '/analysis',
     redirect: '/analysis/revenue',
@@ -27,6 +32,18 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+const TOKEN_KEY = 'etaigong_token'
+
+router.beforeEach((to, from, next) => {
+  const token = localStorage.getItem(TOKEN_KEY)
+  if (to.path === '/login') {
+    if (token) return next('/')
+    return next()
+  }
+  if (!token) return next('/login')
+  next()
 })
 
 export default router

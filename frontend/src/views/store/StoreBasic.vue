@@ -141,6 +141,13 @@
       </el-row>
       <el-form-item label="详细地址"><el-input v-model="editForm.address" /></el-form-item>
       <el-row :gutter="12">
+        <el-col :span="12"><el-form-item label="纬度(lat)"><el-input v-model="editForm.lat" placeholder="如 22.5431" /></el-form-item></el-col>
+        <el-col :span="12"><el-form-item label="经度(lng)"><el-input v-model="editForm.lng" placeholder="如 114.0579" /></el-form-item></el-col>
+      </el-row>
+      <el-form-item>
+        <el-button size="small" @click="fetchLatLng" :loading="geocoding">📍 根据地址获取经纬度</el-button>
+      </el-form-item>
+      <el-row :gutter="12">
         <el-col :span="12"><el-form-item label="电话"><el-input v-model="editForm.phone" /></el-form-item></el-col>
         <el-col :span="12"><el-form-item label="营业时间"><el-input v-model="editForm.business_hours" /></el-form-item></el-col>
       </el-row>
@@ -155,7 +162,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { getStores, getStoreById, updateStore, getStoreStats } from '@/api'
+import { getStores, getStoreById, updateStore, getStoreStats, geocodeAddress } from '@/api'
 import { ElMessage } from 'element-plus'
 
 const stats = ref({})
@@ -171,6 +178,7 @@ const legalPerson = ref('')
 
 const editVisible = ref(false)
 const saving = ref(false)
+const geocoding = ref(false)
 const editForm = reactive({})
 
 onMounted(() => { loadStats(); loadData() })
@@ -216,6 +224,29 @@ async function openEdit(store) {
   } catch (e) {
     ElMessage.error('加载门店信息失败')
   }
+}
+
+async function fetchLatLng() {
+  const parts = [editForm.province, editForm.city, editForm.district, editForm.address].filter(Boolean)
+  if (!parts.length) { ElMessage.warning('请先填写省/市/区/详细地址'); return }
+  geocoding.value = true
+  try {
+    const address = parts.join('')
+    const data = await geocodeAddress({ address })
+    // 高德 Web API 返回格式: { status: "1", geocodes: [{ location: "lng,lat" }] }
+    if (data.status === '1' && data.geocodes?.length > 0) {
+      const [lng, lat] = data.geocodes[0].location.split(',')
+      editForm.lng = lng
+      editForm.lat = lat
+      ElMessage.success(`已获取：${lng}, ${lat}`)
+    } else {
+      // 把高德原始错误完整展示
+      const info = data.info || data.infocode || '未知错误'
+      throw new Error(info)
+    }
+  } catch (e) {
+    ElMessage.warning('获取失败: ' + (e?.message || e || '未知错误') + '，请手动录入')
+  } finally { geocoding.value = false }
 }
 
 async function saveEdit() {

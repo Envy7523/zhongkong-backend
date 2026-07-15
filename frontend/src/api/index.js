@@ -1,17 +1,37 @@
 import axios from 'axios'
 
+const TOKEN_KEY = 'etaigong_token'
+
 const http = axios.create({
   baseURL: '',
   timeout: 30000,
 })
 
+// 请求拦截：自动带 token
+http.interceptors.request.use((config) => {
+  const token = localStorage.getItem(TOKEN_KEY)
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+// 响应拦截：401 清除 token 并跳转登录
 http.interceptors.response.use(
   (res) => res.data,
   (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem(TOKEN_KEY)
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }
     const msg = err.response?.data?.error || err.message || '请求失败'
     return Promise.reject(new Error(msg))
   }
 )
+
+// ===== 认证 =====
+export const login = (username, password) => http.post('/api/auth/login', { username, password })
+export const getMe = () => http.get('/api/auth/me')
 
 // ===== 配置 =====
 export const getConfig = () => http.get('/api/config')
@@ -57,6 +77,14 @@ export const getStoreByCity = (province) => http.get('/api/db/stores/by-city', {
 export const getProvinceStats = () => http.get('/api/stores/province-stats')
 export const getCityStats = (province) => http.get('/api/stores/city-stats', { params: { province } })
 export const getDistrictStats = (province, city) => http.get('/api/stores/district-stats', { params: { province, city } })
+export const getStoreLocations = (params) => http.get('/api/stores/locations', { params })
+export const geocodeAddress = (params) => http.get('/api/geocode', { params })
+
+// ===== 地图自定义点位 =====
+export const getMapPins = (params) => http.get('/api/map-pins', { params })
+export const createMapPin = (data) => http.post('/api/map-pins', data)
+export const updateMapPin = (id, data) => http.put(`/api/map-pins/${id}`, data)
+export const deleteMapPin = (id) => http.delete(`/api/map-pins/${id}`)
 
 // ===== 用户管理 =====
 export const getUsers = () => http.get('/api/users')

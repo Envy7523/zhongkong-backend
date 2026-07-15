@@ -2,5 +2,7 @@
   "corpid": "ww...",
   "corpsecret": "你的 corpsecret（通讯录或文档密钥）",
   "webhook": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...",
-  "webhookName": "中控通知机器人"
+  "webhookName": "中控通知机器人",
+  "amapWebKey": "你的高德 Web API key（需在开放平台开通「Web服务 API」权限）",
+  "amapWebSecret": "你的高德 Web API 安全密钥（在开放平台应用详情页查看，不是 key；如未开启签名验证则留空）"
 }

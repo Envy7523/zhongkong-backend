@@ -1,5 +1,6 @@
 <template>
-  <div class="app-layout">
+  <LoginView v-if="isLoginPage" />
+  <div v-else class="app-layout">
     <!-- 侧边栏 -->
     <div :class="['app-sidebar', { 'is-collapsed': store.sidebarCollapsed }]">
       <div class="sidebar-brand">
@@ -147,6 +148,11 @@
         </el-button>
         <span class="topbar-title">{{ store.activeTab?.title || '数据概括' }}</span>
         <span :class="['topbar-status', store.serverOnline ? 'online' : 'offline']">{{ store.serverStatusText }}</span>
+        <span class="topbar-user" v-if="auth.user">
+          <el-icon><User /></el-icon>
+          {{ auth.user.display_name || auth.user.username }}
+          <el-button text size="small" type="danger" @click="handleLogout" style="margin-left:8px;">登出</el-button>
+        </span>
       </div>
 
       <div class="tab-bar-wrapper" v-if="store.tabs.length > 0">
@@ -176,8 +182,11 @@
 
 <script setup>
 import { computed, onMounted, reactive, shallowRef, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { getConfig } from '@/api'
+import LoginView from '@/views/LoginView.vue'
 
 import DashboardView from '@/views/DashboardView.vue'
 import ApiConfigView from '@/views/ApiConfigView.vue'
@@ -301,7 +310,16 @@ const POPUP_CONFIG = {
 }
 
 const store = useAppStore()
+const router = useRouter()
+const auth = useAuthStore()
 const currentView = shallowRef(DashboardView)
+
+const isLoginPage = computed(() => router.currentRoute.value.path === '/login')
+
+function handleLogout() {
+  auth.logout()
+  router.push('/login')
+}
 const popupMenu = reactive({
   visible: false,
   group: null,
@@ -358,6 +376,12 @@ watch(() => store.activeTabId, (id) => {
 })
 
 onMounted(async () => {
+  // 初始化认证
+  await auth.init()
+  if (!auth.isLoggedIn) {
+    router.push('/login')
+    return
+  }
   try {
     await getConfig()
     store.setServerStatus(true)
