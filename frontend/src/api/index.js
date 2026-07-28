@@ -86,11 +86,25 @@ export const getMapPins = (params) => http.get('/api/map-pins', { params })
 export const createMapPin = (data) => http.post('/api/map-pins', data)
 export const updateMapPin = (id, data) => http.put(`/api/map-pins/${id}`, data)
 export const deleteMapPin = (id) => http.delete(`/api/map-pins/${id}`)
+export const clearAllMapPins = () => http.delete('/api/map-pins')
+
+// ===== 点位评论 =====
+export const getPinComments = (pinId) => http.get(`/api/map-pins/${pinId}/comments`)
+export const addPinComment = (pinId, content, parentId, replyToName) => http.post(`/api/map-pins/${pinId}/comments`, { content, parent_id: parentId || null, reply_to_name: replyToName || '' })
+export const deletePinComment = (pinId, commentId) => http.delete(`/api/map-pins/${pinId}/comments/${commentId}`)
+
+// ===== 门店评论 =====
+export const getStoreComments = (storeId) => http.get(`/api/stores/${storeId}/comments`)
+export const addStoreComment = (storeId, content, parentId, replyToName) => http.post(`/api/stores/${storeId}/comments`, { content, parent_id: parentId || null, reply_to_name: replyToName || '' })
+export const deleteStoreComment = (storeId, commentId) => http.delete(`/api/stores/${storeId}/comments/${commentId}`)
 
 // ===== 用户管理 =====
 export const getUsers = () => http.get('/api/users')
 export const createUser = (data) => http.post('/api/users', data)
 export const updateUser = (id, data) => http.put(`/api/users/${id}`, data)
+export const updateUserPassword = (id, password) => http.put(`/api/users/${id}/password`, { password })
+export const uploadUserAvatar = (id, data) => http.post(`/api/users/${id}/avatar`, { data })
+export const deleteUserAvatar = (id) => http.delete(`/api/users/${id}/avatar`)
 export const deleteUser = (id) => http.delete(`/api/users/${id}`)
 
 // ===== 菜品管理 =====
@@ -125,3 +139,11 @@ export const exportData = (params) => http.get('/api/data/export', { params })
 
 // ===== 门店运营成本 =====
 export const getOperatingCosts = (storeId) => http.get(`/api/stores/${storeId}/operating-costs`)
+
+// ===== 协同事项管理 =====
+export const getCollabIssues = (params) => http.get('/api/collab/issues', { params })
+export const getCollabIssue = (id) => http.get(`/api/collab/issues/${id}`)
+export const createCollabIssue = (data) => http.post('/api/collab/issues', data)
+export const replyCollabIssue = (id, data) => http.post(`/api/collab/issues/${id}/reply`, data)
+export const advanceCollabIssue = (id, data) => http.put(`/api/collab/issues/${id}/advance`, data)
+export const getCollabUsers = () => http.get('/api/collab/users')

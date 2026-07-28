@@ -1,125 +1,316 @@
 <template>
-  <div class="card-compact">
-    <div class="card-header">
-      🗺️ {{ breadcrumb }}门店分布（共 {{ total }} 家）
-      <el-button v-if="drillLevel !== 'china'" size="small" type="primary" plain style="float:right;" @click="backToPrevious">
-        ← 返回{{ drillLevel === 'district' ? '区级' : drillLevel === 'city' ? '市级' : '省级' }}
-      </el-button>
-    </div>
-    <!-- 高德地图工具栏（仅区级显示） -->
-    <div v-if="drillLevel === 'district'" class="map-toolbar" style="display:flex;align-items:center;gap:12px;padding:8px 16px;background:#fafafa;border-bottom:1px solid #eee;">
-      <el-select v-model="statusFilter" size="small" style="width:140px;" placeholder="状态筛选" clearable>
-        <el-option label="全部状态" value="" />
-        <el-option label="🟢 正常营业" value="正常营业" />
-        <el-option label="🟡 筹建中" value="筹建中" />
-        <el-option label="⚫ 已闭店/迁址" value="closed" />
-      </el-select>
-      <el-select v-model="storeTypeFilter" size="small" style="width:120px;" placeholder="门店类型" clearable>
-        <el-option label="全部类型" value="" />
-        <el-option label="直营店" value="直营店" />
-        <el-option label="加盟店" value="加盟店" />
-        <el-option label="联营店" value="联营店" />
-      </el-select>
-      <el-button size="small" :type="placingMode ? 'warning' : 'primary'" @click="togglePlacingMode">
-        {{ placingMode ? '✅ 标点中（点击退出）' : '📌 自定义标点' }}
-      </el-button>
-      <el-button v-if="customPins.length" size="small" type="danger" plain @click="clearAllPins">🗑 清空所有标记</el-button>
-      <el-select v-if="customPins.length" v-model="selectedPin" size="small" style="width:220px;" placeholder="📍 点位列表" clearable filterable @change="onPinSelect">
-        <el-option v-for="p in customPins" :key="p.id" :label="p.name" :value="p.id">
-          <span :style="{display:'inline-block',width:10,height:10,borderRadius:(p.shape==='square'||p.shape==='diamond'?'2px':'50%'),background:p.color||'#F56C6C',marginRight:'6px',verticalAlign:'middle',transform:p.shape==='diamond'?'rotate(45deg)':''}"></span>
-          {{ p.name }}
-        </el-option>
-      </el-select>
-    </div>
-    <div v-loading="loading" style="min-height:620px;position:relative;display:flex;">
-      <div style="flex:1;position:relative;">
-        <div v-show="drillLevel !== 'district'" ref="chartRef" style="width:100%;height:620px;"></div>
-        <div v-show="drillLevel === 'district'" ref="amapRef" style="width:100%;height:620px;position:relative;"></div>
+  <div class="store-map-page">
+    <section class="map-hero">
+      <div>
+        <div class="map-eyebrow">STORE NETWORK</div>
+        <h2>全国门店地图</h2>
+        <p>从全国经营版图逐级下钻到街区点位，查看门店状态、商圈范围与协作记录。</p>
       </div>
-    </div>
+      <div class="hero-metrics">
+        <div class="hero-metric">
+          <span>当前层级门店</span>
+          <strong>{{ total }}</strong>
+        </div>
+        <div class="hero-metric" v-if="drillLevel === 'district'">
+          <span>正常营业</span>
+          <strong class="success">{{ activeStoreCount }}</strong>
+        </div>
+        <div class="hero-metric" v-if="drillLevel === 'district'">
+          <span>自定义点位</span>
+          <strong class="accent">{{ customPins.length }}</strong>
+        </div>
+      </div>
+    </section>
 
-    <!-- 自定义点位编辑弹窗 -->
-    <el-dialog v-model="pinDialogVisible" :title="pinType==='store' ? '门店备注' : '编辑点位'" width="460px">
-      <el-form label-width="70px" v-if="pinForm">
-        <el-form-item v-if="pinType==='store'" label="门店名称">
-          <el-input :model-value="pinForm.store_name" disabled />
-        </el-form-item>
-        <el-form-item v-if="pinType==='pin'" label="名称">
-          <el-input v-model="pinForm.name" placeholder="点位名称" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="pinForm.remark" type="textarea" :rows="2" placeholder="备注信息" />
-        </el-form-item>
-        <el-form-item label="坐标">
-          <el-input :model-value="pinForm.lng != null ? pinForm.lng.toFixed(6) + ', ' + pinForm.lat.toFixed(6) : '—'" disabled size="small">
-            <template #append>
-              <el-button @click="copyCoord" size="small">复制</el-button>
-            </template>
-          </el-input>
-        </el-form-item>
-        <el-form-item label="形状">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <div v-for="s in shapeOptions" :key="s.value"
-              :style="{
-                display:'flex',flexDirection:'column',alignItems:'center',gap:'4px',padding:'6px 8px',
-                borderRadius:'8px',cursor:pinType==='store'?'default':'pointer',
-                opacity:pinType==='store'&&pinForm.shape!==s.value?'0.4':'1',
-                border:'2px solid '+(pinForm.shape===s.value?'#409EFF':'#dcdfe6'),
-                background:pinForm.shape===s.value?'#ecf5ff':'#fff',
-                transition:'all .2s',
-              }"
-              @click="pinType!=='store' && (pinForm.shape = s.value)">
-              <div :style="{
-                width:'22px',height:'22px',display:'flex',alignItems:'center',justifyContent:'center',
-                borderRadius: s.value==='circle'?'50%':s.value==='square'?'3px':s.value==='diamond'?'3px':'50%',
-                background: s.value!=='star'?(pinForm.color||'#409EFF'):'transparent',
-                transform: s.value==='diamond'?'rotate(45deg)':'none',
-                fontSize:'18px',lineHeight:'1',color:s.value==='star'?(pinForm.color||'#409EFF'):'#fff',
-              }">
-                <span v-if="s.value==='star'" style="transform:translateY(-1px);">★</span>
+    <section class="map-workspace">
+      <header class="workspace-header">
+        <nav class="level-breadcrumb" aria-label="地图层级导航">
+          <button
+            v-for="(item, index) in levelTrail"
+            :key="item.level"
+            :class="{ active: item.level === drillLevel, reachable: index < levelIndex }"
+            :disabled="index > levelIndex"
+            @click="navigateToLevel(item.level)"
+          >
+            <span class="level-dot">{{ index + 1 }}</span>
+            <span>
+              <small>{{ item.caption }}</small>
+              <b>{{ item.label }}</b>
+            </span>
+          </button>
+        </nav>
+        <div class="workspace-actions">
+          <span class="map-live-dot"></span>
+          <span>数据已连接</span>
+          <el-button v-if="drillLevel !== 'china'" plain round @click="backToPrevious">返回上一级</el-button>
+        </div>
+      </header>
+
+      <div class="map-layout">
+        <aside class="map-side-panel">
+          <div class="side-section">
+            <span class="side-kicker">当前视图</span>
+            <h3>{{ currentRegionTitle }}</h3>
+            <p>{{ currentLevelHint }}</p>
+          </div>
+
+          <template v-if="drillLevel === 'district'">
+            <div class="side-section filter-section">
+              <div class="side-title">
+                <span>门店筛选</span>
+                <button v-if="statusFilter || storeTypeFilter" @click="resetFilters">重置</button>
               </div>
-              <span style="font-size:12px;color:#606266;">{{ s.label }}</span>
+              <el-select v-model="statusFilter" placeholder="全部营业状态" clearable>
+                <el-option label="正常营业" value="正常营业" />
+                <el-option label="筹建中" value="筹建中" />
+                <el-option label="已闭店 / 迁址" value="closed" />
+              </el-select>
+              <el-select v-model="storeTypeFilter" placeholder="全部门店类型" clearable>
+                <el-option label="直营店" value="直营店" />
+                <el-option label="加盟店" value="加盟店" />
+                <el-option label="联营店" value="联营店" />
+              </el-select>
+              <div class="filter-result">
+                <span>地图显示</span>
+                <strong>{{ filteredStoreCount }} / {{ storesLocs.length }} 家</strong>
+              </div>
+            </div>
+
+            <div class="side-section pin-section">
+              <div class="side-title">
+                <span>协作点位</span>
+                <em>{{ customPins.length }}</em>
+              </div>
+              <button
+                class="place-pin-button"
+                :class="{ active: placingMode }"
+                @click="togglePlacingMode"
+              >
+                <span class="place-pin-icon">{{ placingMode ? '×' : '+' }}</span>
+                <span>
+                  <b>{{ placingMode ? '退出标点模式' : '添加自定义点位' }}</b>
+                  <small>{{ placingMode ? '也可按 ESC 或鼠标右键退出' : '在地图上选择位置后完善信息' }}</small>
+                </span>
+              </button>
+              <div v-if="customPins.length" class="pin-list">
+                <button v-for="p in customPins" :key="p.id" @click="flyToPin(p)">
+                  <span class="pin-swatch" :style="{ background: p.color || '#4f7cff' }"></span>
+                  <span class="pin-list-copy">
+                    <b>{{ p.name || '未命名点位' }}</b>
+                    <small>{{ p.remark || `${p.radius || 3000}m 商圈` }}</small>
+                  </span>
+                  <span class="pin-arrow">›</span>
+                </button>
+              </div>
+              <div v-else class="empty-pin-list">还没有协作点位</div>
+            </div>
+          </template>
+
+          <div v-else class="side-section drill-guide">
+            <div class="guide-icon">⌁</div>
+            <b>点击地图区域继续下钻</b>
+            <span>{{ nextLevelLabel }}</span>
+          </div>
+
+          <div class="side-section legend-section">
+            <div class="side-title"><span>图例</span></div>
+            <div v-if="drillLevel === 'district'" class="legend-grid">
+              <span><i class="legend-dot operating"></i>正常营业</span>
+              <span><i class="legend-dot preparing"></i>筹建中</span>
+              <span><i class="legend-dot closed"></i>闭店 / 迁址</span>
+              <span><i class="legend-dot custom"></i>自定义点位</span>
+            </div>
+            <div v-else class="gradient-legend">
+              <span>门店少</span><i></i><span>门店多</span>
             </div>
           </div>
-        </el-form-item>
-        <el-form-item label="颜色">
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <div v-for="c in presetColors" :key="c"
-              :style="{
-                width:'32px',height:'32px',borderRadius:'6px',background:c,
-                cursor:pinType==='store'?'default':'pointer',
-                opacity:pinType==='store'&&pinForm.color!==c?'0.4':'1',
-                border:pinForm.color===c?'3px solid #303133':'2px solid #dcdfe6',
-                boxShadow:pinForm.color===c?'0 0 0 2px #fff, 0 0 0 4px #409EFF':'none',
-                transition:'all .15s',
-              }"
-              @click="pinType!=='store' && (pinForm.color = c)"
-              :title="c">
+        </aside>
+
+        <main class="map-stage" v-loading="loading">
+          <div class="map-stage-top">
+            <div>
+              <span class="stage-label">{{ levelCaption }}</span>
+              <strong>{{ currentRegionTitle }}</strong>
+            </div>
+            <div class="stage-tools">
+              <span v-if="drillLevel !== 'district'">滚轮缩放 · 拖拽浏览 · 点击下钻</span>
+              <span v-else>点击标记查看详情 · 拖拽与缩放地图</span>
             </div>
           </div>
-        </el-form-item>
-        <el-form-item label="商圈半径">
-          <el-input-number v-model="pinForm.radius" :min="500" :max="10000" :step="500" size="small" /> 米
-        </el-form-item>
-        <template v-if="pinType==='pin'">
-          <el-form-item label="创建人">
-            <el-input v-model="pinForm.created_by" disabled size="small" />
+
+          <div class="map-canvas-wrap" :class="{ 'is-transitioning': levelAnimating }">
+            <div v-show="drillLevel !== 'district'" ref="chartRef" class="map-canvas"></div>
+            <div v-show="drillLevel === 'district'" ref="amapRef" class="map-canvas amap-canvas"></div>
+            <div v-if="levelAnimating" class="map-transition-shade">
+              <span></span>
+              <small>{{ transitionDirection === 'forward' ? '正在进入下一级地图' : '正在返回上一级地图' }}</small>
+            </div>
+            <div v-if="placingMode" class="placing-mode-banner">
+              <span class="placing-pulse"></span>
+              <div><b>标点模式已开启</b><small>点击地图任意位置创建点位草稿</small></div>
+              <kbd>ESC</kbd>
+            </div>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <el-dialog
+      v-model="pinDialogVisible"
+      class="pin-editor-dialog"
+      :title="pinDialogTitle"
+      width="620px"
+      align-center
+    >
+      <div v-if="pinForm" class="pin-editor">
+        <div class="pin-editor-preview">
+          <span
+            class="preview-pin"
+            :class="pinForm.shape || 'circle'"
+            :style="{ '--pin-color': pinForm.color || '#4f7cff' }"
+          >{{ pinForm.shape === 'star' ? '★' : '' }}</span>
+          <div>
+            <b>{{ pinForm.store_name || pinForm.name || '未命名点位' }}</b>
+            <small>{{ pinForm.lng?.toFixed(6) }}, {{ pinForm.lat?.toFixed(6) }}</small>
+          </div>
+          <el-button text @click="copyCoord">复制坐标</el-button>
+        </div>
+
+        <el-form label-position="top">
+          <el-form-item v-if="pinType === 'pin'" label="点位名称">
+            <el-input v-model="pinForm.name" maxlength="30" show-word-limit placeholder="例如：备选店址、商场入口" />
           </el-form-item>
-        </template>
-      </el-form>
+          <el-form-item v-else label="门店名称">
+            <el-input :model-value="pinForm.store_name" disabled />
+          </el-form-item>
+          <el-form-item label="备注说明">
+            <el-input v-model="pinForm.remark" type="textarea" :rows="3" maxlength="200" show-word-limit placeholder="记录位置价值、客流情况或跟进事项" />
+          </el-form-item>
+
+          <div class="editor-grid">
+            <el-form-item v-if="pinType === 'pin'" label="标记形状">
+              <div class="shape-picker">
+                <button
+                  v-for="s in shapeOptions"
+                  :key="s.value"
+                  type="button"
+                  :class="{ active: pinForm.shape === s.value }"
+                  @click="pinForm.shape = s.value"
+                >
+                  <i :class="s.value" :style="{ '--choice-color': pinForm.color }">{{ s.value === 'star' ? '★' : '' }}</i>
+                  {{ s.label }}
+                </button>
+              </div>
+            </el-form-item>
+            <el-form-item v-if="pinType === 'pin'" label="标记颜色">
+              <div class="color-picker">
+                <button
+                  v-for="c in presetColors"
+                  :key="c"
+                  type="button"
+                  :class="{ active: pinForm.color === c }"
+                  :style="{ background: c }"
+                  @click="pinForm.color = c"
+                ></button>
+              </div>
+            </el-form-item>
+          </div>
+
+          <div class="editor-grid settings-grid">
+            <el-form-item label="商圈半径">
+              <el-input-number v-model="pinForm.radius" :min="500" :max="10000" :step="500" />
+              <span class="field-suffix">米</span>
+            </el-form-item>
+            <el-form-item v-if="pinType === 'pin'" label="可见范围">
+              <el-segmented
+                v-model="pinForm.visibility"
+                :options="[{ label: '团队可见', value: 'public' }, { label: '仅自己', value: 'private' }]"
+              />
+            </el-form-item>
+          </div>
+        </el-form>
+      </div>
       <template #footer>
-        <el-button v-if="pinType==='pin'" type="danger" size="small" @click="deletePin" style="float:left;">删除</el-button>
-        <el-button @click="pinDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="savePin" :loading="pinSaving">保存</el-button>
+        <div class="dialog-footer">
+          <el-button v-if="pinType === 'pin' && editingPinId" type="danger" text @click="deletePin">删除点位</el-button>
+          <span></span>
+          <el-button @click="cancelPinEdit">取消</el-button>
+          <el-button type="primary" :loading="pinSaving" @click="savePin">
+            {{ pinType === 'store' || editingPinId ? '保存修改' : '创建点位' }}
+          </el-button>
+        </div>
       </template>
     </el-dialog>
+
+    <el-drawer
+      v-model="commentDrawerVisible"
+      class="map-comment-drawer"
+      :title="commentTargetTitle"
+      direction="rtl"
+      size="420px"
+      :modal="false"
+      :close-on-click-modal="false"
+      @closed="commentTargetClosed"
+    >
+      <div class="comment-drawer-body">
+        <div v-if="commentTarget" class="comment-target-card">
+          <div class="comment-target-title">
+            <span
+              class="pin-swatch"
+              :style="{ background: commentTargetType === 'pin' ? (commentTarget.color || '#4f7cff') : (STATUS_COLOR[commentTarget.status] || '#8d96a8') }"
+            ></span>
+            <strong>{{ commentTarget.name || commentTarget.store_name || '—' }}</strong>
+          </div>
+          <p>{{ commentTarget.remark || '暂无备注信息' }}</p>
+          <div class="comment-target-actions">
+            <el-button size="small" @click="openCommentTargetSettings">设置</el-button>
+            <el-button size="small" plain @click="focusCommentTargetOnMap">定位到地图</el-button>
+          </div>
+        </div>
+
+        <div class="comment-list">
+          <div v-if="commentList.length === 0" class="comment-empty">
+            <b>暂无协作记录</b>
+            <span>添加第一条评论，让团队了解这个位置。</span>
+          </div>
+          <article v-for="c in commentList" :key="c.id" class="comment-item">
+            <header>
+              <span class="comment-avatar">{{ (c.username || '匿').slice(0, 1) }}</span>
+              <div><b>{{ c.username || '匿名' }}</b><small>{{ c.created_at }}</small></div>
+              <el-button link type="danger" size="small" @click="removeCommentFromDrawer(c.id)">删除</el-button>
+            </header>
+            <p>{{ c.content }}</p>
+            <el-button link size="small" @click="startReply(c)">回复</el-button>
+            <div v-if="c.replies?.length" class="reply-list">
+              <div v-for="r in c.replies" :key="r.id">
+                <span><b>{{ r.username || '匿名' }}</b><small v-if="r.reply_to_name"> 回复 {{ r.reply_to_name }}</small></span>
+                <p>{{ r.content }}</p>
+                <el-button link size="small" @click="startReply(r)">回复</el-button>
+                <el-button link type="danger" size="small" @click="removeCommentFromDrawer(r.id)">删除</el-button>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div class="comment-composer">
+          <div v-if="replyTarget" class="replying-tip">
+            回复 @{{ replyTarget.username || '匿名' }}
+            <button @click="cancelReply">取消</button>
+          </div>
+          <div>
+            <el-input v-model="commentText" :placeholder="replyTarget ? '写下回复…' : '添加协作记录…'" @keyup.enter="submitCommentFromDrawer" />
+            <el-button type="primary" :loading="commentSubmitting" @click="submitCommentFromDrawer">发送</el-button>
+          </div>
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import * as echarts from 'echarts'
-import { getProvinceStats, getCityStats, getDistrictStats, getStoreLocations, getMapPins, createMapPin, updateMapPin, deleteMapPin, updateStore } from '@/api'
+import { getProvinceStats, getCityStats, getDistrictStats, getStoreLocations, getMapPins, createMapPin, updateMapPin, deleteMapPin, updateStore, getPinComments, addPinComment, deletePinComment, getStoreComments, addStoreComment, deleteStoreComment } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const GEO_BASE = 'https://geo.datav.aliyun.com/areas_v3/bound'
@@ -149,13 +340,14 @@ const FULL_TO_SHORT = {
 
 const chartRef = ref(null)
 const amapRef = ref(null)
-const selectedPin = ref(null)
 const total = ref(0)
 const drillLevel = ref('china')
 const provinceName = ref('')
 const cityName = ref('')
 const districtName = ref('')
 const loading = ref(false)
+const levelAnimating = ref(false)
+const transitionDirection = ref('forward')
 const storesLocs = ref([])
 const customPins = ref([])
 
@@ -171,6 +363,9 @@ const pinSaving = ref(false)
 const pinForm = ref(null)
 const editingPinId = ref(null)
 const editingStoreId = ref(null)
+const commentText = ref('')
+const commentSubmitting = ref(false)
+const replyTarget = ref(null) // { id, username } | null
 
 const presetColors = ['#F56C6C','#E6A23C','#F2D024','#67C23A','#409EFF','#9B59B6','#909399','#333333']
 const shapeOptions = [
@@ -184,21 +379,211 @@ let chart = null
 let amap = null
 let amapPolygons = []
 let amapMarkers = []
-let currentInfoWin = null
 let provinceCache = null
 let cityCache = null
+let transitionTimer = null
 
-// 图钉光标 SVG
+// 门店状态颜色
+const STATUS_COLOR = { '正常营业': '#67C23A', '筹建中': '#E6A23C' }
+
+// ═══ 右侧评论抽屉 ═══
+const commentDrawerVisible = ref(false)
+const commentTargetType = ref('pin') // 'pin' | 'store'
+const commentTarget = ref(null)
+const commentList = ref([])
+
+const commentTargetTitle = computed(() => {
+  if (!commentTarget.value) return '评论'
+  const name = commentTarget.value.name || commentTarget.value.store_name || '—'
+  return `💬 ${name} · 评论`
+})
+
+function openCommentDrawer(type, target) {
+  commentTargetType.value = type
+  commentTarget.value = target
+  commentDrawerVisible.value = true
+  loadCommentsForDrawer()
+}
+function commentTargetClosed() {
+  commentTarget.value = null
+  commentList.value = []
+  commentText.value = ''
+  replyTarget.value = null
+}
+function openCommentTargetSettings() {
+  if (commentTargetType.value === 'pin') {
+    pinType.value = 'pin'
+    editingPinId.value = commentTarget.value.id
+    pinForm.value = { name: commentTarget.value.name, remark: commentTarget.value.remark, color: commentTarget.value.color, radius: commentTarget.value.radius, shape: commentTarget.value.shape||'circle', created_by: commentTarget.value.created_by, lng: commentTarget.value.lng, lat: commentTarget.value.lat, visibility: commentTarget.value.visibility||'public' }
+    pinDialogVisible.value = true
+  } else {
+    pinType.value = 'store'
+    editingStoreId.value = commentTarget.value.id
+    pinForm.value = {
+      store_name: commentTarget.value.store_name,
+      remark: commentTarget.value.remark || '',
+      lng: commentTarget.value.lng,
+      lat: commentTarget.value.lat,
+      status: commentTarget.value.status,
+      radius: commentTarget.value.radius || 3000,
+      color: commentTarget.value.color || '#909399',
+      shape: 'circle',
+    }
+    pinDialogVisible.value = true
+  }
+}
+function focusCommentTargetOnMap() {
+  if (!amap || !commentTarget.value) return
+  amap.setZoomAndCenter(15, [commentTarget.value.lng, commentTarget.value.lat])
+}
+async function loadCommentsForDrawer() {
+  if (!commentTarget.value) return
+  try {
+    if (commentTargetType.value === 'pin') {
+      const { data } = await getPinComments(commentTarget.value.id).catch(() => ({ data: [] }))
+      commentList.value = data || []
+    } else {
+      const { data } = await getStoreComments(commentTarget.value.id).catch(() => ({ data: [] }))
+      commentList.value = data || []
+    }
+  } catch { commentList.value = [] }
+}
+async function submitCommentFromDrawer() {
+  const text = commentText.value.trim()
+  if (!text) return
+  commentSubmitting.value = true
+  try {
+    const parentId = replyTarget.value?.id || null
+    const replyToName = replyTarget.value?.username || ''
+    if (commentTargetType.value === 'pin') {
+      await addPinComment(commentTarget.value.id, text, parentId, replyToName)
+    } else {
+      await addStoreComment(commentTarget.value.id, text, parentId, replyToName)
+    }
+    ElMessage.success(replyTarget.value ? '回复已发送' : '评论已发送')
+    commentText.value = ''
+    replyTarget.value = null
+    await loadCommentsForDrawer()
+  } catch (e) { ElMessage.error('评论失败: ' + (e?.message || e)) }
+  finally { commentSubmitting.value = false }
+}
+function startReply(c) {
+  replyTarget.value = { id: c.id, username: c.username || '匿名' }
+  commentText.value = ''
+}
+function cancelReply() {
+  replyTarget.value = null
+  commentText.value = ''
+}
+async function removeCommentFromDrawer(commentId) {
+  try {
+    await ElMessageBox.confirm('确定删除这条评论？', '确认', { type: 'warning' })
+    if (commentTargetType.value === 'pin') {
+      await deletePinComment(commentTarget.value.id, commentId)
+    } else {
+      await deleteStoreComment(commentTarget.value.id, commentId)
+    }
+    ElMessage.success('已删除')
+    await loadCommentsForDrawer()
+  } catch {}
+}
+
+// 图钉光标
 const PIN_CURSOR = 'crosshair'
 
-const breadcrumb = computed(() => {
-  if (drillLevel.value === 'district') return provinceName.value + ' · ' + cityName.value + ' · ' + districtName.value + ' · '
-  if (drillLevel.value === 'city') return provinceName.value + ' · ' + cityName.value + ' · '
-  if (drillLevel.value === 'province') return provinceName.value + ' · '
-  return ''
+const LEVELS = ['china', 'province', 'city', 'district']
+const levelIndex = computed(() => LEVELS.indexOf(drillLevel.value))
+const levelTrail = computed(() => [
+  { level: 'china', caption: '全国', label: '中国' },
+  { level: 'province', caption: '省级', label: provinceName.value || '选择省份' },
+  { level: 'city', caption: '市级', label: cityName.value || '选择城市' },
+  { level: 'district', caption: '区级', label: districtName.value || '选择区县' },
+])
+const currentRegionTitle = computed(() => {
+  if (drillLevel.value === 'district') return districtName.value
+  if (drillLevel.value === 'city') return cityName.value
+  if (drillLevel.value === 'province') return provinceName.value
+  return '全国门店网络'
+})
+const levelCaption = computed(() => ({
+  china: '全国经营版图',
+  province: '省级门店分布',
+  city: '城市门店分布',
+  district: '高德 2D 街区地图',
+}[drillLevel.value]))
+const currentLevelHint = computed(() => ({
+  china: '查看各省门店密度，点击省份进入省级视图。',
+  province: '比较省内城市布局，点击城市继续下钻。',
+  city: '查看各区县门店覆盖，点击区县进入街区地图。',
+  district: '管理门店位置、商圈半径与团队协作点位。',
+}[drillLevel.value]))
+const nextLevelLabel = computed(() => ({
+  china: '下一步：选择省份',
+  province: '下一步：选择城市',
+  city: '下一步：选择区县',
+}[drillLevel.value] || ''))
+const filteredStores = computed(() => storesLocs.value.filter(matchesStoreFilters))
+const filteredStoreCount = computed(() => filteredStores.value.length)
+const activeStoreCount = computed(() => storesLocs.value.filter(s => s.status === '正常营业').length)
+const pinDialogTitle = computed(() => {
+  if (pinType.value === 'store') return '门店地图设置'
+  return editingPinId.value ? '编辑协作点位' : '创建协作点位'
 })
 
 function normalize(n) { return (n||'').replace(/[省市区县]$/,'').replace(/自治区$/,'').replace(/特别行政区$/,'') }
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]))
+}
+function matchesStoreFilters(s) {
+  if (statusFilter.value) {
+    if (statusFilter.value === 'closed') {
+      if (['正常营业', '筹建中'].includes(s.status)) return false
+    } else if (s.status !== statusFilter.value) return false
+  }
+  return !storeTypeFilter.value || s.store_type === storeTypeFilter.value
+}
+function resetFilters() {
+  statusFilter.value = ''
+  storeTypeFilter.value = ''
+}
+function startLevelTransition(direction = 'forward') {
+  clearTimeout(transitionTimer)
+  transitionDirection.value = direction
+  levelAnimating.value = true
+}
+function finishLevelTransition() {
+  clearTimeout(transitionTimer)
+  transitionTimer = setTimeout(() => { levelAnimating.value = false }, 280)
+}
+
+async function navigateToLevel(level) {
+  const targetIndex = LEVELS.indexOf(level)
+  if (targetIndex < 0 || targetIndex >= levelIndex.value) return
+  startLevelTransition('back')
+  destroyAmap()
+  if (level === 'china') {
+    await loadChina()
+    return
+  }
+  if (level === 'province' && provinceCache) {
+    drillLevel.value = 'province'
+    cityName.value = ''
+    districtName.value = ''
+    total.value = provinceCache.dataList.reduce((sum, item) => sum + item.value, 0)
+    echarts.registerMap(provinceCache.name, provinceCache.geo)
+    renderECharts(provinceCache.name, provinceCache.dataList)
+    finishLevelTransition()
+    return
+  }
+  if (level === 'city' && cityCache) {
+    drillLevel.value = 'city'
+    districtName.value = ''
+    total.value = cityCache.dataList.reduce((sum, item) => sum + item.value, 0)
+    echarts.registerMap(cityCache.name, cityCache.geo)
+    renderECharts(cityCache.name, cityCache.dataList)
+    finishLevelTransition()
+  }
+}
 
 // ═══ ECharts（全国 / 省 / 市） — 仅区域着色，不标记红点 ═══
 function renderECharts(mapName, dataList) {
@@ -214,12 +599,17 @@ function renderECharts(mapName, dataList) {
   }
   const maxVal = Math.max(1, ...dataList.map(d => d.value || 0))
   chart.setOption({
+    animation: true,
+    animationDuration: 680,
+    animationDurationUpdate: 520,
+    animationEasing: 'cubicOut',
+    animationEasingUpdate: 'cubicInOut',
     tooltip: { trigger:'item', formatter: p => `${p.name}<br/>门店数：<b>${p.data?.value??0}</b>` },
-    visualMap: { min:0, max:maxVal, left:16, bottom:16, text:['多','少'],
-      inRange:{color:['#7bbdf5','#409EFF','#1a6dd4','#083d7a']}, calculable:false },
+    visualMap: { show:false, min:0, max:maxVal,
+      inRange:{color:['#dbe6ff','#86a6ff','#4f7cff','#243d8f']}, calculable:false },
     series: [{ type:'map', map:mapName, roam:true, scaleLimit:{min:0.6,max:10}, selectedMode:false,
-      emphasis:{ label:{show:true,color:'#fff',fontSize:14,fontWeight:'bold'}, itemStyle:{areaColor:'#0a52a7'} },
-      data:dataList, label:{show:false}, itemStyle:{areaColor:'#e0e0e0',borderColor:'#fff',borderWidth:1},
+      emphasis:{ label:{show:true,color:'#fff',fontSize:13,fontWeight:'bold'}, itemStyle:{areaColor:'#2f55c7',shadowBlur:18,shadowColor:'rgba(47,85,199,.28)'} },
+      data:dataList, label:{show:false}, itemStyle:{areaColor:'#e7ebf2',borderColor:'#fff',borderWidth:1.2},
     }],
   }, true)
 }
@@ -254,15 +644,24 @@ function applyCursor() {
 // 标点模式公共逻辑（map click / circle click 共用）
 async function handlePlacingClick(lng, lat) {
   if (!placingMode.value) return
-  try {
-    const existing = customPins.value.filter(p => /^自定义点位\d+$/.test(p.name||''))
-    const maxN = existing.reduce((max, p) => Math.max(max, parseInt((p.name||'').replace('自定义点位','')) || 0), 0)
-    const autoName = `自定义点位${maxN + 1}`
-    await createMapPin({ lng, lat, name: autoName, remark: '', color: '#F56C6C', radius: 3000, shape: 'circle' })
-    ElMessage.success(`${autoName} 已添加`)
-    await loadCustomPins()
-    refreshMarkers()
-  } catch (err) { ElMessage.error('保存失败: ' + (err?.message || err)) }
+  const existing = customPins.value.filter(p => /^自定义点位\d+$/.test(p.name || ''))
+  const maxN = existing.reduce((max, p) => Math.max(max, parseInt((p.name || '').replace('自定义点位', '')) || 0), 0)
+  pinType.value = 'pin'
+  editingPinId.value = null
+  pinForm.value = {
+    lng,
+    lat,
+    name: `自定义点位${maxN + 1}`,
+    remark: '',
+    color: '#4F7CFF',
+    radius: 3000,
+    shape: 'circle',
+    visibility: 'public',
+    created_by: '',
+  }
+  placingMode.value = false
+  applyCursor()
+  pinDialogVisible.value = true
 }
 
 function refreshMarkers() {
@@ -277,15 +676,7 @@ function addMarkersToMap() {
     if (s.status === '筹建中')   return '#E6A23C'
     return '#909399'
   }
-  function statusMatch(s) {
-    if (statusFilter.value) {
-      if (statusFilter.value === 'closed') { if (['正常营业','筹建中'].includes(s.status)) return false }
-      else if (s.status !== statusFilter.value) return false
-    }
-    if (storeTypeFilter.value && s.store_type !== storeTypeFilter.value) return false
-    return true
-  }
-  const filteredLocs = storesLocs.value.filter(statusMatch)
+  const filteredLocs = filteredStores.value
   filteredLocs.forEach(s => {
     try {
       const color = storeColor(s)
@@ -312,7 +703,7 @@ function addMarkersToMap() {
         offset: new window.AMap.Pixel(0, 0),
         content: `<div style="position:relative;width:0;height:0;">`
           + `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:${color};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.35);"></div>`
-          + `<div style="position:absolute;left:0;top:7px;white-space:nowrap;transform:translateX(-50%);font-size:10px;color:#333;background:rgba(255,255,255,0.85);padding:1px 4px;border-radius:2px;">${s.store_name}</div>`
+          + `<div class="map-marker-label">${escapeHtml(s.store_name)}</div>`
           + `</div>`,
         zIndex: 200,
       })
@@ -357,16 +748,16 @@ function addMarkersToMap() {
         offset: new window.AMap.Pixel(0, 0),
         content: `<div style="position:relative;width:0;height:0;">`
           + `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);${shapeHtml}background:${c};border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;font-size:8px;color:#fff;">${shapeIcon}</div>`
-          + `<div style="position:absolute;left:0;top:8px;white-space:nowrap;transform:translateX(-50%);font-size:10px;color:#333;background:rgba(255,255,255,0.85);padding:1px 4px;border-radius:2px;">${p.name||'点位'}</div>`
+          + `<div class="map-marker-label custom-label">${escapeHtml(p.name || '点位')}</div>`
           + `</div>`,
         zIndex: 201,
       })
       marker.on('click', () => editPin(p))
-      marker.on('rightclick', async () => {
-        await deleteMapPin(p.id)
-        ElMessage.success('已删除')
-        await loadCustomPins()
-        refreshMarkers()
+      marker.on('rightclick', () => {
+        if (placingMode.value) {
+          placingMode.value = false
+          applyCursor()
+        }
       })
       marker.setMap(amap); amapMarkers.push(marker)
     } catch {}
@@ -375,7 +766,14 @@ function addMarkersToMap() {
 
 function renderAmap(geo, dataList, highlightFeature, locs = []) {
   destroyAmap()
-  amap = new window.AMap.Map(amapRef.value, { zoom: 10, resizeEnable: true })
+  amap = new window.AMap.Map(amapRef.value, {
+    zoom: 10,
+    zooms: [5, 19],
+    resizeEnable: true,
+    animateEnable: true,
+    jogEnable: true,
+    showLabel: true,
+  })
 
   // 收集 bounds + 渲染区域边框 Polygon（低 zIndex，click 转发到标点逻辑）
   const bounds = new window.AMap.Bounds()
@@ -434,6 +832,7 @@ function renderAmap(geo, dataList, highlightFeature, locs = []) {
         amap.setZoomAndCenter(10, bounds.getCenter())
       }
     } catch {}
+    finishLevelTransition()
   })
 
   // 地图点击 → 标点模式
@@ -461,21 +860,9 @@ function featureCenter(feature) {
   } catch { return null }
 }
 
-// 计算 feature 的边界（保留用于其他用途）
-function featureBounds(feature) {
-  try {
-    const b = new window.AMap.Bounds()
-    const type = feature.geometry?.type
-    const coords = feature.geometry?.coordinates
-    if (!coords) return null
-    const flat = type === 'Polygon' ? [coords[0]] : type === 'MultiPolygon' ? coords.map(p => p[0]) : []
-    flat.forEach(ring => ring.forEach(c => b.extend([c[0], c[1]])))
-    return b
-  } catch { return null }
-}
-
 // ═══ 导航 ═══
 async function loadChina() {
+  if (!levelAnimating.value) startLevelTransition('back')
   destroyAmap()
   loading.value = true
   try {
@@ -488,17 +875,24 @@ async function loadChina() {
     drillLevel.value='china'; provinceName.value=''; cityName.value=''; districtName.value=''
     total.value = dl.reduce((s,d)=>s+d.value,0)
     echarts.registerMap('china',geo); renderECharts('china',dl)
-  } finally { loading.value = false }
+  } finally {
+    loading.value = false
+    finishLevelTransition()
+  }
 }
 
 async function drillToProvince(name) {
   if (drillLevel.value!=='china') return
+  startLevelTransition('forward')
   destroyAmap()
-  const adcode = PROVINCE_ADCODE[FULL_TO_SHORT[name]||name]; if(!adcode)return
+  const adcode = PROVINCE_ADCODE[FULL_TO_SHORT[name]||name]
+  if (!adcode) { finishLevelTransition(); return }
   if (provinceCache?.name===name) {
     drillLevel.value='province'; provinceName.value=name; cityName.value=''; districtName.value=''
     total.value=provinceCache.dataList.reduce((s,d)=>s+d.value,0)
-    echarts.registerMap(name,provinceCache.geo); renderECharts(name,provinceCache.dataList); return
+    echarts.registerMap(name,provinceCache.geo); renderECharts(name,provinceCache.dataList)
+    finishLevelTransition()
+    return
   }
   loading.value = true
   try {
@@ -511,20 +905,27 @@ async function drillToProvince(name) {
     drillLevel.value='province'; provinceName.value=name; cityName.value=''; districtName.value=''
     total.value=dl.reduce((s,d)=>s+d.value,0)
     echarts.registerMap(name,geo); renderECharts(name,dl)
-  } finally { loading.value = false }
+  } finally {
+    loading.value = false
+    finishLevelTransition()
+  }
 }
 
 // ═══ 市 → 区（ECharts 图表样式） ═══
 async function drillToCity(name) {
   if (drillLevel.value!=='province'||!provinceCache) return
+  startLevelTransition('forward')
   const features = provinceCache.geo.features||[]
   const f = features.find(x=>normalize(x.properties?.name||'')===normalize(name)||x.properties?.name===name)
-  const adcode = f?.properties?.adcode; if(!adcode) return
+  const adcode = f?.properties?.adcode
+  if (!adcode) { finishLevelTransition(); return }
   if (cityCache?.name===name) {
     destroyAmap()
     drillLevel.value='city'; cityName.value=name; districtName.value=''
     total.value=cityCache.dataList.reduce((s,d)=>s+d.value,0)
-    echarts.registerMap(name,cityCache.geo); renderECharts(name,cityCache.dataList); return
+    echarts.registerMap(name,cityCache.geo); renderECharts(name,cityCache.dataList)
+    finishLevelTransition()
+    return
   }
   loading.value = true
   try {
@@ -538,15 +939,19 @@ async function drillToCity(name) {
     drillLevel.value='city'; cityName.value=name; districtName.value=''
     total.value=dl.reduce((s,d)=>s+d.value,0)
     echarts.registerMap(name,geo); renderECharts(name,dl)
-  } finally { loading.value = false }
+  } finally {
+    loading.value = false
+    finishLevelTransition()
+  }
 }
 
 // ═══ 区 → 高德真实 2D 地图 ═══
 async function drillToDistrict(name) {
   if (drillLevel.value!=='city'||!cityCache) return
+  startLevelTransition('forward')
   const features = cityCache.geo.features||[]
   const f = features.find(x=>normalize(x.properties?.name||'')===normalize(name)||x.properties?.name===name)
-  if (!f) return
+  if (!f) { finishLevelTransition(); return }
 
   loading.value = true
   try {
@@ -555,7 +960,7 @@ async function drillToDistrict(name) {
     const locs = await getStoreLocations({ province: provinceName.value, city: cityName.value }).catch(()=>({data:[]}))
     storesLocs.value = locs.data || []
     // 加载自定义点位
-    customPins.value = await getMapPins({ province: provinceName.value, city: cityName.value }).then(r => r.data).catch(() => [])
+    customPins.value = await getMapPins({ province: provinceName.value, city: cityName.value, district: name }).then(r => r.data).catch(() => [])
     // 获取该市下各区真实门店数量
     const stats = await getDistrictStats(provinceName.value, cityName.value).catch(()=>({data:[]}))
     const statsMap = {}
@@ -575,10 +980,12 @@ async function drillToDistrict(name) {
     renderAmap(geo, dataList, f, storesLocs.value)
   } catch(e) {
     console.error('高德地图加载失败:', e)
+    finishLevelTransition()
   } finally { loading.value = false }
 }
 
 function backToPrevious() {
+  startLevelTransition('back')
   if (drillLevel.value==='district') {
     destroyAmap()
     const c = cityCache
@@ -586,6 +993,7 @@ function backToPrevious() {
       drillLevel.value='city'; districtName.value=''
       total.value=c.dataList.reduce((s,d)=>s+d.value,0)
       echarts.registerMap(c.name,c.geo); renderECharts(c.name,c.dataList)
+      finishLevelTransition()
     }
   } else if (drillLevel.value==='city') {
     destroyAmap()
@@ -594,8 +1002,13 @@ function backToPrevious() {
       drillLevel.value='province'; cityName.value=''; districtName.value=''
       total.value=c.dataList.reduce((s,d)=>s+d.value,0)
       echarts.registerMap(c.name,c.geo); renderECharts(c.name,c.dataList)
+      finishLevelTransition()
     } else { drillToProvince(provinceName.value) }
-  } else if (drillLevel.value==='province') { cityCache=null; provinceCache=null; loadChina() }
+  } else if (drillLevel.value==='province') {
+    cityCache=null
+    provinceCache=null
+    loadChina()
+  }
 }
 
 // ═══ 自定义点位 CRUD ═══
@@ -617,8 +1030,9 @@ function togglePlacingMode() {
 function editPin(p) {
   pinType.value = 'pin'
   editingPinId.value = p.id
-  pinForm.value = { name: p.name, remark: p.remark, color: p.color, radius: p.radius, shape: p.shape||'circle', created_by: p.created_by, lng: p.lng, lat: p.lat }
-  pinDialogVisible.value = true
+  pinForm.value = { name: p.name, remark: p.remark, color: p.color, radius: p.radius, shape: p.shape||'circle', created_by: p.created_by, lng: p.lng, lat: p.lat, visibility: p.visibility||'public' }
+  // 点击标记 → 打开右侧评论抽屉
+  openCommentDrawer('pin', p)
 }
 function editStoreMarker(s) {
   pinType.value = 'store'
@@ -634,10 +1048,25 @@ function editStoreMarker(s) {
     color: color,
     shape: 'circle',
   }
-  pinDialogVisible.value = true
+  // 点击标记 → 打开右侧评论抽屉
+  openCommentDrawer('store', {
+    id: s.id,
+    store_name: s.store_name,
+    status: s.status,
+    remark: s.remark,
+    lng: s.lng,
+    lat: s.lat,
+    radius: s.radius || 3000,
+    color: color,
+    shape: 'circle',
+  })
 }
 async function savePin() {
   if (!pinForm.value) return
+  if (pinType.value === 'pin' && !pinForm.value.name?.trim()) {
+    ElMessage.warning('请填写点位名称')
+    return
+  }
   pinSaving.value = true
   try {
     if (pinType.value === 'store') {
@@ -650,14 +1079,31 @@ async function savePin() {
       }
       ElMessage.success('已保存')
     } else {
-      await updateMapPin(editingPinId.value, pinForm.value)
-      ElMessage.success('点位已更新')
+      const payload = {
+        ...pinForm.value,
+        name: pinForm.value.name.trim(),
+        province: provinceName.value,
+        city: cityName.value,
+        district: districtName.value,
+      }
+      if (editingPinId.value) {
+        await updateMapPin(editingPinId.value, payload)
+        ElMessage.success('点位已更新')
+      } else {
+        await createMapPin(payload)
+        ElMessage.success('点位已创建')
+      }
       await loadCustomPins()
     }
     pinDialogVisible.value = false
+    editingPinId.value = null
     refreshMarkers()
   } catch (e) { ElMessage.error('保存失败: ' + e.message) }
   finally { pinSaving.value = false }
+}
+function cancelPinEdit() {
+  pinDialogVisible.value = false
+  if (pinType.value === 'pin' && !editingPinId.value) pinForm.value = null
 }
 function copyCoord() {
   if (!pinForm.value || pinForm.value.lng == null) return
@@ -669,52 +1115,827 @@ function copyCoord() {
   })
 }
 async function deletePin() {
+  if (!editingPinId.value) return
   try {
     await ElMessageBox.confirm('确定删除该点位？', '确认', { type: 'warning' })
     await deleteMapPin(editingPinId.value)
     ElMessage.success('已删除')
     pinDialogVisible.value = false
+    editingPinId.value = null
     await loadCustomPins()
     refreshMarkers()
   } catch {}
 }
 async function loadCustomPins() {
   if (drillLevel.value !== 'district') return
-  const { data } = await getMapPins({ province: provinceName.value, city: cityName.value }).catch(() => ({ data: [] }))
+  const { data } = await getMapPins({ province: provinceName.value, city: cityName.value, district: districtName.value }).catch(() => ({ data: [] }))
   customPins.value = data || []
 }
 
 // 监听状态/类型筛选变化 → 只刷新标记，不重建地图
 watch([statusFilter, storeTypeFilter], () => { refreshMarkers() })
 
-function onPinSelect(id) {
-  if (!id) return
-  const p = customPins.value.find(x => x.id === id)
-  if (p && amap) amap.setZoomAndCenter(15, [p.lng, p.lat])
-  selectedPin.value = null
-}
-
 // ESC 退出标点模式
 function onKeyDown(e) { if (e.key === 'Escape' && placingMode.value) { placingMode.value = false; applyCursor(); ElMessage.info('已退出标点模式') } }
 onMounted(() => { loadChina(); document.addEventListener('keydown', onKeyDown) })
 onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventListener('keydown', onKeyDown) })
 
-// 清空所有自定义标记
-async function clearAllPins() {
-  try {
-    await ElMessageBox.confirm('确定删除所有自定义标记？此操作不可恢复', '确认', { type: 'warning' })
-    const ids = customPins.value.map(p => p.id)
-    for (const id of ids) { await deleteMapPin(id).catch(() => {}) }
-    ElMessage.success(`已清空 ${ids.length} 个标记`)
-    await loadCustomPins()
-    refreshMarkers()
-  } catch {}
-}
 
 </script>
 
 <style>
-/* 波纹扩散动画 — 从圆心向外扩散，舒缓节奏 */
+/* ===== 全国地图工作台 ===== */
+.store-map-page {
+  --map-ink: #172033;
+  --map-muted: #78849a;
+  --map-line: #e8ebf2;
+  --map-blue: #4f7cff;
+  --map-blue-dark: #2e51be;
+  --map-soft-blue: #eef3ff;
+  min-width: 0;
+  color: var(--map-ink);
+}
+
+.map-hero {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 30px;
+  min-height: 120px;
+  margin-bottom: 18px;
+  padding: 26px 30px;
+  overflow: hidden;
+  color: #fff;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 82% 10%, rgba(143, 179, 255, .28), transparent 32%),
+    linear-gradient(125deg, #172b66 0%, #294da9 55%, #4f7cff 100%);
+  box-shadow: 0 18px 40px rgba(34, 66, 150, .18);
+}
+.map-hero::after {
+  content: "";
+  position: absolute;
+  width: 260px;
+  height: 260px;
+  right: -78px;
+  bottom: -190px;
+  border: 1px solid rgba(255,255,255,.22);
+  border-radius: 50%;
+  box-shadow: 0 0 0 38px rgba(255,255,255,.04), 0 0 0 76px rgba(255,255,255,.035);
+}
+.map-eyebrow {
+  margin-bottom: 7px;
+  color: #a9c1ff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .22em;
+}
+.map-hero h2 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.2;
+  letter-spacing: -.02em;
+}
+.map-hero p {
+  max-width: 620px;
+  margin: 8px 0 0;
+  color: rgba(255,255,255,.72);
+  font-size: 13px;
+}
+.hero-metrics {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 10px;
+}
+.hero-metric {
+  min-width: 92px;
+  padding: 11px 14px;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 12px;
+  background: rgba(255,255,255,.09);
+  backdrop-filter: blur(8px);
+}
+.hero-metric span {
+  display: block;
+  margin-bottom: 4px;
+  color: rgba(255,255,255,.62);
+  font-size: 10px;
+}
+.hero-metric strong {
+  font-size: 22px;
+  line-height: 1;
+}
+.hero-metric strong.success { color: #79e7b1; }
+.hero-metric strong.accent { color: #ffd887; }
+
+.map-workspace {
+  overflow: hidden;
+  border: 1px solid var(--map-line);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(27, 39, 67, .07);
+}
+.workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 76px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--map-line);
+}
+.level-breadcrumb {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.level-breadcrumb button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 130px;
+  padding: 12px 30px 12px 0;
+  border: 0;
+  background: transparent;
+  color: #a0a9b9;
+  text-align: left;
+}
+.level-breadcrumb button:not(:last-child)::after {
+  content: "›";
+  position: absolute;
+  right: 13px;
+  top: 50%;
+  color: #c8ced9;
+  font-size: 22px;
+  font-weight: 300;
+  transform: translateY(-50%);
+}
+.level-breadcrumb button.reachable { cursor: pointer; }
+.level-breadcrumb button.reachable:hover b { color: var(--map-blue); }
+.level-breadcrumb button.active { color: var(--map-ink); }
+.level-dot {
+  display: grid;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid #dfe4ed;
+  border-radius: 50%;
+  background: #fff;
+  color: #98a2b3;
+  font-size: 11px;
+  font-weight: 700;
+  transition: .25s ease;
+}
+.level-breadcrumb button.reachable .level-dot {
+  border-color: #c8d5ff;
+  background: var(--map-soft-blue);
+  color: var(--map-blue);
+}
+.level-breadcrumb button.active .level-dot {
+  border-color: var(--map-blue);
+  background: var(--map-blue);
+  color: #fff;
+  box-shadow: 0 0 0 5px rgba(79,124,255,.11);
+}
+.level-breadcrumb small,
+.level-breadcrumb b {
+  display: block;
+  overflow: hidden;
+  max-width: 100px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.level-breadcrumb small {
+  margin-bottom: 2px;
+  color: #a3acbb;
+  font-size: 10px;
+  font-weight: 500;
+}
+.level-breadcrumb b {
+  font-size: 13px;
+  font-weight: 650;
+  transition: color .18s ease;
+}
+.workspace-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #7c8799;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.map-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #31c48d;
+  box-shadow: 0 0 0 4px rgba(49,196,141,.12);
+}
+.workspace-actions .el-button { margin-left: 10px; }
+
+.map-layout {
+  display: grid;
+  grid-template-columns: 258px minmax(0, 1fr);
+  min-height: 650px;
+}
+.map-side-panel {
+  padding: 22px 18px;
+  border-right: 1px solid var(--map-line);
+  background: #fafbfc;
+}
+.side-section {
+  padding: 0 4px 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--map-line);
+}
+.side-section:last-child {
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+.side-kicker {
+  color: var(--map-blue);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+.side-section h3 {
+  margin: 6px 0;
+  font-size: 19px;
+  letter-spacing: -.02em;
+}
+.side-section > p {
+  margin: 0;
+  color: var(--map-muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.side-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 11px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.side-title button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--map-blue);
+  cursor: pointer;
+  font-size: 11px;
+}
+.side-title em {
+  min-width: 22px;
+  padding: 2px 7px;
+  border-radius: 20px;
+  background: var(--map-soft-blue);
+  color: var(--map-blue);
+  font-size: 10px;
+  font-style: normal;
+  text-align: center;
+}
+.filter-section .el-select {
+  width: 100%;
+  margin-bottom: 9px;
+}
+.filter-section .el-select__wrapper {
+  min-height: 36px;
+  border-radius: 9px;
+  box-shadow: 0 0 0 1px #e4e8ef inset;
+}
+.filter-result {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  padding: 10px 11px;
+  border-radius: 9px;
+  background: #f0f3f8;
+  color: #8590a2;
+  font-size: 11px;
+}
+.filter-result strong { color: var(--map-ink); }
+
+.place-pin-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #dce4fb;
+  border-radius: 11px;
+  background: #fff;
+  color: var(--map-ink);
+  cursor: pointer;
+  text-align: left;
+  transition: .2s ease;
+}
+.place-pin-button:hover {
+  border-color: #b6c7ff;
+  box-shadow: 0 6px 16px rgba(79,124,255,.10);
+  transform: translateY(-1px);
+}
+.place-pin-button.active {
+  border-color: #ffbe64;
+  background: #fff8eb;
+}
+.place-pin-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--map-blue);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 300;
+}
+.place-pin-button.active .place-pin-icon { background: #e89a2d; }
+.place-pin-button b,
+.place-pin-button small {
+  display: block;
+}
+.place-pin-button b { margin-bottom: 3px; font-size: 12px; }
+.place-pin-button small { color: #8d97a8; font-size: 10px; }
+.pin-list {
+  max-height: 188px;
+  margin-top: 9px;
+  overflow-y: auto;
+}
+.pin-list > button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 7px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.pin-list > button:hover { background: #f0f3f8; }
+.pin-swatch {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(20,30,50,.14);
+}
+.pin-list-copy {
+  min-width: 0;
+  flex: 1;
+}
+.pin-list-copy b,
+.pin-list-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pin-list-copy b { color: #364052; font-size: 11px; }
+.pin-list-copy small { margin-top: 2px; color: #9ba4b3; font-size: 9px; }
+.pin-arrow { color: #adb5c2; font-size: 18px; }
+.empty-pin-list {
+  padding: 22px 0 5px;
+  color: #a1a9b6;
+  font-size: 11px;
+  text-align: center;
+}
+.drill-guide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px 12px 24px;
+  border: 1px dashed #d6ddeb;
+  border-radius: 12px;
+  background: #fff;
+  text-align: center;
+}
+.guide-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 9px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--map-soft-blue);
+  color: var(--map-blue);
+  font-size: 24px;
+}
+.drill-guide b { font-size: 12px; }
+.drill-guide span { margin-top: 4px; color: #939dad; font-size: 10px; }
+.legend-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 6px;
+  color: #727d90;
+  font-size: 10px;
+}
+.legend-grid span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+.legend-dot.operating { background: #31b87c; }
+.legend-dot.preparing { background: #eca93a; }
+.legend-dot.closed { background: #8d96a8; }
+.legend-dot.custom { background: #4f7cff; }
+.gradient-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #8d97a7;
+  font-size: 9px;
+}
+.gradient-legend i {
+  height: 7px;
+  flex: 1;
+  border-radius: 10px;
+  background: linear-gradient(90deg, #dbe6ff, #4f7cff, #243d8f);
+}
+
+.map-stage {
+  position: relative;
+  min-width: 0;
+  background: #fff;
+}
+.map-stage-top {
+  position: absolute;
+  z-index: 5;
+  top: 18px;
+  left: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+.map-stage-top > div:first-child {
+  padding: 10px 13px;
+  border: 1px solid rgba(226,230,238,.9);
+  border-radius: 11px;
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 8px 22px rgba(29,41,68,.09);
+  backdrop-filter: blur(10px);
+}
+.stage-label {
+  display: block;
+  margin-bottom: 2px;
+  color: #8d97a8;
+  font-size: 9px;
+}
+.map-stage-top strong { font-size: 13px; }
+.stage-tools {
+  padding: 7px 10px;
+  border-radius: 20px;
+  background: rgba(28,37,55,.72);
+  color: rgba(255,255,255,.76);
+  font-size: 9px;
+  backdrop-filter: blur(8px);
+}
+.map-canvas-wrap {
+  position: relative;
+  min-height: 650px;
+  overflow: hidden;
+  background: #f4f6f9;
+}
+.map-canvas {
+  width: 100%;
+  height: 650px;
+  opacity: 1;
+  filter: blur(0);
+  transform: scale(1);
+  transition: opacity .34s ease, filter .34s ease, transform .44s cubic-bezier(.22,.75,.25,1);
+}
+.map-canvas-wrap.is-transitioning .map-canvas {
+  opacity: .32;
+  filter: blur(2px);
+  transform: scale(.985);
+}
+.map-transition-shade {
+  position: absolute;
+  z-index: 9;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(255,255,255,.74), rgba(245,247,251,.2) 48%, transparent 74%);
+  animation: mapShadeIn .25s ease both;
+}
+.map-transition-shade span {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(79,124,255,.18);
+  border-top-color: var(--map-blue);
+  border-radius: 50%;
+  animation: mapSpin .8s linear infinite;
+}
+.map-transition-shade small {
+  margin-top: 10px;
+  color: #6e7a8e;
+  font-size: 10px;
+}
+.placing-mode-banner {
+  position: absolute;
+  z-index: 8;
+  top: 78px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #ffd28e;
+  border-radius: 11px;
+  background: rgba(255,249,237,.96);
+  color: #83520c;
+  box-shadow: 0 10px 28px rgba(139,91,20,.15);
+  transform: translateX(-50%);
+  backdrop-filter: blur(9px);
+  animation: bannerDrop .28s ease both;
+}
+.placing-mode-banner b,
+.placing-mode-banner small { display: block; }
+.placing-mode-banner b { font-size: 11px; }
+.placing-mode-banner small { margin-top: 2px; color: #a77a37; font-size: 9px; }
+.placing-mode-banner kbd {
+  padding: 3px 6px;
+  border: 1px solid #e8c589;
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: #fff;
+  color: #96703b;
+  font-size: 8px;
+}
+.placing-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ec9e2f;
+  animation: placingPulse 1.5s ease-out infinite;
+}
+
+/* 高德覆盖物标签 */
+.map-marker-label {
+  position: absolute;
+  top: 9px;
+  left: 0;
+  max-width: 150px;
+  overflow: hidden;
+  padding: 3px 7px;
+  border: 1px solid rgba(224,228,235,.9);
+  border-radius: 6px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 4px 12px rgba(31,43,68,.12);
+  color: #344054;
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  backdrop-filter: blur(6px);
+}
+.map-marker-label.custom-label {
+  border-color: rgba(79,124,255,.22);
+  color: #3155ba;
+}
+
+/* 点位编辑 */
+.pin-editor-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 22px;
+  padding: 14px 16px;
+  border: 1px solid #e6eaf1;
+  border-radius: 12px;
+  background: #f8f9fb;
+}
+.pin-editor-preview > div { min-width: 0; flex: 1; }
+.pin-editor-preview b,
+.pin-editor-preview small { display: block; }
+.pin-editor-preview b { color: #283244; font-size: 13px; }
+.pin-editor-preview small { margin-top: 4px; color: #8d97a8; font-size: 10px; }
+.preview-pin {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--pin-color);
+  box-shadow: 0 4px 10px rgba(31,43,68,.2);
+  color: var(--pin-color);
+}
+.preview-pin.square { border-radius: 5px; }
+.preview-pin.diamond { border-radius: 5px; transform: rotate(45deg) scale(.84); }
+.preview-pin.star { border: 0; background: transparent; font-size: 28px; }
+.editor-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.shape-picker {
+  display: flex;
+  gap: 6px;
+}
+.shape-picker button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-width: 52px;
+  padding: 8px 6px;
+  border: 1px solid #e2e6ed;
+  border-radius: 8px;
+  background: #fff;
+  color: #788396;
+  cursor: pointer;
+  font-size: 9px;
+}
+.shape-picker button.active {
+  border-color: var(--map-blue);
+  background: var(--map-soft-blue);
+  color: var(--map-blue);
+}
+.shape-picker i {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--choice-color);
+  color: var(--choice-color);
+  font-style: normal;
+}
+.shape-picker i.square { border-radius: 3px; }
+.shape-picker i.diamond { border-radius: 3px; transform: rotate(45deg) scale(.8); }
+.shape-picker i.star { background: transparent; font-size: 19px; }
+.color-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  padding-top: 4px;
+}
+.color-picker button {
+  width: 25px;
+  height: 25px;
+  border: 3px solid #fff;
+  border-radius: 7px;
+  cursor: pointer;
+  box-shadow: 0 0 0 1px #dce1e9;
+}
+.color-picker button.active {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--map-blue);
+}
+.field-suffix {
+  margin-left: 8px;
+  color: #8d97a8;
+  font-size: 11px;
+}
+.dialog-footer {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 8px;
+  width: 100%;
+}
+
+/* 评论抽屉 */
+.comment-drawer-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.comment-target-card {
+  flex: 0 0 auto;
+  padding: 14px;
+  border: 1px solid #e5e9f0;
+  border-radius: 12px;
+  background: #f8f9fb;
+}
+.comment-target-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.comment-target-card p {
+  margin: 8px 0 12px;
+  color: #778295;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.comment-target-actions { display: flex; gap: 7px; }
+.comment-list {
+  flex: 1;
+  padding: 12px 2px;
+  overflow-y: auto;
+}
+.comment-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 46px 20px;
+  color: #9ba4b2;
+  text-align: center;
+}
+.comment-empty b { color: #667085; font-size: 12px; }
+.comment-empty span { margin-top: 5px; font-size: 10px; }
+.comment-item {
+  padding: 13px 2px;
+  border-bottom: 1px solid #edf0f4;
+}
+.comment-item header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.comment-item header > div { flex: 1; }
+.comment-item header b,
+.comment-item header small { display: block; }
+.comment-item header b { color: #344054; font-size: 11px; }
+.comment-item header small { margin-top: 2px; color: #a0a8b5; font-size: 9px; }
+.comment-avatar {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: #e8edff;
+  color: #4f6fda;
+  font-size: 10px;
+  font-weight: 700;
+}
+.comment-item > p,
+.reply-list p {
+  margin: 8px 0 2px 36px;
+  color: #566174;
+  font-size: 11px;
+  line-height: 1.65;
+}
+.comment-item > .el-button { margin-left: 31px; }
+.reply-list {
+  margin: 8px 0 0 36px;
+  padding: 9px 10px;
+  border-left: 2px solid #dbe4ff;
+  border-radius: 0 8px 8px 0;
+  background: #f7f8fb;
+}
+.reply-list > div + div { margin-top: 9px; padding-top: 9px; border-top: 1px dashed #e1e5ec; }
+.reply-list span { color: #647086; font-size: 10px; }
+.reply-list span small { color: #9aa3b2; }
+.reply-list p { margin: 4px 0; }
+.comment-composer {
+  flex: 0 0 auto;
+  padding-top: 12px;
+  border-top: 1px solid #e7eaf0;
+}
+.comment-composer > div:last-child {
+  display: flex;
+  gap: 8px;
+}
+.replying-tip {
+  margin-bottom: 7px;
+  color: #7c8799;
+  font-size: 10px;
+}
+.replying-tip button {
+  margin-left: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--map-blue);
+  cursor: pointer;
+}
+
+/* 动效 */
+@keyframes mapShadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes mapSpin {
+  to { transform: rotate(360deg); }
+}
+@keyframes bannerDrop {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+@keyframes placingPulse {
+  0% { box-shadow: 0 0 0 0 rgba(236,158,47,.55); }
+  75%, 100% { box-shadow: 0 0 0 8px rgba(236,158,47,0); }
+}
+
+/* 波纹扩散动画 — 从圆心向外扩散 */
 @keyframes mapRipple {
   0%   { width:0; height:0; opacity:0.55; transform:translate(-50%,-50%); }
   65%  { opacity:0.10; }
@@ -728,5 +1949,34 @@ async function clearAllPins() {
   border: 2px solid;
   animation: mapRipple 3.5s ease-out infinite;
   pointer-events: none;
+}
+
+@media (max-width: 1180px) {
+  .level-breadcrumb button { min-width: 104px; }
+  .workspace-actions > span:not(.map-live-dot) { display: none; }
+  .map-layout { grid-template-columns: 226px minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  .map-hero { align-items: flex-start; flex-direction: column; }
+  .map-layout { grid-template-columns: 1fr; }
+  .map-side-panel {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    border-right: 0;
+    border-bottom: 1px solid var(--map-line);
+  }
+  .side-section { margin: 0; border: 0; }
+  .level-breadcrumb button { min-width: 72px; padding-right: 18px; }
+  .level-breadcrumb button:not(:last-child)::after { right: 6px; }
+  .level-breadcrumb small { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-canvas,
+  .place-pin-button,
+  .level-dot { transition: none; }
+  .map-ripple-ring,
+  .placing-pulse,
+  .map-transition-shade span { animation: none; }
 }
 </style>

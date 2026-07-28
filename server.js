@@ -12,6 +12,7 @@ const { drawBarChart, drawLineChart, drawPieChart } = require('./lib/chart');
 const { drawStoreDailyReport } = require('./lib/report');
 const { parseDailyExcel, toReportData } = require('./lib/daily-data');
 const db = require('./lib/db');
+const collabService = require('./lib/collab-service');
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = 'etaigong-zhongkong-jwt-secret-2024';
@@ -20,6 +21,8 @@ const JWT_EXPIRES = '24h';
 const app = express();
 const PORT = process.env.PORT || 3456;
 const CONFIG_PATH = path.join(__dirname, 'config.json');
+const AVATAR_DIR = path.join(__dirname, 'data', 'avatars');
+if (!fs.existsSync(AVATAR_DIR)) fs.mkdirSync(AVATAR_DIR, { recursive: true });
 
 // ===== 中间件 =====
 app.use(express.json({ limit: '50mb' }));
@@ -39,6 +42,13 @@ app.use((req, res, next) => {
     return res.status(401).json({ error: '登录已过期，请重新登录' });
   }
 });
+
+// 用户头像文件
+app.use('/uploads/avatars', express.static(AVATAR_DIR, {
+  maxAge: '7d',
+  immutable: true,
+  fallthrough: false,
+}));
 
 // 静态文件：优先使用 Vue 前端构建产物，回退到旧版静态文件
 const vueDist = path.join(__dirname, 'frontend', 'dist');
@@ -313,7 +323,7 @@ app.get('/api/stores/city-stats', (req, res) => {
 });
 app.get('/api/stores/district-stats', (req, res) => {
   try {
-    const { province, city } = req.query;
+    const { province, city, district } = req.query;
     if (!province || !city) return res.status(400).json({ error: '缺少 province 或 city 参数' });
     const rows = db.queryAll(`SELECT district as name, COUNT(*) as value FROM stores WHERE province=? AND city=? AND district IS NOT NULL AND district != '' GROUP BY district ORDER BY value DESC`, [province, city]);
     res.json({ ok: true, data: rows });
@@ -502,10 +512,54 @@ app.delete('/api/operating-costs/:id', (req, res) => { try { db.run('DELETE FROM
 
 // ===== 菜品管理 =====
 app.get('/api/menu', (req, res) => {
-  try { const { store_id, category, status } = req.query; let sql = 'SELECT m.*, s.store_name FROM menu_items m LEFT JOIN stores s ON m.store_id=s.id WHERE 1=1'; const params = []; if (store_id) { sql += ' AND m.store_id=?'; params.push(store_id); } if (category) { sql += ' AND m.category=?'; params.push(category); } if (status) { sql += ' AND m.status=?'; params.push(status); } sql += ' ORDER BY m.id'; res.json({ ok: true, items: db.queryAll(sql, params), count: db.queryAll(sql, params).length }); }
+  try {
+    const { store_id, category, status } = req.query;
+    let sql = 'SELECT m.*, s.store_name FROM menu_items m LEFT JOIN stores s ON m.store_id=s.id WHERE 1=1';
+    const params = [];
+    if (store_id) { sql += ' AND m.store_id=?'; params.push(store_id); }
+    if (category) { sql += ' AND m.category=?'; params.push(category); }
+    if (status) { sql += ' AND m.status=?'; params.push(status); }
+    sql += ' ORDER BY m.id';
+    const items = db.queryAll(sql, params);
+    res.json({ ok: true, items, count: items.length });
+  }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/menu', (req, res) => { try { const { store_id, name, category, method, spec, price, dine_in_price, member_price, takeout_price, spec_unit, spec_weight } = req.body; if (!name) return res.status(400).json({ error: '菜品名称不能为空' }); const id = db.insert('INSERT INTO menu_items (store_id,name,category,method,spec,price,dine_in_price,member_price,takeout_price,spec_unit,spec_weight) VALUES (?,?,?,?,?,?,?,?,?,?,?)', [store_id||1, name, category||'', method||'', spec||'', price||0, dine_in_price||0, member_price||0, takeout_price||0, spec_unit||'份', spec_weight||'']); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post('/api/menu', (req, res) => {
+  try {
+    const {
+      store_id, name, category, method, spec, price, dine_in_price,
+      member_price, takeout_price, spec_unit, spec_weight, cost,
+      expiry_days, status,
+    } = req.body;
+    const cleanName = String(name || '').trim();
+    if (!cleanName) return res.status(400).json({ error: '菜品名称不能为空' });
+    const dinePrice = Number(dine_in_price) || 0;
+    const id = db.insert(
+      `INSERT INTO menu_items
+       (store_id,name,category,method,spec,price,dine_in_price,member_price,takeout_price,spec_unit,spec_weight,cost,expiry_days,status)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        store_id || 1,
+        cleanName,
+        String(category || '').trim(),
+        String(method || '').trim(),
+        String(spec || '').trim(),
+        Number(price ?? dinePrice) || 0,
+        dinePrice,
+        Number(member_price) || 0,
+        Number(takeout_price) || 0,
+        String(spec_unit || '份').trim(),
+        String(spec_weight || '').trim(),
+        Number(cost) || 0,
+        expiry_days == null || expiry_days === '' ? null : Number(expiry_days),
+        status === '停售' ? '停售' : '在售',
+      ]
+    );
+    db.save();
+    res.json({ ok: true, id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.put('/api/menu/:id', (req, res) => { try { const fields = ['name','category','method','spec','price','dine_in_price','member_price','takeout_price','spec_unit','spec_weight','cost','expiry_days','status']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE menu_items SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.delete('/api/menu/:id', (req, res) => { try { db.run('DELETE FROM menu_items WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
@@ -573,9 +627,15 @@ app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
     const hash = crypto.createHash('md5').update(password).digest('hex');
-    const user = db.queryOne('SELECT id,username,role,display_name FROM users WHERE username=? AND password_hash=?', [username, hash]);
+    const user = db.queryOne('SELECT id,username,role,display_name,phone,avatar_url FROM users WHERE username=? AND password_hash=?', [username, hash]);
     if (!user) return res.status(401).json({ error: '用户名或密码错误' });
-    const token = jwt.sign({ id: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+    const token = jwt.sign({
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      display_name: user.display_name,
+      avatar_url: user.avatar_url,
+    }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
     res.json({ ok: true, token, user });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -585,10 +645,233 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 // ===== 用户管理 =====
-app.get('/api/users', (req, res) => { try { res.json({ ok: true, users: db.queryAll('SELECT id,username,role,display_name,created_at FROM users ORDER BY id') }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post('/api/users', (req, res) => { try { const { username, password, role, display_name } = req.body; if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' }); const hash = crypto.createHash('md5').update(password).digest('hex'); const id = db.insert('INSERT INTO users (username,password_hash,role,display_name) VALUES (?,?,?,?)', [username, hash, role||'客服', display_name||username]); db.save(); res.json({ ok: true, id }); } catch (e) { if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '用户名已存在' }); res.status(500).json({ error: e.message }); } });
-app.put('/api/users/:id', (req, res) => { try { const { password, role, display_name } = req.body; const sets = [], params = []; if (password) { sets.push('password_hash=?'); params.push(crypto.createHash('md5').update(password).digest('hex')); } if (role) { sets.push('role=?'); params.push(role); } if (display_name) { sets.push('display_name=?'); params.push(display_name); } if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE users SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.delete('/api/users/:id', (req, res) => { try { db.run('DELETE FROM users WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+function removeAvatarFile(avatarUrl) {
+  if (!avatarUrl || !avatarUrl.startsWith('/uploads/avatars/')) return;
+  const filename = path.basename(avatarUrl);
+  const filePath = path.join(AVATAR_DIR, filename);
+  if (path.dirname(filePath) !== AVATAR_DIR) return;
+  try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch {}
+}
+function hasValidImageSignature(buffer, type) {
+  if (type === 'png') {
+    return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a]));
+  }
+  if (type === 'jpeg') return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  if (type === 'webp') {
+    return buffer.length >= 12
+      && buffer.subarray(0, 4).toString('ascii') === 'RIFF'
+      && buffer.subarray(8, 12).toString('ascii') === 'WEBP';
+  }
+  return false;
+}
+
+app.get('/api/users', (req, res) => {
+  try {
+    const users = db.queryAll('SELECT id,username,role,display_name,phone,avatar_url,created_at FROM users ORDER BY id');
+    res.json({ ok: true, users });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/users', (req, res) => {
+  try {
+    const username = String(req.body.username || '').trim();
+    const password = String(req.body.password || '');
+    const displayName = String(req.body.display_name || '').trim();
+    const role = String(req.body.role || '客服').trim();
+    const phone = String(req.body.phone || '').trim();
+    if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
+    if (username.length > 50) return res.status(400).json({ error: '用户名不能超过 50 个字符' });
+    if (phone.length > 30) return res.status(400).json({ error: '手机号格式不正确' });
+    const hash = crypto.createHash('md5').update(password).digest('hex');
+    const id = db.insert(
+      'INSERT INTO users (username,password_hash,role,display_name,phone) VALUES (?,?,?,?,?)',
+      [username, hash, role, displayName || username, phone]
+    );
+    db.save();
+    res.json({ ok: true, id });
+  } catch (e) {
+    if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '用户名已存在' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/users/:id', (req, res) => {
+  try {
+    const allowed = ['username', 'role', 'display_name', 'phone'];
+    const sets = [];
+    const params = [];
+    for (const field of allowed) {
+      if (req.body[field] === undefined) continue;
+      const value = String(req.body[field] ?? '').trim();
+      if (field === 'username' && !value) return res.status(400).json({ error: '用户名不能为空' });
+      if (field === 'phone' && value.length > 30) return res.status(400).json({ error: '手机号格式不正确' });
+      sets.push(`${field}=?`);
+      params.push(value);
+    }
+    if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' });
+    params.push(req.params.id);
+    db.run(`UPDATE users SET ${sets.join(',')} WHERE id=?`, params);
+    db.save();
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '用户名已存在' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put('/api/users/:id/password', (req, res) => {
+  try {
+    const password = String(req.body.password || '');
+    if (password.length < 6) return res.status(400).json({ error: '密码至少需要 6 位' });
+    const hash = crypto.createHash('md5').update(password).digest('hex');
+    db.run('UPDATE users SET password_hash=? WHERE id=?', [hash, req.params.id]);
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/users/:id/avatar', (req, res) => {
+  try {
+    const user = db.queryOne('SELECT id,avatar_url FROM users WHERE id=?', [req.params.id]);
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    const dataUrl = String(req.body.data || '');
+    const match = dataUrl.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=\r\n]+)$/);
+    if (!match) return res.status(400).json({ error: '仅支持 PNG、JPEG 或 WebP 图片' });
+    const buffer = Buffer.from(match[2].replace(/\s/g, ''), 'base64');
+    if (!buffer.length || buffer.length > 2 * 1024 * 1024) {
+      return res.status(400).json({ error: '头像大小不能超过 2MB' });
+    }
+    if (!hasValidImageSignature(buffer, match[1])) {
+      return res.status(400).json({ error: '图片文件内容无效' });
+    }
+    const ext = match[1] === 'jpeg' ? 'jpg' : match[1];
+    const filename = `user-${Number(req.params.id)}-${Date.now()}.${ext}`;
+    fs.writeFileSync(path.join(AVATAR_DIR, filename), buffer);
+    const avatarUrl = `/uploads/avatars/${filename}`;
+    db.run('UPDATE users SET avatar_url=? WHERE id=?', [avatarUrl, req.params.id]);
+    db.save();
+    removeAvatarFile(user.avatar_url);
+    res.json({ ok: true, avatar_url: avatarUrl });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/users/:id/avatar', (req, res) => {
+  try {
+    const user = db.queryOne('SELECT avatar_url FROM users WHERE id=?', [req.params.id]);
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    db.run("UPDATE users SET avatar_url='' WHERE id=?", [req.params.id]);
+    db.save();
+    removeAvatarFile(user.avatar_url);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/users/:id', (req, res) => {
+  try {
+    if (Number(req.params.id) === Number(req.user?.id)) {
+      return res.status(400).json({ error: '不能删除当前登录账号' });
+    }
+    const user = db.queryOne('SELECT avatar_url FROM users WHERE id=?', [req.params.id]);
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    db.run('DELETE FROM users WHERE id=?', [req.params.id]);
+    db.save();
+    removeAvatarFile(user.avatar_url);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ================================================================
+// ===== 协同事项管理 (Collab) — Controller 层 =====================
+// ================================================================
+
+/**
+ * GET /api/collab/issues
+ * 获取事项列表（支持分页、状态筛选、关键词搜索）
+ * Query: ?status=待开始|进行中|已完成|未完成|全部 &keyword=xxx &page=1 &pageSize=20
+ */
+app.get('/api/collab/issues', (req, res) => {
+  try {
+    const { status, keyword, page, pageSize } = req.query;
+    const result = collabService.listIssues({ status, keyword, page, pageSize });
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * GET /api/collab/issues/:id
+ * 获取事项详情（含完整信息 + 跟进时间线）
+ */
+app.get('/api/collab/issues/:id', (req, res) => {
+  try {
+    const result = collabService.getIssueDetail(Number(req.params.id));
+    if (result.error) return res.status(404).json({ error: result.error });
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * POST /api/collab/issues
+ * 发起新事项
+ * Body: { title, description, deadline, start_time, participants, participants_name }
+ */
+app.post('/api/collab/issues', (req, res) => {
+  try {
+    const result = collabService.createIssue(req.body, req.user);
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save();
+    res.status(201).json({ ok: true, issue: result.issue });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * POST /api/collab/issues/:id/reply
+ * 添加跟进回复
+ * Body: { content, images[] }
+ */
+app.post('/api/collab/issues/:id/reply', (req, res) => {
+  try {
+    const result = collabService.addReply(
+      Number(req.params.id),
+      req.body.content || '',
+      req.body.images || [],
+      req.user
+    );
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save();
+    res.status(201).json({ ok: true, reply: result.reply, issue: result.issue });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * PUT /api/collab/issues/:id/advance
+ * 推进事项状态（单向不可逆：待开始→进行中→已完成/未完成）
+ * Body: { status: '进行中'|'已完成'|'未完成', note: '推进说明' }
+ * 权限：仅发起人
+ */
+app.put('/api/collab/issues/:id/advance', (req, res) => {
+  try {
+    const result = collabService.advanceStatus(
+      Number(req.params.id),
+      req.body.status || '',
+      req.body.note || '',
+      req.user
+    );
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save();
+    res.json({ ok: true, issue: result.issue });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * GET /api/collab/users
+ * 获取可选用户列表（用于负责人下拉选择）
+ */
+app.get('/api/collab/users', (req, res) => {
+  try {
+    const users = db.queryAll('SELECT id, username, display_name, role FROM users ORDER BY id');
+    res.json({ ok: true, users });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ===== 数据分析 =====
 app.get('/api/analysis/revenue', (req, res) => {
@@ -618,30 +901,49 @@ function setupConsoleEncoding() {
 // ===== 地图自定义点位 =====
 app.get('/api/map-pins', (req, res) => {
   try {
-    const { province, city } = req.query;
+    const { province, city, district } = req.query;
+    const currentUserId = req.user?.id;
     // 按门店所在省市过滤（通过 store_id 关联 stores 表）
     let sql = 'SELECT p.* FROM map_pins p LEFT JOIN stores s ON p.store_id = s.id WHERE 1=1';
     const params = [];
-    if (province) { sql += ' AND (s.province=? OR p.store_id IS NULL)'; params.push(province); }
-    if (city)     { sql += ' AND (s.city=? OR p.store_id IS NULL)';     params.push(city); }
+    if (province) {
+      sql += " AND (s.province=? OR p.province=? OR ((p.province IS NULL OR p.province='') AND p.store_id IS NULL))";
+      params.push(province, province);
+    }
+    if (city) {
+      sql += " AND (s.city=? OR p.city=? OR ((p.city IS NULL OR p.city='') AND p.store_id IS NULL))";
+      params.push(city, city);
+    }
+    if (district) {
+      sql += " AND (s.district=? OR p.district=? OR ((p.district IS NULL OR p.district='') AND p.store_id IS NULL))";
+      params.push(district, district);
+    }
+    // visibility 过滤：public 所有人可见；private 仅创建者可见
+    sql += ' AND (p.visibility=\'public\' OR p.visibility IS NULL';
+    if (currentUserId != null) {
+      sql += ' OR (p.visibility=\'private\' AND p.user_id=?)';
+      params.push(currentUserId);
+    }
+    sql += ')';
     sql += ' ORDER BY p.id';
     res.json({ ok: true, data: db.queryAll(sql, params) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/map-pins', (req, res) => {
   try {
-    const { lng, lat, name, remark, color, radius, shape, store_id } = req.body;
+    const { lng, lat, name, remark, color, radius, shape, store_id, visibility, province, city, district } = req.body;
     if (lng == null || lat == null) return res.status(400).json({ error: '缺少经纬度' });
     const created_by = req.user?.display_name || req.user?.username || '';
-    const id = db.insert('INSERT INTO map_pins (lng,lat,name,remark,color,radius,shape,created_by,store_id) VALUES (?,?,?,?,?,?,?,?,?)',
-      [lng, lat, name||'', remark||'', color||'#F56C6C', radius||3000, shape||'circle', created_by, store_id||null]);
+    const user_id = req.user?.id || null;
+    const id = db.insert('INSERT INTO map_pins (lng,lat,name,remark,color,radius,shape,created_by,store_id,user_id,visibility,province,city,district) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      [lng, lat, name||'', remark||'', color||'#F56C6C', radius||3000, shape||'circle', created_by, store_id||null, user_id, visibility||'public', province||'', city||'', district||'']);
     db.save();
     res.json({ ok: true, id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/map-pins/:id', (req, res) => {
   try {
-    const allowed = ['name','remark','color','radius','shape','lat','lng'];
+    const allowed = ['name','remark','color','radius','shape','lat','lng','visibility','province','city','district'];
     const sets = [], params = [];
     allowed.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } });
     if (!sets.length) return res.status(400).json({ error: '无更新字段' });
@@ -655,6 +957,102 @@ app.put('/api/map-pins/:id', (req, res) => {
 app.delete('/api/map-pins/:id', (req, res) => {
   try {
     db.run('DELETE FROM map_pins WHERE id=?', [req.params.id]);
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/map-pins', (req, res) => {
+  try {
+    db.run('DELETE FROM map_pins');
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 将扁平评论列表转为两层树形（父评论 + 子回复）
+function buildCommentTree(rows) {
+  const parents = rows.filter(r => !r.parent_id);
+  const children = rows.filter(r => r.parent_id);
+  return parents.map(p => ({
+    ...p,
+    replies: children.filter(c => c.parent_id === p.id)
+  }));
+}
+
+// ===== 点位评论 =====
+app.get('/api/map-pins/:pinId/comments', (req, res) => {
+  try {
+    const rows = db.queryAll(
+      'SELECT * FROM pin_comments WHERE pin_id=? ORDER BY created_at ASC',
+      [req.params.pinId]
+    );
+    res.json({ ok: true, data: buildCommentTree(rows) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/map-pins/:pinId/comments', (req, res) => {
+  try {
+    const { content, parent_id, reply_to_name } = req.body;
+    if (!content || !content.trim()) return res.status(400).json({ error: '评论内容不能为空' });
+    const user_id = req.user?.id || null;
+    const username = req.user?.display_name || req.user?.username || '';
+    const id = db.insert(
+      'INSERT INTO pin_comments (pin_id, user_id, username, content, parent_id, reply_to_name) VALUES (?,?,?,?,?,?)',
+      [req.params.pinId, user_id, username, content.trim(), parent_id || null, reply_to_name || '']
+    );
+    db.save();
+    res.json({ ok: true, id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/map-pins/:pinId/comments/:commentId', (req, res) => {
+  try {
+    const comment = db.queryOne('SELECT * FROM pin_comments WHERE id=? AND pin_id=?', [req.params.commentId, req.params.pinId]);
+    if (!comment) return res.status(404).json({ error: '评论不存在' });
+    // 仅允许删除自己的评论
+    if (comment.user_id && comment.user_id !== (req.user?.id)) {
+      return res.status(403).json({ error: '只能删除自己的评论' });
+    }
+    // 级联删除子回复
+    db.run('DELETE FROM pin_comments WHERE parent_id=?', [req.params.commentId]);
+    db.run('DELETE FROM pin_comments WHERE id=?', [req.params.commentId]);
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== 门店评论 =====
+app.get('/api/stores/:storeId/comments', (req, res) => {
+  try {
+    const rows = db.queryAll(
+      'SELECT * FROM store_comments WHERE store_id=? ORDER BY created_at ASC',
+      [req.params.storeId]
+    );
+    res.json({ ok: true, data: buildCommentTree(rows) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/stores/:storeId/comments', (req, res) => {
+  try {
+    const { content, parent_id, reply_to_name } = req.body;
+    if (!content || !content.trim()) return res.status(400).json({ error: '评论内容不能为空' });
+    const user_id = req.user?.id || null;
+    const username = req.user?.display_name || req.user?.username || '';
+    const id = db.insert(
+      'INSERT INTO store_comments (store_id, user_id, username, content, parent_id, reply_to_name) VALUES (?,?,?,?,?,?)',
+      [req.params.storeId, user_id, username, content.trim(), parent_id || null, reply_to_name || '']
+    );
+    db.save();
+    res.json({ ok: true, id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/stores/:storeId/comments/:commentId', (req, res) => {
+  try {
+    const comment = db.queryOne('SELECT * FROM store_comments WHERE id=? AND store_id=?', [req.params.commentId, req.params.storeId]);
+    if (!comment) return res.status(404).json({ error: '评论不存在' });
+    if (comment.user_id && comment.user_id !== (req.user?.id)) {
+      return res.status(403).json({ error: '只能删除自己的评论' });
+    }
+    // 级联删除子回复
+    db.run('DELETE FROM store_comments WHERE parent_id=?', [req.params.commentId]);
+    db.run('DELETE FROM store_comments WHERE id=?', [req.params.commentId]);
     db.save();
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }

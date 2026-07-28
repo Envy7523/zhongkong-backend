@@ -2,112 +2,113 @@
   <LoginView v-if="isLoginPage" />
   <div v-else class="app-layout">
     <!-- 侧边栏 -->
-    <div :class="['app-sidebar', { 'is-collapsed': store.sidebarCollapsed }]">
+    <aside :class="['app-sidebar', { 'is-collapsed': store.sidebarCollapsed }]">
       <div class="sidebar-brand">
-        <span :class="['sidebar-brand-text', { collapsed: store.sidebarCollapsed }]">鹅太公中控</span>
+        <span class="sidebar-brand-mark">鹅</span>
+        <span class="sidebar-brand-copy">
+          <b>鹅太公中控</b>
+          <small>经营管理平台</small>
+        </span>
       </div>
-      <el-menu
-        :default-active="store.activeTabId"
-        :collapse="store.sidebarCollapsed"
-        background-color="#1e1e2f"
-        text-color="#a0a0b8"
-        active-text-color="#fff"
-        @select="handleMenuSelect"
-        style="border-right:none;height:calc(100vh - 56px);"
-      >
-        <el-menu-item index="dashboard">
-          <el-icon><DataAnalysis /></el-icon>
-          <template #title>数据概括</template>
-        </el-menu-item>
-
-        <!-- 数据分析 — 浮动弹出 -->
-        <el-menu-item
-          index="analysis-group"
-          @mouseenter="showPopup('analysis', $event)"
-          @mouseleave="scheduleHidePopup"
-          :class="{ 'is-popup-open': popupMenu.group === 'analysis', 'is-active': store.activeTabId?.startsWith('analysis-') }"
+      <div class="sidebar-navigation">
+        <el-menu
+          :default-active="sidebarActive"
+          :collapse="store.sidebarCollapsed"
+          background-color="transparent"
+          text-color="#93a0b8"
+          active-text-color="#fff"
+          @select="handleMenuSelect"
         >
-          <el-icon><TrendCharts /></el-icon>
-          <template #title>
-            <span>数据分析</span>
-            <span class="nav-arrow" v-show="!store.sidebarCollapsed">▸</span>
-          </template>
-        </el-menu-item>
+          <div class="sidebar-section-label">总览</div>
+          <el-menu-item index="dashboard">
+            <el-icon><DataAnalysis /></el-icon>
+            <template #title><span>数据概括</span><small class="nav-badge">HOME</small></template>
+          </el-menu-item>
 
-        <el-menu-item index="api-config">
-          <el-icon><Link /></el-icon>
-          <template #title>中控绑定</template>
-        </el-menu-item>
+          <div class="sidebar-section-label">核心业务</div>
+          <el-menu-item
+            index="analysis-group"
+            @mouseenter="showPopup('analysis', $event)"
+            @mouseleave="scheduleHidePopup"
+            :class="{ 'is-popup-open': popupMenu.group === 'analysis', 'is-active': store.activeTabId?.startsWith('analysis-') }"
+          >
+            <el-icon><TrendCharts /></el-icon>
+            <template #title><span>数据分析</span><span class="nav-arrow">›</span></template>
+          </el-menu-item>
+          <el-menu-item
+            index="store-management-group"
+            @mouseenter="showPopup('store-management', $event)"
+            @mouseleave="scheduleHidePopup"
+            :class="{ 'is-popup-open': popupMenu.group === 'store-management', 'is-active': store.activeTabId?.startsWith('store-management-') }"
+          >
+            <el-icon><Shop /></el-icon>
+            <template #title><span>门店管理</span><span class="nav-arrow">›</span></template>
+          </el-menu-item>
+          <el-menu-item
+            index="menu-management-group"
+            @mouseenter="showPopup('menu-management', $event)"
+            @mouseleave="scheduleHidePopup"
+            :class="{ 'is-popup-open': popupMenu.group === 'menu-management', 'is-active': store.activeTabId?.startsWith('menu-management-') }"
+          >
+            <el-icon><DishDot /></el-icon>
+            <template #title><span>菜品管理</span><span class="nav-arrow">›</span></template>
+          </el-menu-item>
+          <el-menu-item
+            index="cost-accounting-group"
+            @mouseenter="showPopup('cost-accounting', $event)"
+            @mouseleave="scheduleHidePopup"
+            :class="{ 'is-popup-open': popupMenu.group === 'cost-accounting', 'is-active': store.activeTabId?.startsWith('cost-accounting-') }"
+          >
+            <el-icon><Money /></el-icon>
+            <template #title><span>成本核算</span><span class="nav-arrow">›</span></template>
+          </el-menu-item>
 
-        <el-menu-item index="ai-assistant">
-          <el-icon><ChatDotRound /></el-icon>
-          <template #title>AI助手</template>
-        </el-menu-item>
+          <div class="sidebar-section-label">运营工具</div>
+          <el-menu-item index="collab-list">
+            <el-icon><List /></el-icon>
+            <template #title><span>协同事项</span><small class="nav-badge new">NEW</small></template>
+          </el-menu-item>
+          <el-menu-item index="data-import">
+            <el-icon><Download /></el-icon>
+            <template #title>数据导入</template>
+          </el-menu-item>
+          <el-menu-item index="pipeline">
+            <el-icon><Upload /></el-icon>
+            <template #title>一键推送</template>
+          </el-menu-item>
+          <el-menu-item index="ai-assistant">
+            <el-icon><ChatDotRound /></el-icon>
+            <template #title><span>AI 助手</span><small class="nav-badge beta">BETA</small></template>
+          </el-menu-item>
 
-        <!-- 门店管理 — 浮动弹出 -->
-        <el-menu-item
-          index="store-management-group"
-          @mouseenter="showPopup('store-management', $event)"
-          @mouseleave="scheduleHidePopup"
-          :class="{ 'is-popup-open': popupMenu.group === 'store-management', 'is-active': store.activeTabId?.startsWith('store-management-') }"
-        >
-          <el-icon><Shop /></el-icon>
-          <template #title>
-            <span>门店管理</span>
-            <span class="nav-arrow" v-show="!store.sidebarCollapsed">▸</span>
-          </template>
-        </el-menu-item>
+          <div class="sidebar-section-label">系统管理</div>
+          <el-menu-item index="api-config">
+            <el-icon><Link /></el-icon>
+            <template #title>中控绑定</template>
+          </el-menu-item>
+          <el-menu-item index="user-management">
+            <el-icon><User /></el-icon>
+            <template #title>人员管理</template>
+          </el-menu-item>
+          <el-menu-item index="settings">
+            <el-icon><Setting /></el-icon>
+            <template #title>网页设置</template>
+          </el-menu-item>
+        </el-menu>
+      </div>
 
-        <!-- 菜品管理 — 浮动弹出 -->
-        <el-menu-item
-          index="menu-management-group"
-          @mouseenter="showPopup('menu-management', $event)"
-          @mouseleave="scheduleHidePopup"
-          :class="{ 'is-popup-open': popupMenu.group === 'menu-management', 'is-active': store.activeTabId?.startsWith('menu-management-') }"
-        >
-          <el-icon><DishDot /></el-icon>
-          <template #title>
-            <span>菜品管理</span>
-            <span class="nav-arrow" v-show="!store.sidebarCollapsed">▸</span>
-          </template>
-        </el-menu-item>
-
-        <el-menu-item index="user-management">
-          <el-icon><User /></el-icon>
-          <template #title>人员管理</template>
-        </el-menu-item>
-
-        <!-- 成本核算 — 浮动弹出 -->
-        <el-menu-item
-          index="cost-accounting-group"
-          @mouseenter="showPopup('cost-accounting', $event)"
-          @mouseleave="scheduleHidePopup"
-          :class="{ 'is-popup-open': popupMenu.group === 'cost-accounting', 'is-active': store.activeTabId?.startsWith('cost-accounting-') }"
-        >
-          <el-icon><Money /></el-icon>
-          <template #title>
-            <span>成本核算</span>
-            <span class="nav-arrow" v-show="!store.sidebarCollapsed">▸</span>
-          </template>
-        </el-menu-item>
-
-        <el-menu-item index="data-import">
-          <el-icon><Download /></el-icon>
-          <template #title>数据导入</template>
-        </el-menu-item>
-
-        <el-menu-item index="pipeline">
-          <el-icon><Upload /></el-icon>
-          <template #title>一键推送</template>
-        </el-menu-item>
-
-        <el-menu-item index="settings">
-          <el-icon><Setting /></el-icon>
-          <template #title>网页设置</template>
-        </el-menu-item>
-      </el-menu>
-      <div :class="['sidebar-footer', { collapsed: store.sidebarCollapsed }]">v0.4.0</div>
-    </div>
+      <div class="sidebar-account" v-if="auth.user">
+        <img v-if="auth.user.avatar_url" :src="auth.user.avatar_url" class="sidebar-avatar" alt="" />
+        <span v-else class="sidebar-avatar fallback">{{ userInitial }}</span>
+        <span class="sidebar-account-copy">
+          <b>{{ auth.user.display_name || auth.user.username }}</b>
+          <small>{{ auth.user.role || '系统成员' }} · v0.4.0</small>
+        </span>
+        <el-button class="sidebar-logout" text circle title="退出登录" @click="handleLogout">
+          <el-icon><SwitchButton /></el-icon>
+        </el-button>
+      </div>
+    </aside>
 
     <!-- 浮动弹出菜单面板 -->
     <Teleport to="body">
@@ -148,11 +149,6 @@
         </el-button>
         <span class="topbar-title">{{ store.activeTab?.title || '数据概括' }}</span>
         <span :class="['topbar-status', store.serverOnline ? 'online' : 'offline']">{{ store.serverStatusText }}</span>
-        <span class="topbar-user" v-if="auth.user">
-          <el-icon><User /></el-icon>
-          {{ auth.user.display_name || auth.user.username }}
-          <el-button text size="small" type="danger" @click="handleLogout" style="margin-left:8px;">登出</el-button>
-        </span>
       </div>
 
       <div class="tab-bar-wrapper" v-if="store.tabs.length > 0">
@@ -174,7 +170,8 @@
       </div>
 
       <div class="content-area">
-        <component :is="currentView" :key="store.activeTabId" />
+        <router-view v-if="isCollabRoute" />
+        <component v-else :is="currentView" :key="store.activeTabId" />
       </div>
     </div>
   </div>
@@ -318,6 +315,15 @@ const auth = useAuthStore()
 const currentView = shallowRef(DashboardView)
 
 const isLoginPage = computed(() => router.currentRoute.value.path === '/login')
+const isCollabRoute = computed(() => router.currentRoute.value.path.startsWith('/collab'))
+const sidebarActive = computed(() => {
+  if (isCollabRoute.value) return 'collab-list'
+  return store.activeTabId
+})
+const userInitial = computed(() => {
+  const name = auth.user?.display_name || auth.user?.username || '用'
+  return String(name).trim().slice(0, 1).toUpperCase()
+})
 
 function handleLogout() {
   auth.logout()
@@ -339,12 +345,11 @@ const popupStyle = computed(() => ({
 
 function showPopup(group, event) {
   clearTimeout(hideTimer)
-  const sidebarWidth = store.sidebarCollapsed ? 64 : 220
   const rect = event.currentTarget.getBoundingClientRect()
   popupMenu.group = group
   popupMenu.sections = POPUP_CONFIG[group]?.sections || []
-  popupMenu.top = rect.top
-  popupMenu.left = sidebarWidth + 6
+  popupMenu.top = Math.min(rect.top - 4, window.innerHeight - 240)
+  popupMenu.left = rect.right + 10
   popupMenu.visible = true
 }
 
@@ -368,6 +373,10 @@ function selectPopupItem(index) {
 }
 
 function handleMenuSelect(index) {
+  if (index === 'collab-list') {
+    router.push('/collab/list')
+    return
+  }
   // 跳过分组菜单项
   if (index.endsWith('-group')) return
   store.openTabFromId(index)
@@ -396,86 +405,109 @@ onMounted(async () => {
 </script>
 
 <style>
-/* ===== 浮动弹出面板（白色，与深色侧边栏区分） ===== */
+/* ===== 侧边栏浮动子菜单 ===== */
 .nav-popup-panel {
   position: fixed;
-  min-width: 320px;
-  max-width: 480px;
+  min-width: 338px;
+  max-width: 420px;
+  padding: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(225,229,237,.95);
+  border-radius: 14px;
   background: #fff;
-  border-radius: 10px;
-  box-shadow: 0 8px 28px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06);
-  padding: 8px 0;
+  box-shadow: 0 18px 45px rgba(23,34,56,.16), 0 4px 12px rgba(23,34,56,.07);
   z-index: 2000;
   opacity: 0;
   visibility: hidden;
-  transform: translateX(-6px);
-  transition: opacity 0.18s ease, visibility 0.18s ease, transform 0.18s ease;
+  transform: translateX(-7px) scale(.985);
+  transform-origin: left top;
+  transition: opacity .2s ease, visibility .2s ease, transform .24s cubic-bezier(.22,.8,.25,1);
   pointer-events: none;
 }
-
 .nav-popup-panel.visible {
   opacity: 1;
   visibility: visible;
-  transform: translateX(0);
+  transform: translateX(0) scale(1);
   pointer-events: auto;
 }
-
 .popup-section {
   display: grid;
-  grid-template-columns: 105px repeat(3, 1fr);
-  gap: 0 6px;
-  align-items: center;
-  padding: 2px 14px;
+  grid-template-columns: repeat(2, minmax(145px, 1fr));
+  gap: 5px;
+  padding: 7px;
 }
-
 .popup-section + .popup-section {
-  border-top: 1px solid #f0f0f0;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid #edf0f4;
 }
-
 .popup-section-title {
-  grid-column: 1;
-  grid-row: 1 / 100;
-  padding: 4px 0;
-  font-size: 12px;
-  font-weight: 700;
-  color: #909399;
+  grid-column: 1 / -1;
+  padding: 0 6px 5px;
+  color: #9aa3b2;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .09em;
   white-space: nowrap;
-  align-self: start;
 }
-
 .popup-item {
+  position: relative;
   display: flex;
   align-items: center;
-  padding: 6px 10px;
-  color: #606266;
+  min-height: 41px;
+  padding: 0 10px 0 24px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: #596579;
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
-  border-radius: 4px;
-  transition: all 0.15s ease;
+  transition: color .16s ease, background-color .16s ease, border-color .16s ease, transform .16s ease;
 }
-
+.popup-item::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #c0c7d2;
+  transition: background-color .16s ease, box-shadow .16s ease;
+}
 .popup-item:hover {
-  background: #ecf5ff;
-  color: #409EFF;
+  border-color: #e4eaff;
+  background: #f5f7ff;
+  color: #3f62c9;
+  transform: translateX(1px);
 }
-
 .popup-item.active {
-  background: #ecf5ff;
-  color: #409EFF;
-  font-weight: 600;
+  border-color: #dce5ff;
+  background: #eef3ff;
+  color: #3157c2;
+  font-weight: 650;
+}
+.popup-item.active::before {
+  background: #4f7cff;
+  box-shadow: 0 0 0 3px rgba(79,124,255,.12);
 }
 
 /* 侧边栏箭头 */
 .nav-arrow {
-  font-size: 11px;
   margin-left: auto;
-  opacity: 0.4;
-  transition: transform 0.2s;
+  color: #5f6d85;
+  font-size: 17px;
+  font-weight: 300;
+  opacity: .8;
+  transition: color .18s ease, transform .2s ease;
+}
+.el-menu-item.is-popup-open .nav-arrow {
+  color: #9db4ff;
+  transform: translateX(3px);
 }
 
-.el-menu-item.is-popup-open .nav-arrow {
-  opacity: 1;
-  transform: translateX(2px);
+@media (prefers-reduced-motion: reduce) {
+  .nav-popup-panel,
+  .popup-item,
+  .nav-arrow { transition: none; }
 }
 </style>

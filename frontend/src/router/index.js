@@ -27,6 +27,20 @@ const routes = [
     path: '/cost-accounting',
     redirect: '/cost-accounting/daily',
   },
+  {
+    path: '/collab',
+    redirect: '/collab/list',
+  },
+  {
+    path: '/collab/list',
+    name: 'collab-list',
+    component: () => import('@/views/collab/CollabList.vue'),
+  },
+  {
+    path: '/collab/:id',
+    name: 'collab-detail',
+    component: () => import('@/views/collab/CollabDetail.vue'),
+  },
 ]
 
 const router = createRouter({
