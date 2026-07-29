@@ -37,9 +37,13 @@ const routes = [
     component: () => import('@/views/collab/CollabList.vue'),
   },
   {
-    path: '/collab/:id',
+    path: '/collab/:id(\\d+)',
     name: 'collab-detail',
     component: () => import('@/views/collab/CollabDetail.vue'),
+  },
+  {
+    path: '/collab/:pathMatch(.*)*',
+    redirect: '/collab/list',
   },
 ]
 

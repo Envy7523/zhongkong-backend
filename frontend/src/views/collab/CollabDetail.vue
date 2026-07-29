@@ -1,501 +1,196 @@
 <template>
-  <div class="collab-detail-page" v-loading="loading">
-    <!-- 顶部导航 -->
-    <div class="detail-topbar">
-      <el-button text @click="$router.push('/collab/list')">
-        <el-icon><ArrowLeft /></el-icon> 返回列表
-      </el-button>
-    </div>
+  <main v-loading="loading" class="collab-detail-page">
+    <el-button text :icon="ArrowLeft" class="back-button" @click="router.push('/collab/list')">返回协同事项</el-button>
 
     <template v-if="issue">
-      <!-- 事项信息区 -->
-      <div class="info-card">
-        <div class="info-header">
-          <h2>{{ issue.title }}</h2>
-          <div class="info-actions">
-            <el-tag :type="statusTagType(issue.status_display || issue.status)" size="large" effect="dark">
-              {{ issue.status_display || issue.status }}
-            </el-tag>
-            <!-- 推进进度按钮（仅发起人可见） -->
-            <template v-if="isCreator && canAdvance.length">
-              <el-button
-                v-for="opt in canAdvance"
-                :key="opt.status"
-                :type="opt.type"
-                @click="openAdvanceDialog(opt.status)"
-              >
-                {{ opt.label }}
-              </el-button>
-            </template>
-          </div>
+      <section class="detail-hero">
+        <div class="hero-copy">
+          <span class="issue-code">{{ issue.issue_no }} · {{ issue.visibility === 'internal' ? '内部事项' : '公开事项' }}</span>
+          <h1>{{ issue.title }}</h1>
+          <p>{{ issue.description || '暂无项目说明' }}</p>
         </div>
-
-        <div class="info-grid">
-          <div class="info-item">
-            <span class="info-label">事项编号</span>
-            <span class="info-value">{{ issue.issue_no }}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">发起人</span>
-            <span class="info-value">👤 {{ issue.created_by_name || '—' }}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">参与人</span>
-            <span class="info-value">{{ issue.participants_name && issue.participants_name.length ? issue.participants_name.join('、') : '未指定' }}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">创建时间</span>
-            <span class="info-value">{{ issue.created_at || '—' }}</span>
-          </div>
-          <div class="info-item" v-if="issue.start_time">
-            <span class="info-label">开始时间</span>
-            <span class="info-value">{{ issue.start_time }}</span>
-          </div>
-          <div class="info-item" v-if="issue.deadline">
-            <span class="info-label">截止日期</span>
-            <span class="info-value" :class="{ overdue: isOverdue }">{{ issue.deadline }}</span>
-          </div>
-          <div class="info-item" v-if="issue.status === '已完成'">
-            <span class="info-label">完成时间</span>
-            <span class="info-value">{{ issue.completed_at || '—' }}</span>
-          </div>
+        <div class="hero-actions">
+          <el-tag round :class="{ 'status-progress': isCreator && issue.status === '进行中' }" :type="tag(issue.status)" @click="issue.status === '进行中' && isCreator && openProgress()">{{ issue.status }}</el-tag>
         </div>
+      </section>
 
-        <div v-if="issue.description" class="info-desc">
-          <span class="info-label">事项描述</span>
-          <pre class="desc-text">{{ issue.description }}</pre>
-        </div>
+      <section class="detail-facts">
+        <div><small>发起人</small><b>{{ issue.created_by_name }}</b></div>
+        <div><small>协同成员</small><b>{{ issue.participants_name?.join('、') || '未指定' }}</b><el-button v-if="isCreator" text class="fact-edit" @click="openMembers">编辑</el-button></div>
+        <div><small>结束时间</small><b>{{ issue.deadline || '无（手动结项）' }}</b><el-button v-if="isCreator && !ended" text class="fact-edit" @click="openDeadline">编辑</el-button><el-button v-else-if="isCreator" text class="fact-edit" @click="openExtension">重启延期</el-button></div>
+        <div><small>完成提报</small><b>{{ completionText }}</b><el-button v-if="isCreator && canArchive" text class="fact-edit" @click="archive">归档</el-button></div>
+      </section>
 
-        <div v-if="issue.status === '已完成' && issue.completion_note" class="info-desc completion-note">
-          <span class="info-label">✅ 完成说明</span>
-          <pre class="desc-text">{{ issue.completion_note }}</pre>
-        </div>
-      </div>
-
-      <!-- 跟进时间线 -->
-      <div class="timeline-section">
-        <h3>📝 跟进时间线 <span class="reply-count">({{ replies.length }} 条)</span></h3>
-
-        <el-timeline v-if="replies.length">
-          <el-timeline-item
-            v-for="r in replies"
-            :key="r.id"
-            :timestamp="r.created_at"
-            placement="top"
-          >
-            <div class="reply-card">
-              <div class="reply-user">👤 {{ r.user_name || `用户 ${r.user_id}` }}</div>
-              <div class="reply-content">{{ r.content }}</div>
-              <div v-if="r.images && r.images.length" class="reply-images">
-                <el-image
-                  v-for="(img, i) in r.images"
-                  :key="i"
-                  :src="img"
-                  fit="cover"
-                  class="reply-thumb"
-                  :preview-src-list="r.images"
-                  :initial-index="i"
-                />
+      <section class="process-panel">
+        <header class="panel-heading"><div><span>PROJECT STREAM</span><h2>项目处理过程</h2></div><small>{{ replies.length }} 条动态</small></header>
+        <div v-if="replies.length" class="timeline">
+          <article v-for="reply in rootReplies" :key="reply.id" :class="['timeline-item', mine(reply) ? 'initiator' : 'member']">
+            <div class="timeline-dot"></div>
+            <div :class="['reply-card', `tone-${toneForUser(reply.user_id)}`]">
+              <header><div class="reply-person"><el-avatar :size="30">{{ firstChar(reply.user_name) }}</el-avatar><b>{{ reply.user_name }}</b><span>{{ mine(reply) ? '发起人' : '参与成员' }}</span></div><time>{{ date(reply.created_at) }} <i v-if="reply.edited_at">已编辑</i></time></header>
+              <div v-if="reply.parent_id" :class="['reply-reference', `tone-${toneForUser(reply.reply_to_user_id)}`]"><span>回复 @{{ reply.reply_to_name || '成员' }}</span><em>{{ parentSnippet(reply.parent_id) }}</em></div>
+              <p>{{ reply.content }}</p><small v-if="reply.member_left_at" class="member-left">该成员已在 {{ reply.member_left_at }} 退出项目</small>
+              <div v-if="reply.images?.length" class="reply-images"><template v-for="(attachment, index) in reply.images" :key="attachmentKey(attachment, index)"><img v-if="isImage(attachment)" :src="attachmentData(attachment)" alt="动态图片" @click="previewImage(attachmentData(attachment))" /><a v-else class="file-card" :href="attachmentData(attachment)" :download="attachmentName(attachment)">▣ <span>{{ attachmentName(attachment) }}</span><small>下载</small></a></template></div>
+              <footer class="reply-actions">
+                <span v-if="reply.reply_type === 'completion' && reply.completion_status === 'approved'" class="review approved">✓ 审批通过</span>
+                <span v-else-if="reply.reply_type === 'completion' && reply.completion_status === 'rejected'" class="review rejected">× 审批不通过</span>
+                <template v-else-if="reply.reply_type === 'completion' && reply.completion_status === 'pending' && isCreator"><el-button text type="success" @click="review(reply, true)">通过</el-button><el-button text type="danger" @click="review(reply, false)">驳回</el-button></template>
+                <el-button v-if="isOwn(reply)" text @click="editReply(reply)">编辑</el-button><el-button v-if="canReplyTo(reply)" text @click="replyTo(reply)">回复</el-button>
+              </footer>
+              <div v-if="threadReplies(reply.id).length" class="thread-replies">
+                <article v-for="child in threadReplies(reply.id)" :key="child.id" :class="['thread-item', `tone-${toneForUser(child.user_id)}`]">
+                  <header><div class="reply-person"><el-avatar :size="26">{{ firstChar(child.user_name) }}</el-avatar><b>{{ child.user_name }}</b><span>{{ mine(child) ? '发起人' : '参与成员' }}</span></div><time>{{ date(child.created_at) }} <i v-if="child.edited_at">已编辑</i></time></header>
+                  <div :class="['reply-reference', `tone-${toneForUser(child.reply_to_user_id)}`]"><span>回复 @{{ child.reply_to_name || '成员' }}</span><em>{{ parentSnippet(child.parent_id) }}</em></div>
+                  <p>{{ child.content }}</p><small v-if="child.member_left_at" class="member-left">该成员已在 {{ child.member_left_at }} 退出项目</small>
+                  <div v-if="child.images?.length" class="reply-images"><template v-for="(attachment, index) in child.images" :key="attachmentKey(attachment, index)"><img v-if="isImage(attachment)" :src="attachmentData(attachment)" alt="动态图片" @click="previewImage(attachmentData(attachment))" /><a v-else class="file-card" :href="attachmentData(attachment)" :download="attachmentName(attachment)">▣ <span>{{ attachmentName(attachment) }}</span><small>下载</small></a></template></div>
+                  <footer class="reply-actions"><span v-if="child.reply_type === 'completion' && child.completion_status === 'approved'" class="review approved">✓ 审批通过</span><span v-else-if="child.reply_type === 'completion' && child.completion_status === 'rejected'" class="review rejected">× 审批不通过</span><template v-else-if="child.reply_type === 'completion' && child.completion_status === 'pending' && isCreator"><el-button text type="success" @click="review(child, true)">通过</el-button><el-button text type="danger" @click="review(child, false)">驳回</el-button></template><el-button v-if="isOwn(child)" text @click="editReply(child)">编辑</el-button><el-button v-if="canReplyTo(child)" text @click="replyTo(child)">回复</el-button></footer>
+                </article>
               </div>
             </div>
-          </el-timeline-item>
-        </el-timeline>
-        <el-empty v-else description="暂无跟进记录" :image-size="60" />
-      </div>
+          </article>
+        </div>
+        <el-empty v-else :image-size="72" description="还没有动态，发起第一条更新吧" />
+      </section>
 
-      <!-- 回复输入区 -->
-      <div v-if="issue.status === '进行中' || issue.status === '待开始'" class="reply-input-section">
-        <h3>💬 添加回复</h3>
-        <div class="reply-images-preview" v-if="uploadImages.length">
-          <div v-for="(img, i) in uploadImages" :key="i" class="img-preview-wrap">
-            <img :src="img" />
-            <span class="remove-img" @click="removeImage(i)">✕</span>
-          </div>
-        </div>
-        <div class="reply-input-row">
-          <el-input
-            v-model="replyContent"
-            type="textarea"
-            :rows="3"
-            placeholder="输入回复内容..."
-            maxlength="2000"
-            show-word-limit
-          />
-          <div class="reply-actions">
-            <label class="upload-btn">
-              <el-icon><Picture /></el-icon> 上传图片
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                :disabled="uploadImages.length >= 3"
-                @change="onFileChange"
-                style="display:none"
-              />
-            </label>
-            <span class="upload-hint">最多3张</span>
-            <el-button type="primary" :loading="replying" @click="handleReply" :disabled="!replyContent.trim()">
-              发送回复
-            </el-button>
-          </div>
-        </div>
-      </div>
-      <div v-else class="reply-closed">
-        <el-alert title="该事项已结束，不再接收新回复" type="info" :closable="false" show-icon />
-      </div>
+      <section v-if="canReply" v-show="composerOpen" ref="composerEl" class="composer-panel floating-composer">
+        <header><div><h2>{{ editingReply ? '编辑动态' : target ? `回复 ${target.user_name}` : '发布动态' }}</h2><small>{{ editingReply ? '保存后将标注“已编辑”' : target ? '回复将附在对应动态下方' : '记录项目进展，与协作成员保持同步' }}</small></div><div class="composer-header-actions"><el-button v-if="editingReply" text @click="cancelEdit">取消编辑</el-button><el-button v-else-if="target" text @click="target = null">取消回复</el-button><el-button text @click="composerOpen = false">收起</el-button></div></header>
+        <div v-if="target" class="reply-target"><el-avatar :size="28">{{ firstChar(target.user_name) }}</el-avatar><div><b>回复 @{{ target.user_name }}</b><span>{{ shorten(target.content) }}</span></div></div>
+        <el-radio-group v-if="!editingReply" v-model="type" class="post-type"><el-radio-button v-if="replyingCreator" label="clarification">确认 / 提问</el-radio-button><template v-else><el-radio-button label="progress">跟进</el-radio-button><el-radio-button v-if="isCreator" label="next_step">下一步</el-radio-button><el-radio-button v-else label="completion">提交完成</el-radio-button></template></el-radio-group>
+        <div class="wechat-composer"><el-input v-model="content" type="textarea" :rows="4" resize="none" :placeholder="target ? '输入回复…（可直接粘贴截图）' : '请输入动态内容…（支持 Ctrl+V 粘贴截图）'" @paste="handlePaste" /><div v-if="images.length" class="upload-preview"><div v-for="(attachment, index) in images" :key="attachmentKey(attachment, index)" :class="['preview-item', { file: !isImage(attachment) }]"><img v-if="isImage(attachment)" :src="attachmentData(attachment)" alt="待上传图片" /><span v-else>▣ {{ attachmentName(attachment) }}</span><button @click="images.splice(index, 1)">×</button></div></div></div>
+        <footer class="composer-tools">
+          <button class="tool-icon emoji-tool" type="button" title="表情" @click="emojiOpen = !emojiOpen">☺</button><label class="image-upload" title="添加附件"><input type="file" multiple @change="handleImages" /><span class="attachment-mark"><el-icon><Folder /></el-icon></span></label>
+          <div v-if="emojiOpen" class="emoji-picker"><button v-for="emoji in emojis" :key="emoji" :title="emoji" @click="content += emoji; emojiOpen = false">{{ emoji }}</button></div>
+          <el-button type="primary" :disabled="!content.trim() && !images.length" @click="send">{{ editingReply ? '保存修改' : '发布动态' }}</el-button>
+        </footer>
+      </section>
+      <el-alert v-else title="该事项已结束或你没有参与权限，不能继续发布动态。" type="info" :closable="false" />
+      <button v-if="canReply && !composerOpen" class="quick-follow" type="button" @click="quickFollow"><span>＋</span> 快速跟进</button>
     </template>
 
-    <!-- 推进进度弹窗 -->
-    <el-dialog v-model="advanceDialog.visible" :title="advanceDialog.title" width="500px" :close-on-click-modal="false">
-      <el-form :model="advanceForm" :rules="advanceRules" ref="advanceFormRef" label-width="90px">
-        <el-form-item label="推进说明" prop="note">
-          <el-input
-            v-model="advanceForm.note"
-            type="textarea"
-            :rows="4"
-            :placeholder="advanceDialog.placeholder"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="advanceDialog.visible = false">取消</el-button>
-        <el-button :type="advanceDialog.btnType" :loading="advancing" @click="handleAdvance">
-          {{ advanceDialog.btnText }}
-        </el-button>
-      </template>
+    <el-dialog v-model="progressOpen" class="progress-dialog" width="min(480px, calc(100vw - 32px))" :show-close="false">
+      <template #header><div class="dialog-heading"><span>PROJECT STATUS</span><h2>更新项目进度</h2><p>选择当前状态并留下本次变更说明，系统会记录到项目流程中。</p></div></template>
+      <div class="status-options"><button v-for="option in statusOptions" :key="option.value" :class="{ active: progress.status === option.value, [option.tone]: true }" @click="progress.status = option.value"><b>{{ option.label }}</b><small>{{ option.hint }}</small></button></div>
+      <el-input v-model="progress.note" type="textarea" :rows="4" placeholder="例如：物料清单已确认，进入门店验收阶段" />
+      <template #footer><el-button @click="progressOpen = false">取消</el-button><el-button type="primary" :disabled="!progress.status || !progress.note.trim()" @click="saveProgress">确认更新</el-button></template>
     </el-dialog>
-  </div>
+    <el-dialog v-model="extendOpen" title="发起项目延期" width="min(440px, calc(100vw - 32px))"><el-date-picker v-model="extension.deadline" value-format="YYYY-MM-DD" type="date" style="width:100%" /><el-input v-model="extension.reason" type="textarea" :rows="4" placeholder="请说明延期原因" style="margin-top:14px" /><template #footer><el-button @click="extendOpen = false">取消</el-button><el-button type="primary" @click="extend">确认延期</el-button></template></el-dialog>
+    <el-dialog v-model="deadlineOpen" title="修改结束时间" width="min(400px, calc(100vw - 32px))"><el-date-picker v-model="deadlineForm" value-format="YYYY-MM-DD" clearable type="date" style="width:100%" placeholder="不设置则手动结项" /><template #footer><el-button @click="deadlineOpen = false">取消</el-button><el-button type="primary" @click="saveDeadline">保存</el-button></template></el-dialog>
+    <el-dialog v-model="membersOpen" title="编辑参与成员" width="min(480px, calc(100vw - 32px))"><p class="member-dialog-tip">发起人默认参与项目，无需选择。移除成员后，其既有动态会保留并标注退出时间。</p><el-select v-model="memberForm" multiple filterable style="width:100%" placeholder="选择参与成员"><el-option v-for="user in selectableUsers" :key="user.id" :label="user.display_name || user.username" :value="user.id" /></el-select><template #footer><el-button @click="membersOpen = false">取消</el-button><el-button type="primary" @click="saveMembers">保存成员</el-button></template></el-dialog>
+    <el-image-viewer v-if="preview" :url-list="[preview]" @close="preview = ''" />
+  </main>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { computed, reactive, ref, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import { ArrowLeft, Picture } from '@element-plus/icons-vue'
-import { getCollabIssue, replyCollabIssue, advanceCollabIssue } from '@/api'
+import { ArrowLeft, Folder } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { advanceCollabIssue, archiveCollabIssue, editCollabReply, extendCollabIssue, getCollabIssue, getCollabUsers, replyCollabIssue, reviewCollabCompletion, updateCollabDeadline, updateCollabParticipants } from '@/api'
+import { useAuthStore } from '@/stores/auth'
 
-const route = useRoute()
-const router = useRouter()
-
-const currentUserId = computed(() => {
-  try {
-    const token = localStorage.getItem('etaigong_token')
-    if (!token) return null
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.id
-  } catch { return null }
+const route = useRoute(), router = useRouter(), auth = useAuthStore()
+const loading = ref(false), issue = ref(), replies = ref([]), content = ref(''), type = ref('progress'), target = ref(), images = ref([]), preview = ref(''), emojiOpen = ref(false), composerEl = ref(), composerOpen = ref(false), editingReply = ref()
+const progressOpen = ref(false), extendOpen = ref(false), deadlineOpen = ref(false), deadlineForm = ref(''), membersOpen = ref(false), memberForm = ref([]), userList = ref([]), progress = reactive({ status: '', note: '' }), extension = reactive({ deadline: '', reason: '' })
+const emojis = ['😀', '😁', '😄', '😂', '🤣', '😊', '😉', '😍', '🥳', '🤝', '👍', '👏', '🙏', '💪', '✅', '🎯', '🔥', '❗', '❓', '⚠️', '❤️', '💯', '🚀', '📌', '💡', '📣', '📝', '📎', '⏰', '🎉', '😎', '🙌']
+const statusOptions = [{ value: '待开始', label: '未开始', hint: '尚未进入执行', tone: 'slate' }, { value: '进行中', label: '进行中', hint: '正在推进处理', tone: 'blue' }, { value: '已完成', label: '已完成', hint: '已达到预期结果', tone: 'green' }, { value: '未完成', label: '未完成', hint: '本次无法完成', tone: 'red' }]
+const uid = computed(() => Number(auth.user?.id))
+const isCreator = computed(() => uid.value === Number(issue.value?.created_by))
+const ended = computed(() => ['已完成', '未完成', '已终止'].includes(issue.value?.status))
+const canReply = computed(() => !ended.value && (isCreator.value || issue.value?.participants?.map(Number).includes(uid.value) || String(auth.user?.role || '').includes('管理员')))
+const participantIds = computed(() => (issue.value?.participants || []).map(Number))
+const selectableUsers = computed(() => userList.value.filter(user => Number(user.id) !== uid.value))
+const canArchive = computed(() => {
+  if (issue.value?.status !== '已完成' || issue.value?.archived_at) return false
+  return participantIds.value.every(id => replies.value.some(reply => Number(reply.user_id) === id && reply.reply_type === 'completion' && reply.completion_status === 'approved'))
 })
-
-const loading = ref(true)
-const issue = ref(null)
-const replies = ref([])
-
-// 发起人判断
-const isCreator = computed(() => currentUserId.value === issue.value?.created_by)
-
-// 可推进的状态选项
-const canAdvance = computed(() => {
-  if (!issue.value) return []
-  const status = issue.value.status_display || issue.value.status
-  const opts = {
-    '待开始': [
-      { status: '进行中', label: '▶ 开始进行', type: 'primary' },
-      { status: '已完成', label: '✅ 直接完成', type: 'success' },
-    ],
-    '进行中': [
-      { status: '已完成', label: '✅ 完成事项', type: 'success' },
-      { status: '未完成', label: '❌ 标记未完成', type: 'danger' },
-    ],
-    '未完成': [
-      { status: '已完成', label: '✅ 标记为已完成', type: 'success' },
-    ],
-    '已完成': [],
+const rootReplies = computed(() => replies.value.filter(reply => !reply.parent_id || !isValidReplyLink(reply)))
+const replyingCreator = computed(() => !!target.value && Number(target.value.user_id) === Number(issue.value?.created_by))
+const completionText = computed(() => { const items = replies.value.filter(item => item.reply_type === 'completion'); return items.length ? `${items.filter(item => item.completion_status === 'approved').length} 已通过 / ${items.length} 提报` : '暂无提报' })
+function mine(reply) { return Number(reply.user_id) === Number(issue.value?.created_by) }
+function isOwn(reply) { return Number(reply.user_id) === uid.value }
+function toneForUser(userId) {
+  if (Number(userId) === Number(issue.value?.created_by)) return 'initiator'
+  const index = participantIds.value.indexOf(Number(userId))
+  return index < 0 ? 0 : index % 6
+}
+function canReplyTo(reply) {
+  if (!canReply.value || Number(reply.user_id) === uid.value) return false
+  if (reply.member_left_at) return false
+  const replyAuthorIsParticipant = participantIds.value.includes(Number(reply.user_id))
+  const replyAuthorIsCreator = Number(reply.user_id) === Number(issue.value?.created_by)
+  return isCreator.value ? replyAuthorIsParticipant : participantIds.value.includes(uid.value) && (replyAuthorIsParticipant || replyAuthorIsCreator)
+}
+function isValidReplyLink(reply) {
+  if (!reply.parent_id) return true
+  if (reply.member_left_at) return true
+  const parent = replies.value.find(item => Number(item.id) === Number(reply.parent_id))
+  if (!parent) return false
+  const senderIsCreator = Number(reply.user_id) === Number(issue.value?.created_by)
+  const senderIsParticipant = participantIds.value.includes(Number(reply.user_id))
+  const recipientIsParticipant = participantIds.value.includes(Number(parent.user_id))
+  const recipientIsCreator = Number(parent.user_id) === Number(issue.value?.created_by)
+  return senderIsCreator ? recipientIsParticipant : senderIsParticipant && Number(reply.user_id) !== Number(parent.user_id) && (recipientIsParticipant || recipientIsCreator && reply.reply_type === 'clarification')
+}
+async function focusComposer() { composerOpen.value = true; await nextTick(); composerEl.value?.querySelector('textarea')?.focus() }
+async function replyTo(reply) { editingReply.value = null; target.value = reply; type.value = Number(reply.user_id) === Number(issue.value?.created_by) ? 'clarification' : 'progress'; await focusComposer() }
+async function quickFollow() { editingReply.value = null; target.value = null; type.value = 'progress'; await focusComposer() }
+async function editReply(reply) { editingReply.value = reply; target.value = null; content.value = reply.content || ''; images.value = [...(reply.images || [])]; await focusComposer() }
+function cancelEdit() { editingReply.value = null; content.value = ''; images.value = [] }
+function shorten(value) { const text = String(value || '').trim(); return text.length > 42 ? `${text.slice(0, 42)}…` : text || '图片或附件' }
+function parentSnippet(parentId) { return shorten(replies.value.find(item => Number(item.id) === Number(parentId))?.content) }
+function threadRootId(reply) {
+  let current = reply; const visited = new Set();
+  while (current?.parent_id && !visited.has(Number(current.id))) {
+    visited.add(Number(current.id));
+    current = replies.value.find(item => Number(item.id) === Number(current.parent_id));
   }
-  return opts[status] || []
-})
-
-// 回复
-const replyContent = ref('')
-const uploadImages = ref([])
-const replying = ref(false)
-
-// 推进弹窗
-const advancing = ref(false)
-const advanceFormRef = ref(null)
-const advanceForm = ref({ note: '' })
-const advanceRules = { note: [{ required: true, message: '推进说明不能为空', trigger: 'blur' }] }
-const advanceDialog = reactive({
-  visible: false,
-  title: '',
-  placeholder: '',
-  btnText: '',
-  btnType: 'primary',
-  targetStatus: '',
-})
-
-const ADVANCE_CONFIG = {
-  '进行中': { title: '开始进行', placeholder: '请填写推进说明（必填）', btnText: '确认开始', btnType: 'primary' },
-  '已完成': { title: '完成事项', placeholder: '请填写完成说明（必填），如：已与客户确认方案、已修复上线等', btnText: '确认完成', btnType: 'success' },
-  '未完成': { title: '标记未完成', placeholder: '请填写未完成原因（必填）', btnText: '确认标记', btnType: 'danger' },
+  return Number(current?.id || reply.id)
 }
-
-function openAdvanceDialog(targetStatus) {
-  const cfg = ADVANCE_CONFIG[targetStatus] || { title: '推进进度', placeholder: '请填写说明', btnText: '确认', btnType: 'primary' }
-  advanceDialog.title = cfg.title
-  advanceDialog.placeholder = cfg.placeholder
-  advanceDialog.btnText = cfg.btnText
-  advanceDialog.btnType = cfg.btnType
-  advanceDialog.targetStatus = targetStatus
-  advanceDialog.visible = true
-  advanceForm.value.note = ''
-}
-
-const isOverdue = computed(() => {
-  if (!issue.value || !issue.value.deadline) return false
-  const status = issue.value.status_display || issue.value.status
-  if (status === '已完成' || status === '未完成') return false
-  return new Date(issue.value.deadline) < new Date()
-})
-
-function statusTagType(status) {
-  const map = { '待开始': 'info', '进行中': 'warning', '已完成': 'success', '未完成': 'danger' }
-  return map[status] || 'info'
-}
-
-async function fetchDetail() {
-  loading.value = true
-  try {
-    const id = route.params.id
-    const res = await getCollabIssue(id)
-    issue.value = res.issue
-    replies.value = res.replies || []
-  } catch (e) {
-    ElMessage.error(e.message)
-    router.push('/collab/list')
-  } finally {
-    loading.value = false
-  }
-}
-
-function onFileChange(e) {
-  const files = Array.from(e.target.files)
-  const remaining = 3 - uploadImages.value.length
-  const toAdd = files.slice(0, remaining)
-  toAdd.forEach(file => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      uploadImages.value.push(reader.result)
-    }
-    reader.readAsDataURL(file)
-  })
-  e.target.value = ''
-  if (files.length > remaining) {
-    ElMessage.warning(`最多上传3张，已自动截取前${remaining}张`)
-  }
-}
-
-function removeImage(i) {
-  uploadImages.value.splice(i, 1)
-}
-
-async function handleReply() {
-  if (!replyContent.value.trim()) return
-  replying.value = true
-  try {
-    const res = await replyCollabIssue(issue.value.id, {
-      content: replyContent.value,
-      images: uploadImages.value,
-    })
-    replyContent.value = ''
-    uploadImages.value = []
-    issue.value = res.issue
-    replies.value.push(res.reply)
-    ElMessage.success('回复成功')
-  } catch (e) {
-    ElMessage.error(e.message)
-  } finally {
-    replying.value = false
-  }
-}
-
-async function handleAdvance() {
-  const valid = await advanceFormRef.value.validate().catch(() => false)
-  if (!valid) return
-  advancing.value = true
-  try {
-    const res = await advanceCollabIssue(issue.value.id, {
-      status: advanceDialog.targetStatus,
-      note: advanceForm.value.note,
-    })
-    issue.value = res.issue
-    advanceDialog.visible = false
-    ElMessage.success('状态已更新')
-  } catch (e) {
-    ElMessage.error(e.message)
-  } finally {
-    advancing.value = false
-  }
-}
-
-onMounted(fetchDetail)
+function threadReplies(rootId) { return replies.value.filter(reply => reply.parent_id && isValidReplyLink(reply) && threadRootId(reply) === Number(rootId)) }
+function firstChar(name) { return String(name || '协').trim().slice(0, 1) }
+function date(value) { return String(value || '').slice(0, 16) }
+function tag(status) { return ({ 进行中: 'warning', 已完成: 'success', 未完成: 'danger', 已终止: 'danger' })[status] || 'info' }
+function openProgress() { progress.status = issue.value.status; progress.note = ''; progressOpen.value = true }
+function openDeadline() { deadlineForm.value = issue.value?.deadline || ''; deadlineOpen.value = true }
+function openExtension() { extension.deadline = ''; extension.reason = ''; extendOpen.value = true }
+function previewImage(image) { preview.value = image }
+function attachmentData(attachment) { return typeof attachment === 'string' ? attachment : attachment?.data || '' }
+function attachmentName(attachment) { return typeof attachment === 'string' ? '图片' : attachment?.name || '文件' }
+function attachmentKey(attachment, index) { return `${attachmentName(attachment)}-${index}` }
+function isImage(attachment) { return typeof attachment === 'string' ? attachment.startsWith('data:image/') : String(attachment?.type || '').startsWith('image/') }
+async function addFiles(files) { const available = 3 - images.value.length; if (!available) return ElMessage.warning('每条动态最多添加 3 个附件'); for (const file of Array.from(files).slice(0, available)) { if (file.size > 8 * 1024 * 1024) { ElMessage.warning(`${file.name} 超过 8MB，未添加`); continue } const data = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file) }); images.value.push({ name: file.name, type: file.type || 'application/octet-stream', data }) } }
+async function handleImages(event) { await addFiles(event.target.files || []); event.target.value = '' }
+async function handlePaste(event) { const files = Array.from(event.clipboardData?.items || []).filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter(Boolean); if (!files.length) return; event.preventDefault(); await addFiles(files); ElMessage.success('截图已添加') }
+async function load() { loading.value = true; try { const result = await getCollabIssue(route.params.id); issue.value = result.issue; replies.value = result.replies || [] } catch (error) { ElMessage.error(error.message || '事项加载失败') } finally { loading.value = false } }
+async function openMembers() { try { const result = await getCollabUsers(); userList.value = result.users || []; memberForm.value = [...(issue.value?.participants || [])]; membersOpen.value = true } catch { ElMessage.error('成员列表加载失败') } }
+async function saveMembers() { try { await updateCollabParticipants(issue.value.id, { participants: memberForm.value }); membersOpen.value = false; await load(); ElMessage.success('参与成员已更新') } catch (error) { ElMessage.error(error.message || '保存失败') } }
+async function archive() { try { await ElMessageBox.confirm('归档后项目会移入“归档”分类，仍可查阅历史记录。', '归档项目', { type: 'warning' }); await archiveCollabIssue(issue.value.id); ElMessage.success('项目已归档'); router.push('/collab/list') } catch (error) { if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '归档失败') } }
+async function saveDeadline() { try { await updateCollabDeadline(issue.value.id, { deadline: deadlineForm.value || null }); deadlineOpen.value = false; await load(); ElMessage.success('结束时间已更新') } catch (error) { ElMessage.error(error.message || '保存失败') } }
+async function send() { try { if (editingReply.value) { await editCollabReply(issue.value.id, editingReply.value.id, { content: content.value.trim() || '上传了图片', images: images.value }); ElMessage.success('动态已修改') } else { await replyCollabIssue(issue.value.id, { content: content.value.trim() || '上传了图片', images: images.value, type: type.value, parent_id: target.value?.id, reply_to_user_id: target.value?.user_id, reply_to_name: target.value?.user_name }); ElMessage.success('动态已发布') } content.value = ''; images.value = []; target.value = null; editingReply.value = null; emojiOpen.value = false; await load() } catch (error) { ElMessage.error(error.message || '保存失败') } }
+async function review(reply, approved) { try { await reviewCollabCompletion(issue.value.id, reply.id, { approved, note: approved ? '审批通过' : '审批不通过' }); await load() } catch (error) { ElMessage.error(error.message) } }
+async function saveProgress() { try { await advanceCollabIssue(issue.value.id, progress); progressOpen.value = false; await load(); ElMessage.success('项目进度已更新') } catch (error) { ElMessage.error(error.message || '更新失败') } }
+async function extend() { try { await extendCollabIssue(issue.value.id, extension); extendOpen.value = false; await load() } catch (error) { ElMessage.error(error.message || '延期失败') } }
+onMounted(load)
 </script>
 
 <style scoped>
-.collab-detail-page {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 20px 20px 60px;
-}
-
-.detail-topbar {
-  margin-bottom: 16px;
-}
-
-.info-card {
-  background: #fff;
-  border: 1px solid #ebeef5;
-  border-radius: 12px;
-  padding: 24px 28px;
-  margin-bottom: 24px;
-}
-
-.info-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 20px;
-  gap: 16px;
-}
-.info-header h2 { margin: 0; font-size: 20px; flex: 1; }
-.info-actions { display: flex; gap: 10px; align-items: center; flex-shrink: 0; }
-
-.info-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 12px 24px;
-  margin-bottom: 16px;
-}
-
-.info-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.info-label { font-size: 12px; color: #909399; }
-.info-value { font-size: 14px; color: #303133; font-weight: 500; }
-.info-value.overdue { color: #F56C6C; }
-
-.info-desc {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid #ebeef5;
-}
-.completion-note {
-  background: #f0f9eb;
-  border-radius: 8px;
-  padding: 14px 16px;
-  border: 1px solid #e1f3d8;
-}
-.desc-text {
-  margin: 8px 0 0;
-  font-size: 14px;
-  color: #606266;
-  white-space: pre-wrap;
-  line-height: 1.6;
-  font-family: inherit;
-}
-
-/* 时间线 */
-.timeline-section {
-  background: #fff;
-  border: 1px solid #ebeef5;
-  border-radius: 12px;
-  padding: 24px 28px;
-  margin-bottom: 24px;
-}
-.timeline-section h3 { margin: 0 0 16px; font-size: 16px; }
-.reply-count { font-weight: 400; color: #909399; font-size: 13px; }
-
-.reply-card {
-  background: #fafafa;
-  border-radius: 8px;
-  padding: 14px 16px;
-  border: 1px solid #f0f0f0;
-}
-.reply-user { font-size: 13px; color: #409EFF; font-weight: 600; margin-bottom: 6px; }
-.reply-content { font-size: 14px; color: #303133; line-height: 1.6; white-space: pre-wrap; }
-.reply-images { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.reply-thumb { width: 100px; height: 100px; border-radius: 6px; object-fit: cover; }
-
-/* 回复输入区 */
-.reply-input-section {
-  background: #fff;
-  border: 1px solid #ebeef5;
-  border-radius: 12px;
-  padding: 24px 28px;
-}
-.reply-input-section h3 { margin: 0 0 12px; font-size: 16px; }
-
-.reply-images-preview {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-  flex-wrap: wrap;
-}
-.img-preview-wrap {
-  position: relative;
-  width: 80px;
-  height: 80px;
-  border-radius: 6px;
-  overflow: hidden;
-  border: 1px solid #dcdfe6;
-}
-.img-preview-wrap img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.remove-img {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 20px;
-  height: 20px;
-  background: rgba(0,0,0,.55);
-  color: #fff;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  cursor: pointer;
-  line-height: 1;
-}
-
-.reply-input-row {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.reply-actions {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-.upload-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: #606266;
-  cursor: pointer;
-  padding: 6px 12px;
-  border: 1px dashed #dcdfe6;
-  border-radius: 6px;
-  transition: border-color .2s;
-}
-.upload-btn:hover { border-color: #409EFF; color: #409EFF; }
-.upload-hint { font-size: 12px; color: #c0c4cc; }
-
-.reply-closed { margin-top: 8px; }
+.collab-detail-page{max-width:1320px;margin:0 auto;padding:24px 28px 56px;color:#25354d}.back-button{margin:-4px 0 10px -7px;color:#667085;font-weight:650}.detail-hero{position:relative;display:flex;justify-content:space-between;gap:24px;min-height:164px;padding:27px 30px;overflow:hidden;border-radius:14px;background:linear-gradient(112deg,#143968,#245a9f 64%,#3b86cf);box-shadow:0 12px 28px rgba(24,71,130,.17);color:#fff}.detail-hero:after{content:'';position:absolute;right:-82px;top:-122px;width:340px;height:340px;border:44px solid rgba(255,255,255,.08);border-radius:50%}.hero-copy,.hero-actions{position:relative;z-index:1}.issue-code,.panel-heading span,.composer-panel header span,.dialog-heading span{color:#b8d6f7;font-size:11px;font-weight:750;letter-spacing:.12em}.issue-code{display:inline-block;padding:5px 9px;border-radius:999px;background:rgba(255,255,255,.13);letter-spacing:.04em}.hero-copy h1{margin:10px 0 7px;font-size:28px;line-height:1.25}.hero-copy p{max-width:760px;margin:0;color:#d9e9fa;font-size:14px;line-height:1.65}.hero-actions{display:flex;align-items:flex-start;justify-content:flex-end;gap:9px;flex-wrap:wrap}.hero-actions :deep(.el-tag){height:32px;border:0;background:#fff2d8;color:#a66300;font-weight:750}.hero-actions :deep(.el-button--primary){border-color:#fff;background:#fff;color:#1d559b;font-weight:750}.hero-actions :deep(.el-button--default){border-color:rgba(255,255,255,.42);background:rgba(12,48,91,.15);color:#fff}.detail-facts{display:grid;grid-template-columns:repeat(4,1fr);margin:14px 0 18px;border:1px solid #e6eaf0;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 5px 15px rgba(16,24,40,.035)}.detail-facts div{min-height:70px;padding:14px 20px;border-right:1px solid #edf0f4}.detail-facts div:last-child{border:0;background:#f7fbff}.detail-facts small{display:block;margin-bottom:5px;color:#7d8ca1;font-size:11px}.detail-facts b{display:block;color:#344054;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.process-panel,.composer-panel{border:1px solid #e6eaf0;border-radius:14px;background:#fff;box-shadow:0 7px 18px rgba(16,24,40,.04)}.process-panel{padding:23px 28px 28px}.panel-heading,.composer-panel header{display:flex;align-items:center;justify-content:space-between;padding-bottom:18px;border-bottom:1px solid #edf0f4}.panel-heading h2,.composer-panel h2,.dialog-heading h2{margin:4px 0 0;color:#1d2939;font-size:19px}.panel-heading small{color:#98a2b3;font-size:12px}.timeline{position:relative;padding-top:2px}.timeline:after{content:'';position:absolute;top:22px;bottom:30px;left:50%;width:2px;background:linear-gradient(#c7dcf6,#e5edf7);transform:translateX(-1px)}.timeline-item{position:relative;width:50%;padding:18px 28px 2px;box-sizing:border-box}.timeline-item.initiator{margin-right:50%;padding-left:0}.timeline-item.member{margin-left:50%;padding-right:0}.timeline-dot{position:absolute;top:38px;width:12px;height:12px;z-index:1;border:3px solid #fff;border-radius:50%;background:#3d82d1;box-shadow:0 0 0 3px #d3e5fa}.initiator .timeline-dot{right:-6px}.member .timeline-dot{left:-6px;background:#4ca273;box-shadow:0 0 0 3px #d9eee2}.reply-card{padding:15px 16px 12px;border:1px solid #e5ebf2;border-radius:12px;background:#fff;box-shadow:0 4px 12px rgba(24,42,70,.04)}.reply-card header{display:flex;align-items:center;justify-content:space-between}.reply-person{display:flex;align-items:center;gap:7px}.reply-person :deep(.el-avatar){background:#e7f0ff;color:#2463a8;font-weight:750}.member .reply-person :deep(.el-avatar){background:#e5f4eb;color:#287553}.reply-person b{font-size:13px}.reply-person span{color:#8492a6;font-size:11px}.reply-card time{color:#98a2b3;font-size:11px}.reply-card p{margin:11px 0;color:#475467;font-size:14px;line-height:1.65;white-space:pre-wrap}.reply-images{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:11px}.reply-images img{width:94px;height:76px;border:1px solid #e8edf3;border-radius:8px;object-fit:cover;cursor:zoom-in}.reply-actions{display:flex;align-items:center;gap:6px;min-height:24px}.reply-actions :deep(.el-button){height:25px;padding:0 6px;font-weight:650}.review{padding:3px 7px;border-radius:6px;font-size:11px;font-weight:700}.approved{background:#eaf7ee;color:#258650}.rejected{background:#fff0f0;color:#c34545}.composer-panel{margin-top:18px;padding:23px 28px}.composer-panel :deep(.el-radio-group){margin:16px 0 0}.composer-panel :deep(.el-textarea){display:block;margin:12px 0}.composer-panel :deep(.el-textarea__inner){min-height:102px!important;padding:13px 15px;border-color:#dbe3ed;border-radius:10px;background:#fbfcfe;box-shadow:none}.composer-panel :deep(.el-textarea__inner:focus){border-color:#5b95dd;background:#fff}.composer-tools{display:flex;align-items:center;gap:8px}.image-upload{display:inline-flex;align-items:center;height:32px;padding:0 10px;border:1px solid #dce4ed;border-radius:8px;color:#516178;font-size:12px;font-weight:650;cursor:pointer}.image-upload:hover{border-color:#8eb7e8;background:#f2f7fd;color:#2367ad}.image-upload input{display:none}.emoji-picker{display:flex;gap:2px;max-width:310px;overflow:auto}.emoji-picker button{width:27px;height:29px;padding:0;border:0;border-radius:6px;background:transparent;cursor:pointer}.emoji-picker button:hover{background:#edf4fc}.emoji-tip{margin-right:auto;color:#98a2b3;font-size:11px}.upload-preview{display:flex;gap:8px;margin:-3px 0 12px}.preview-item{position:relative;width:76px;height:60px}.preview-item img{width:100%;height:100%;border-radius:8px;object-fit:cover}.preview-item button{position:absolute;top:-6px;right:-6px;width:19px;height:19px;border:0;border-radius:50%;background:#344054;color:#fff;cursor:pointer}.progress-dialog :deep(.el-dialog__header){margin:0;padding:24px 25px 0}.progress-dialog :deep(.el-dialog__body){padding:21px 25px}.dialog-heading p{margin:8px 0 0;color:#667085;font-size:13px;line-height:1.55}.status-options{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:16px}.status-options button{padding:13px 14px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;text-align:left;cursor:pointer}.status-options button b,.status-options button small{display:block}.status-options button b{font-size:13px}.status-options button small{margin-top:4px;color:#8c9aaf;font-size:11px}.status-options .active{border-color:#4c8ddb;background:#f3f8ff;box-shadow:0 0 0 2px #e0edfc}.status-options .green.active{border-color:#51aa76;background:#f2fbf5}.status-options .red.active{border-color:#dc7777;background:#fff7f7}.status-options .slate.active{border-color:#8b9ab0;background:#f7f9fc}@media(max-width:800px){.collab-detail-page{padding:20px 16px 42px}.detail-hero{flex-direction:column;padding:24px}.hero-copy h1{font-size:24px}.hero-actions{justify-content:flex-start}.detail-facts{grid-template-columns:1fr 1fr}.detail-facts div{padding:13px;border-bottom:1px solid #edf0f4}.detail-facts div:nth-child(2){border-right:0}.process-panel,.composer-panel{padding:19px 16px}.timeline:after{left:20px}.timeline-item,.timeline-item.initiator,.timeline-item.member{width:100%;margin:0;padding:14px 0 3px 36px}.initiator .timeline-dot,.member .timeline-dot{left:15px;right:auto}.composer-tools{flex-wrap:wrap}.emoji-tip{display:none}.emoji-picker{order:3;width:100%;max-width:none}.composer-tools :deep(.el-button){margin-left:auto}}
+</style>
+<style scoped>
+.member-left{display:block;margin:-3px 0 10px;color:#98a2b3;font-size:11px}.member-dialog-tip{margin:0 0 14px;color:#667085;font-size:13px;line-height:1.6}.fact-edit{height:22px;margin-top:3px;padding:0!important;color:#3d82c7;font-size:12px}.status-progress{cursor:pointer!important}.status-progress:hover{filter:brightness(.96);box-shadow:0 0 0 3px rgba(255,255,255,.18)}
+</style>
+<style scoped>
+.floating-composer .composer-tools .image-upload{display:grid;place-items:center;width:31px;height:31px;padding:0;border-radius:7px}.floating-composer .composer-tools .image-upload .attachment-mark{width:16px;height:16px;border-radius:4px;background:transparent;border-color:currentColor;font-size:14px}.floating-composer .composer-tools :deep(.el-button--primary){margin-left:auto}
+</style>
+<style scoped>
+.floating-composer .composer-tools{gap:7px}.floating-composer .image-upload{display:grid;place-items:center;width:31px;height:31px;padding:0;border-radius:7px}.floating-composer .image-upload .attachment-mark{width:17px;height:17px;border-radius:5px;font-size:15px}.floating-composer .image-upload b{display:none}.floating-composer .composer-tools :deep(.el-button--primary){margin-left:auto}
+.floating-composer .post-type{display:inline-flex;margin:10px 14px 0!important;padding:3px;border-radius:8px;background:#f0f3f6}.floating-composer .post-type :deep(.el-radio-button__inner){padding:5px 11px;border:0!important;border-radius:6px!important;background:transparent;box-shadow:none!important;color:#667085;font-size:12px;font-weight:650}.floating-composer .post-type :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner){background:#fff;color:#1f78c8;box-shadow:0 1px 3px rgba(22,48,78,.12)!important}.floating-composer .wechat-composer{margin:8px 14px 0;border-radius:10px}.floating-composer .wechat-composer :deep(.el-textarea__inner){min-height:82px!important;padding:11px 13px;font-size:13px}.floating-composer .composer-tools{min-height:45px;padding:0 12px;background:#fafbfd}.floating-composer .emoji-tool{width:31px;height:31px;border-radius:7px;background:#fff0e5;color:#d77b27;font-size:20px}.floating-composer .emoji-tool:hover{background:#ffe3cb;color:#bd6413}.floating-composer .image-upload{height:31px;padding:0 11px;border-color:#d9e5f0;background:#f8fbff;color:#3e6f9f}.floating-composer .image-upload:hover{border-color:#a9c7e6;background:#ecf5ff;color:#1e67aa}.floating-composer .image-upload .attachment-mark{width:14px;height:14px;border-radius:50%;background:#e2f0ff;border-color:#76a9d8;color:#2d72ad;font-size:13px}.floating-composer .emoji-picker{bottom:43px;left:11px;border-radius:12px;box-shadow:0 12px 28px rgba(16,36,64,.18)}
+.composer-tools .image-upload{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:auto;height:30px;padding:0 10px;border:1px solid #dce4eb;border-radius:7px;background:#fff;color:#536273;font-size:12px;line-height:1}.composer-tools .image-upload:hover{border-color:#9bc2ea;background:#f1f7ff;color:#2872bb}.composer-tools .image-upload .attachment-mark{display:grid;place-items:center;width:15px;height:15px;border:1.5px solid currentColor;border-radius:4px;font-size:14px;font-weight:400;line-height:12px}.composer-tools .image-upload b{font-size:12px;font-weight:650}.composer-tools .image-upload input{display:none}
+.floating-composer{position:fixed;right:28px;bottom:24px;z-index:30;width:min(560px,calc(100vw - 300px));max-height:calc(100vh - 48px);margin:0!important;overflow:auto;border-color:#dbe5ef;box-shadow:0 18px 46px rgba(16,36,64,.22)!important}.composer-header-actions{display:flex;align-items:center;gap:2px}@media(max-width:800px){.floating-composer{right:8px;bottom:8px;width:calc(100vw - 16px);max-height:calc(100vh - 16px)}}
+.quick-follow{position:fixed;right:34px;bottom:28px;z-index:20;display:flex;align-items:center;gap:6px;height:42px;padding:0 16px;border:0;border-radius:22px;background:#07c160;color:#fff;font-size:13px;font-weight:750;box-shadow:0 8px 22px rgba(7,193,96,.28);cursor:pointer;transition:transform .16s,box-shadow .16s}.quick-follow span{font-size:20px;font-weight:400}.quick-follow:hover{box-shadow:0 11px 26px rgba(7,193,96,.38);transform:translateY(-2px)}@media(max-width:800px){.quick-follow{right:18px;bottom:18px;height:40px;padding:0 14px}}
+.timeline:after{left:33.333%}.timeline-item.initiator{width:33.333%;margin-right:66.667%;padding-right:24px}.timeline-item.member{width:66.667%;margin-left:33.333%;padding-left:24px}.tone-initiator{--tone-bg:#eef5ff;--tone-border:#b8d3f4;--tone-accent:#377fc8;--tone-avatar:#dcecff;--tone-text:#285e98}.tone-0{--tone-bg:#effaf3;--tone-border:#bce4ca;--tone-accent:#349362;--tone-avatar:#d8f2e2;--tone-text:#237549}.tone-1{--tone-bg:#fff6ec;--tone-border:#f1d0a2;--tone-accent:#c87920;--tone-avatar:#ffe6c4;--tone-text:#9b5b15}.tone-2{--tone-bg:#f7f0ff;--tone-border:#d8c1f4;--tone-accent:#8055ba;--tone-avatar:#eadcff;--tone-text:#634097}.tone-3{--tone-bg:#fff0f3;--tone-border:#efc0ca;--tone-accent:#bf596d;--tone-avatar:#ffdce4;--tone-text:#984458}.tone-4{--tone-bg:#eef9fb;--tone-border:#b9e2e9;--tone-accent:#368a9a;--tone-avatar:#d4f0f4;--tone-text:#276d7a}.tone-5{--tone-bg:#f7f7ee;--tone-border:#ddddb9;--tone-accent:#88864d;--tone-avatar:#eeeece;--tone-text:#666434}.reply-card.tone-initiator,.reply-card.tone-0,.reply-card.tone-1,.reply-card.tone-2,.reply-card.tone-3,.reply-card.tone-4,.reply-card.tone-5{border-color:var(--tone-border);background:var(--tone-bg);box-shadow:none}.reply-card.tone-initiator:hover,.reply-card.tone-0:hover,.reply-card.tone-1:hover,.reply-card.tone-2:hover,.reply-card.tone-3:hover,.reply-card.tone-4:hover,.reply-card.tone-5:hover{box-shadow:0 8px 16px color-mix(in srgb,var(--tone-accent) 14%,transparent)}.tone-initiator .reply-person :deep(.el-avatar),.tone-0 .reply-person :deep(.el-avatar),.tone-1 .reply-person :deep(.el-avatar),.tone-2 .reply-person :deep(.el-avatar),.tone-3 .reply-person :deep(.el-avatar),.tone-4 .reply-person :deep(.el-avatar),.tone-5 .reply-person :deep(.el-avatar){background:var(--tone-avatar);color:var(--tone-text)}.reply-reference.tone-initiator,.reply-reference.tone-0,.reply-reference.tone-1,.reply-reference.tone-2,.reply-reference.tone-3,.reply-reference.tone-4,.reply-reference.tone-5{border-left:3px solid var(--tone-accent);background:color-mix(in srgb,var(--tone-bg) 76%,#fff)}.reply-reference.tone-initiator span,.reply-reference.tone-0 span,.reply-reference.tone-1 span,.reply-reference.tone-2 span,.reply-reference.tone-3 span,.reply-reference.tone-4 span,.reply-reference.tone-5 span{color:var(--tone-text)}.thread-item.tone-initiator,.thread-item.tone-0,.thread-item.tone-1,.thread-item.tone-2,.thread-item.tone-3,.thread-item.tone-4,.thread-item.tone-5{border:1px solid var(--tone-border);background:var(--tone-bg)}@media(max-width:800px){.timeline:after{left:20px}.timeline-item.initiator,.timeline-item.member{width:100%;margin:0;padding:14px 0 3px 36px}}
+.file-card{display:flex;align-items:center;gap:6px;max-width:220px;padding:9px 10px;border:1px solid #e1e8ef;border-radius:8px;background:#f8fafc;color:#4e6580;font-size:12px;text-decoration:none}.file-card:hover{border-color:#9ec2e9;background:#f2f8ff;color:#2070bd}.file-card>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-card small{margin-left:auto;color:#8ea0b4;font-size:10px}.preview-item.file{display:flex;align-items:center;width:auto;max-width:170px;padding:0 24px 0 9px;border:1px solid #dce5ed;border-radius:7px;background:#f5f8fb;color:#52677f;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.preview-item.file button{right:-6px}.screenshot-tool{position:relative;font-size:19px!important}.screenshot-tool:after{content:'截';position:absolute;right:2px;bottom:3px;font-size:9px;font-weight:800;line-height:1;color:#536273}.image-upload span{filter:saturate(.7);font-size:18px!important}
+.composer-panel{padding:0;overflow:hidden}.composer-panel>header{min-height:56px;padding:0 20px;border-bottom:1px solid #edf0f3;background:#fafbfc}.composer-panel>header h2{margin:0;font-size:15px}.composer-panel>header small{display:block;margin-top:3px;color:#98a2b3;font-size:11px}.composer-panel .post-type{margin:13px 20px 0!important}.wechat-composer{margin:9px 14px 0;border:1px solid #e3e8ed;border-radius:9px;background:#fff;overflow:hidden}.wechat-composer :deep(.el-textarea){margin:0!important}.wechat-composer :deep(.el-textarea__inner){min-height:105px!important;padding:12px 14px;border:0!important;border-radius:0!important;background:#fff!important;font-size:14px;line-height:1.6}.wechat-composer :deep(.el-textarea__inner:focus){box-shadow:none}.wechat-composer:focus-within{border-color:#9ac0ea;box-shadow:0 0 0 2px #edf6ff}.composer-tools{position:relative;min-height:48px;margin-top:0;padding:0 14px;border-top:1px solid #eef1f4;background:#f7f8fa}.tool-icon,.image-upload{display:grid;place-items:center;width:34px;height:34px;padding:0;border:0;background:transparent;color:#536273;font-size:22px;cursor:pointer}.tool-icon:hover,.image-upload:hover{border-radius:6px;background:#e9eef3;color:#2b7cc7}.image-upload span{font-size:22px;line-height:1}.emoji-picker{position:absolute;bottom:45px;left:13px;z-index:2;display:grid!important;grid-template-columns:repeat(8,32px);gap:3px;max-width:none!important;padding:9px;border:1px solid #e1e7ed;border-radius:10px;background:#fff;box-shadow:0 9px 24px rgba(16,24,40,.15)}.emoji-picker button{width:32px!important;height:31px!important;font-size:17px}.emoji-tip{font-size:11px}.composer-tools :deep(.el-button--primary){height:30px;padding:0 15px;border-color:#07c160;background:#07c160;font-weight:650}.composer-tools :deep(.el-button--primary:hover){border-color:#06ad57;background:#06ad57}.upload-preview{margin:0;padding:0 12px 10px}.preview-item{width:70px;height:58px}@media(max-width:800px){.composer-panel>header{padding:0 14px}.wechat-composer{margin:9px 10px 0}.emoji-picker{grid-template-columns:repeat(7,32px);left:8px}.composer-tools{padding:0 10px}}
+.thread-replies{display:grid;gap:8px;margin:13px -2px -2px;padding:10px 0 0 14px;border-top:1px solid #eef2f5;border-left:2px solid #d7e6f7}.thread-item{padding:10px 11px;border-radius:9px;background:#f7f9fb}.thread-item header{display:flex;align-items:center;justify-content:space-between}.thread-item .reply-person{gap:6px}.thread-item .reply-person b{font-size:12px}.thread-item .reply-person span,.thread-item time{font-size:10px}.thread-item .reply-reference{margin-top:8px;background:#edf1f5}.thread-item p{margin:8px 0;color:#3e4c5f;font-size:13px;line-height:1.6}.thread-item .reply-actions{min-height:21px}.thread-item .reply-images img{width:76px;height:60px}
+.reply-reference{display:flex;gap:6px;align-items:center;margin-top:11px;padding:7px 9px;border-radius:7px;background:#f4f6f8;color:#718096;font-size:11px;line-height:1.35}.reply-reference span{flex:none;color:#4979ad;font-weight:700}.reply-reference em{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-style:normal}.reply-target{display:flex;align-items:center;gap:8px;margin-top:14px;padding:9px 11px;border-radius:9px;background:#f3f5f7}.reply-target :deep(.el-avatar){background:#dff0e5;color:#2f8052;font-size:12px;font-weight:750}.reply-target div{min-width:0}.reply-target b,.reply-target span{display:block}.reply-target b{color:#334155;font-size:12px}.reply-target span{margin-top:2px;overflow:hidden;color:#8a96a6;font-size:11px;white-space:nowrap;text-overflow:ellipsis}.floating-composer .composer-tools .image-upload{display:grid;place-items:center;width:31px;height:31px;padding:0;border-radius:7px}.floating-composer .composer-tools .image-upload .attachment-mark{display:grid;place-items:center;width:auto;height:auto;border:0;background:transparent;color:currentColor;font-size:18px}.floating-composer .composer-tools :deep(.el-button--primary){margin-left:auto}
 </style>

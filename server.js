@@ -791,8 +791,8 @@ app.delete('/api/users/:id', (req, res) => {
  */
 app.get('/api/collab/issues', (req, res) => {
   try {
-    const { status, keyword, page, pageSize } = req.query;
-    const result = collabService.listIssues({ status, keyword, page, pageSize });
+    const { status, keyword, page, pageSize, phase } = req.query;
+    const result = collabService.listIssues({ status, keyword, page, pageSize, phase }, req.user);
     res.json({ ok: true, ...result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -803,7 +803,7 @@ app.get('/api/collab/issues', (req, res) => {
  */
 app.get('/api/collab/issues/:id', (req, res) => {
   try {
-    const result = collabService.getIssueDetail(Number(req.params.id));
+    const result = collabService.getIssueDetail(Number(req.params.id), req.user);
     if (result.error) return res.status(404).json({ error: result.error });
     res.json({ ok: true, ...result });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -823,6 +823,38 @@ app.post('/api/collab/issues', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.put('/api/collab/issues/:id/participants', (req, res) => {
+  try {
+    const result = collabService.updateParticipants(Number(req.params.id), req.body.participants || [], req.user);
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save(); res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/collab/issues/:id/deadline', (req, res) => {
+  try {
+    const result = collabService.updateDeadline(Number(req.params.id), req.body.deadline || null, req.user);
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save(); res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/collab/issues/:id/archive', (req, res) => {
+  try {
+    const result = collabService.archiveIssue(Number(req.params.id), req.user);
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save(); res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/collab/issues/:id', (req, res) => {
+  try {
+    const result = collabService.deleteIssue(Number(req.params.id), req.user);
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save(); res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 /**
  * POST /api/collab/issues/:id/reply
  * 添加跟进回复
@@ -834,11 +866,39 @@ app.post('/api/collab/issues/:id/reply', (req, res) => {
       Number(req.params.id),
       req.body.content || '',
       req.body.images || [],
-      req.user
+      req.body.type || 'progress',
+      req.user,
+      req.body.parent_id || null,
+      req.body.reply_to_user_id || null,
+      req.body.reply_to_name || ''
     );
     if (result.error) return res.status(400).json({ error: result.error });
     db.save();
     res.status(201).json({ ok: true, reply: result.reply, issue: result.issue });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/collab/issues/:id/replies/:replyId', (req, res) => {
+  try {
+    const result = collabService.editReply(Number(req.params.id), Number(req.params.replyId), req.body.content || '', req.body.images || [], req.user);
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save(); res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/collab/issues/:id/completions/:replyId/review', (req, res) => {
+  try {
+    const result = collabService.reviewCompletion(Number(req.params.id), Number(req.params.replyId), Boolean(req.body.approved), req.body.note || '', req.user);
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save(); res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/collab/issues/:id/extensions', (req, res) => {
+  try {
+    const result = collabService.extendDeadline(Number(req.params.id), req.body.deadline || '', req.body.reason || '', req.user);
+    if (result.error) return res.status(400).json({ error: result.error });
+    db.save(); res.status(201).json({ ok: true, ...result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

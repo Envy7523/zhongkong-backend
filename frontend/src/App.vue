@@ -97,17 +97,6 @@
         </el-menu>
       </div>
 
-      <div class="sidebar-account" v-if="auth.user">
-        <img v-if="auth.user.avatar_url" :src="auth.user.avatar_url" class="sidebar-avatar" alt="" />
-        <span v-else class="sidebar-avatar fallback">{{ userInitial }}</span>
-        <span class="sidebar-account-copy">
-          <b>{{ auth.user.display_name || auth.user.username }}</b>
-          <small>{{ auth.user.role || '系统成员' }} · v0.4.0</small>
-        </span>
-        <el-button class="sidebar-logout" text circle title="退出登录" @click="handleLogout">
-          <el-icon><SwitchButton /></el-icon>
-        </el-button>
-      </div>
     </aside>
 
     <!-- 浮动弹出菜单面板 -->
@@ -147,8 +136,23 @@
           <el-icon v-if="store.sidebarCollapsed"><Expand /></el-icon>
           <el-icon v-else><Fold /></el-icon>
         </el-button>
-        <span class="topbar-title">{{ store.activeTab?.title || '数据概括' }}</span>
+        <span class="topbar-title">{{ pageTitle }}</span>
         <span :class="['topbar-status', store.serverOnline ? 'online' : 'offline']">{{ store.serverStatusText }}</span>
+        <el-dropdown v-if="auth.user" trigger="click" class="topbar-account">
+          <button class="topbar-account-trigger" type="button">
+            <img v-if="auth.user.avatar_url" :src="auth.user.avatar_url" class="topbar-avatar" alt="" />
+            <span v-else class="topbar-avatar fallback">{{ userInitial }}</span>
+            <span class="topbar-account-copy">
+              <b>{{ auth.user.display_name || auth.user.username }}</b>
+              <small>{{ auth.user.role || '系统成员' }}</small>
+            </span>
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item :icon="SwitchButton" divided @click="handleLogout">退出登录</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
 
       <div class="tab-bar-wrapper" v-if="store.tabs.length > 0">
@@ -157,11 +161,11 @@
             v-for="tab in store.tabs"
             :key="tab.id"
             :class="['tab-item', { active: tab.id === store.activeTabId }]"
-            @click="store.activeTabId = tab.id"
+            @click="selectTab(tab.id)"
             :title="tab.title"
           >
             <span class="tab-title">{{ tab.title }}</span>
-            <span v-if="tab.closable" class="tab-close" @click.stop="store.closeTab(tab.id)">×</span>
+            <span v-if="tab.closable" class="tab-close" @click.stop="closeTab(tab.id)">×</span>
           </div>
         </div>
         <div class="tab-actions">
@@ -316,6 +320,7 @@ const currentView = shallowRef(DashboardView)
 
 const isLoginPage = computed(() => router.currentRoute.value.path === '/login')
 const isCollabRoute = computed(() => router.currentRoute.value.path.startsWith('/collab'))
+const pageTitle = computed(() => isCollabRoute.value ? '协同事项' : (store.activeTab?.title || '数据概括'))
 const sidebarActive = computed(() => {
   if (isCollabRoute.value) return 'collab-list'
   return store.activeTabId
@@ -365,26 +370,52 @@ function cancelHidePopup() {
   clearTimeout(hideTimer)
 }
 
-function selectPopupItem(index) {
+async function leaveCollabRoute() {
+  if (isCollabRoute.value) await router.replace('/')
+}
+
+async function selectPopupItem(index) {
+  await leaveCollabRoute()
   store.openTabFromId(index)
   popupMenu.visible = false
   popupMenu.group = null
   popupMenu.sections = []
 }
 
-function handleMenuSelect(index) {
+async function handleMenuSelect(index) {
   if (index === 'collab-list') {
-    router.push('/collab/list')
+    store.openTabFromId('collab')
+    await router.push('/collab/list')
     return
   }
   // 跳过分组菜单项
   if (index.endsWith('-group')) return
+  await leaveCollabRoute()
   store.openTabFromId(index)
+}
+
+async function selectTab(id) {
+  if (id === 'collab') {
+    store.activeTabId = id
+    await router.push('/collab/list')
+    return
+  }
+  await leaveCollabRoute()
+  store.activeTabId = id
+}
+
+async function closeTab(id) {
+  store.closeTab(id)
+  if (id === 'collab' && isCollabRoute.value) await router.push('/')
 }
 
 watch(() => store.activeTabId, (id) => {
   if (!id) return
   currentView.value = COMPONENT_MAP[id] || DashboardView
+})
+
+watch(isCollabRoute, (active) => {
+  if (active) store.openTabFromId('collab')
 })
 
 onMounted(async () => {
@@ -400,7 +431,11 @@ onMounted(async () => {
   } catch {
     store.setServerStatus(false)
   }
-  store.openTabFromId('dashboard')
+  store.syncTabTitles()
+  // 刷新或直接打开协同事项时，保留当前路由；否则会出现 URL 是 /collab，
+  // 页面却被初始化逻辑切回数据概括的情况。
+  if (isCollabRoute.value) store.openTabFromId('collab')
+  else store.openTabFromId('dashboard')
 })
 </script>
 

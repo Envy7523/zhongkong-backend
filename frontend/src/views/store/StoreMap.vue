@@ -147,7 +147,8 @@
             </div>
             <div v-if="placingMode" class="placing-mode-banner">
               <span class="placing-pulse"></span>
-              <div><b>标点模式已开启</b><small>点击地图任意位置创建点位草稿</small></div>
+              <div><b>{{ draftPin ? '已选中点位' : '标点模式已开启' }}</b><small>{{ draftPin ? '可继续点击地图或拖动标记微调位置' : '点击地图任意位置创建点位草稿' }}</small></div>
+              <div v-if="draftPin" class="draft-actions"><el-button size="small" @click="clearDraftPin">重新选择</el-button><el-button size="small" type="primary" @click="confirmDraftPin">确认此位置</el-button></div>
               <kbd>ESC</kbd>
             </div>
           </div>
@@ -357,6 +358,7 @@ const storeTypeFilter = ref('')
 
 // 自定义点位
 const placingMode = ref(false)
+const draftPin = ref(null)
 const pinDialogVisible = ref(false)
 const pinType = ref('pin') // 'pin' | 'store'
 const pinSaving = ref(false)
@@ -379,6 +381,7 @@ let chart = null
 let amap = null
 let amapPolygons = []
 let amapMarkers = []
+let draftMarker = null
 let provinceCache = null
 let cityCache = null
 let transitionTimer = null
@@ -631,6 +634,7 @@ function clearMarkers() {
   amapMarkers = []
 }
 function destroyAmap() {
+  clearDraftPin()
   clearMarkers()
   amapPolygons.forEach(p => { try { p.setMap(null) } catch {} })
   amapPolygons = []
@@ -641,27 +645,39 @@ function applyCursor() {
   if (amap) amap.getContainer().style.cursor = placingMode.value ? PIN_CURSOR : ''
 }
 
+function clearDraftPin() {
+  draftPin.value = null
+  if (draftMarker) { try { draftMarker.setMap(null) } catch {}; draftMarker = null }
+}
+
+function drawDraftMarker() {
+  if (!amap || !draftPin.value) return
+  if (draftMarker) { try { draftMarker.setMap(null) } catch {} }
+  draftMarker = new window.AMap.Marker({
+    position: [draftPin.value.lng, draftPin.value.lat], draggable: true, zIndex: 999,
+    // 标记容器左上角向左/向上偏移，使图钉尖端精确落在经纬度坐标上。
+    offset: new window.AMap.Pixel(-12, -32),
+    content: '<div class="draft-map-pin"><span></span><small>待确认</small></div>',
+  })
+  draftMarker.on('dragend', e => { draftPin.value = { lng: e.lnglat.lng, lat: e.lnglat.lat }; drawDraftMarker() })
+  draftMarker.setMap(amap)
+}
+
+function confirmDraftPin() {
+  if (!draftPin.value) return
+  const { lng, lat } = draftPin.value
+  const existing = customPins.value.filter(p => /^自定义点位\d+$/.test(p.name || ''))
+  const maxN = existing.reduce((max, p) => Math.max(max, parseInt((p.name || '').replace('自定义点位', '')) || 0), 0)
+  pinType.value = 'pin'; editingPinId.value = null
+  pinForm.value = { lng, lat, name: `自定义点位${maxN + 1}`, remark: '', color: '#4F7CFF', radius: 3000, shape: 'circle', visibility: 'public', created_by: '' }
+  placingMode.value = false; clearDraftPin(); applyCursor(); pinDialogVisible.value = true
+}
+
 // 标点模式公共逻辑（map click / circle click 共用）
 async function handlePlacingClick(lng, lat) {
   if (!placingMode.value) return
-  const existing = customPins.value.filter(p => /^自定义点位\d+$/.test(p.name || ''))
-  const maxN = existing.reduce((max, p) => Math.max(max, parseInt((p.name || '').replace('自定义点位', '')) || 0), 0)
-  pinType.value = 'pin'
-  editingPinId.value = null
-  pinForm.value = {
-    lng,
-    lat,
-    name: `自定义点位${maxN + 1}`,
-    remark: '',
-    color: '#4F7CFF',
-    radius: 3000,
-    shape: 'circle',
-    visibility: 'public',
-    created_by: '',
-  }
-  placingMode.value = false
-  applyCursor()
-  pinDialogVisible.value = true
+  draftPin.value = { lng, lat }
+  drawDraftMarker()
 }
 
 function refreshMarkers() {
@@ -688,7 +704,7 @@ function addMarkersToMap() {
       })
       circle.setMap(amap); amapMarkers.push(circle)
       circle.on('click', (e) => handlePlacingClick(e.lnglat.lng, e.lnglat.lat))
-      circle.on('rightclick', () => { if (placingMode.value) { placingMode.value = false; applyCursor() } })
+      circle.on('rightclick', () => { if (placingMode.value) { placingMode.value = false; clearDraftPin(); applyCursor() } })
       // 波纹动画
       const ripple = new window.AMap.Marker({
         position: [s.lng, s.lat],
@@ -724,7 +740,7 @@ function addMarkersToMap() {
       })
       circle.setMap(amap); amapMarkers.push(circle)
       circle.on('click', (e) => handlePlacingClick(e.lnglat.lng, e.lnglat.lat))
-      circle.on('rightclick', () => { if (placingMode.value) { placingMode.value = false; applyCursor() } })
+      circle.on('rightclick', () => { if (placingMode.value) { placingMode.value = false; clearDraftPin(); applyCursor() } })
       // 波纹动画
       const ripple = new window.AMap.Marker({
         position: [p.lng, p.lat],
@@ -737,7 +753,8 @@ function addMarkersToMap() {
       const shapeHtml = {
         circle:   `width:14px;height:14px;border-radius:50%;`,
         square:   `width:14px;height:14px;border-radius:2px;`,
-        star:     `width:16px;height:16px;font-size:14px;line-height:16px;text-align:center;`,
+        // 星形本身就是标记，不叠加圆形背景，避免显示成“方块里的星星”。
+        star:     `width:24px;height:24px;font-size:25px;line-height:24px;text-align:center;background:transparent!important;border:0!important;box-shadow:none!important;color:${c}!important;`,
         diamond:  `width:12px;height:12px;transform:translate(-50%,-50%) rotate(45deg);border-radius:2px;`,
       }[shape] || `width:14px;height:14px;border-radius:50%;`
       const shapeIcon = shape === 'star' ? '★' : '+'
@@ -756,6 +773,7 @@ function addMarkersToMap() {
       marker.on('rightclick', () => {
         if (placingMode.value) {
           placingMode.value = false
+          clearDraftPin()
           applyCursor()
         }
       })
@@ -795,7 +813,7 @@ function renderAmap(geo, dataList, highlightFeature, locs = []) {
     const makePoly = (path, opts) => {
       const p = new window.AMap.Polygon({ path, fillColor: 'transparent', fillOpacity: 0, ...opts })
       p.on('click', (e) => handlePlacingClick(e.lnglat.lng, e.lnglat.lat))
-      p.on('rightclick', () => { if (placingMode.value) { placingMode.value = false; applyCursor() } })
+      p.on('rightclick', () => { if (placingMode.value) { placingMode.value = false; clearDraftPin(); applyCursor() } })
       p.setMap(amap)
       amapPolygons.push(p)
     }
@@ -840,7 +858,7 @@ function renderAmap(geo, dataList, highlightFeature, locs = []) {
 
   // 右键 → 退出标点模式（静默，无弹窗）
   amap.on('rightclick', () => {
-    if (placingMode.value) { placingMode.value = false; applyCursor() }
+    if (placingMode.value) { placingMode.value = false; clearDraftPin(); applyCursor() }
   })
 
   applyCursor()
@@ -1019,9 +1037,11 @@ function flyToPin(p) {
 function togglePlacingMode() {
   if (placingMode.value) {
     placingMode.value = false
+    clearDraftPin()
     applyCursor()
     ElMessage.info('已退出标点模式')
   } else {
+    clearDraftPin()
     placingMode.value = true
     applyCursor()
     ElMessage.info('在地图上点击放置标记，ESC 或右键退出')
@@ -1136,7 +1156,7 @@ async function loadCustomPins() {
 watch([statusFilter, storeTypeFilter], () => { refreshMarkers() })
 
 // ESC 退出标点模式
-function onKeyDown(e) { if (e.key === 'Escape' && placingMode.value) { placingMode.value = false; applyCursor(); ElMessage.info('已退出标点模式') } }
+function onKeyDown(e) { if (e.key === 'Escape' && placingMode.value) { placingMode.value = false; clearDraftPin(); applyCursor(); ElMessage.info('已退出标点模式') } }
 onMounted(() => { loadChina(); document.addEventListener('keydown', onKeyDown) })
 onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventListener('keydown', onKeyDown) })
 
@@ -1678,6 +1698,13 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   color: #96703b;
   font-size: 8px;
 }
+
+.draft-actions { display:flex; align-items:center; gap:7px; margin-left:auto; }
+.draft-actions .el-button { height:28px; font-size:12px; }
+.draft-map-pin { position:relative; width:24px; height:32px; color:#2669bd; font:700 11px/1.1 sans-serif; white-space:nowrap; pointer-events:none; }
+.draft-map-pin span { position:absolute; inset:0; background:#409eff; clip-path:polygon(50% 100%, 5% 52%, 5% 30%, 16% 11%, 33% 0, 67% 0, 84% 11%, 95% 30%, 95% 52%); filter:drop-shadow(0 2px 3px rgba(32,104,190,.36)); }
+.draft-map-pin span::after { content:''; position:absolute; left:7px; top:7px; width:10px; height:10px; border-radius:50%; background:#fff; }
+.draft-map-pin small { position:absolute; left:50%; top:37px; padding:3px 6px; border-radius:9px; background:#fff; box-shadow:0 2px 8px rgba(32,72,120,.16); transform:translateX(-50%); }
 .placing-pulse {
   width: 8px;
   height: 8px;
@@ -1740,7 +1767,7 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
 }
 .preview-pin.square { border-radius: 5px; }
 .preview-pin.diamond { border-radius: 5px; transform: rotate(45deg) scale(.84); }
-.preview-pin.star { border: 0; background: transparent; font-size: 28px; }
+.preview-pin.star { display:flex; align-items:center; justify-content:center; border:0; background:transparent; color:var(--pin-color); font-family:Arial,"Segoe UI Symbol",sans-serif; font-size:25px; font-weight:700; line-height:1; text-shadow:0 2px 5px color-mix(in srgb,var(--pin-color) 28%,transparent); }
 .editor-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1781,7 +1808,7 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
 }
 .shape-picker i.square { border-radius: 3px; }
 .shape-picker i.diamond { border-radius: 3px; transform: rotate(45deg) scale(.8); }
-.shape-picker i.star { background: transparent; font-size: 19px; }
+.shape-picker i.star { display:flex; align-items:center; justify-content:center; background:transparent; font-family:Arial,"Segoe UI Symbol",sans-serif; font-size:18px; font-weight:700; line-height:1; }
 .color-picker {
   display: flex;
   flex-wrap: wrap;
@@ -1810,6 +1837,31 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   gap: 8px;
   width: 100%;
 }
+
+/* 创建点位：紧凑、分层的表单布局 */
+.pin-editor-dialog .el-dialog { overflow:hidden; border-radius:16px; box-shadow:0 22px 58px rgba(22,39,71,.22); }
+.pin-editor-dialog .el-dialog__header { margin:0; padding:20px 24px 15px; border-bottom:1px solid #edf0f4; }
+.pin-editor-dialog .el-dialog__title { color:#1f2d42; font-size:17px; font-weight:750; }
+.pin-editor-dialog .el-dialog__body { padding:18px 24px 14px; }
+.pin-editor-dialog .el-dialog__footer { padding:13px 24px 18px; border-top:1px solid #edf0f4; background:#fbfcfe; }
+.pin-editor .el-form-item { margin-bottom:15px; }
+.pin-editor .el-form-item__label { padding-bottom:6px; color:#4b5b70; font-size:12px; font-weight:700; line-height:1.2; }
+.pin-editor .el-input__wrapper,.pin-editor .el-textarea__inner { border-radius:9px; background:#fcfdff; box-shadow:0 0 0 1px #dfe6ef inset; }
+.pin-editor .el-input__wrapper:hover,.pin-editor .el-textarea__inner:hover { box-shadow:0 0 0 1px #b8cce5 inset; }
+.pin-editor-preview { margin-bottom:18px; padding:13px 15px; border-color:#dfe7f1; border-radius:11px; background:linear-gradient(135deg,#f7faff,#f3f7fc); }
+.pin-editor-preview .el-button { color:#52657e; font-weight:650; }
+.editor-grid { gap:12px; margin-top:2px; }
+.editor-grid .el-form-item { min-height:104px; margin:0; padding:13px 14px 10px; border:1px solid #e8edf3; border-radius:11px; background:#fafcff; }
+.settings-grid .el-form-item { min-height:82px; }
+.shape-picker { gap:5px; }
+.shape-picker button { min-width:50px; padding:7px 5px; border-radius:8px; }
+.color-picker { gap:8px; padding-top:6px; }
+.color-picker button { width:23px; height:23px; border-radius:6px; }
+.settings-grid .el-input-number { width:136px; }
+.dialog-footer { grid-template-columns:auto 1fr auto auto; align-items:center; }
+.dialog-footer .el-button { min-width:82px; height:34px; border-radius:8px; font-weight:650; }
+.dialog-footer .el-button--primary { min-width:104px; box-shadow:0 5px 12px rgba(64,158,255,.22); }
+@media (max-width:680px) { .pin-editor-dialog .el-dialog__body{padding:16px}.pin-editor-dialog .el-dialog__header{padding:18px 16px 14px}.pin-editor-dialog .el-dialog__footer{padding:12px 16px 16px}.editor-grid{grid-template-columns:1fr}.editor-grid .el-form-item{min-height:auto}.shape-picker{justify-content:space-between}.dialog-footer .el-button{min-width:0}.dialog-footer .el-button--primary{min-width:88px} }
 
 /* 评论抽屉 */
 .comment-drawer-body {

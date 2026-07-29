@@ -348,6 +348,41 @@ html, body, #app {
   background: #fff5f5;
 }
 
+.topbar-account { margin-left: 2px; }
+.topbar-account-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 200px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  transition: background .16s ease, border-color .16s ease;
+}
+.topbar-account-trigger:hover { background: #f5f8fc; border-color: #e1e9f3; }
+.topbar-avatar {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: 9px;
+  object-fit: cover;
+}
+.topbar-avatar.fallback {
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: linear-gradient(135deg, #4f7cff, #785fda);
+  font-size: 12px;
+  font-weight: 750;
+}
+.topbar-account-copy { min-width: 0; text-align: left; }
+.topbar-account-copy b,
+.topbar-account-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-account-copy b { color: #344158; font-size: 12px; font-weight: 650; }
+.topbar-account-copy small { margin-top: 1px; color: #8995a8; font-size: 10px; }
+
 /* ===== 标签栏 ===== */
 .tab-bar-wrapper {
   background: #fff;

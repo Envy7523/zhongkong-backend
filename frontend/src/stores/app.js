@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 
 const PAGE_TITLES = {
   dashboard: '数据概括',
+  collab: '协同事项',
   'api-config': '中控绑定',
   pipeline: '一键推送',
   'table-reader': '表格读取',
@@ -34,9 +35,7 @@ for (const [page, subs] of Object.entries(SUB_LABELS)) {
 }
 // 简单页面
 for (const page of Object.keys(PAGE_TITLES)) {
-  if (!page.includes('-')) {
-    INDEX_TO_PAGE_SUB[page] = { page, sub: null }
-  }
+  if (!INDEX_TO_PAGE_SUB[page]) INDEX_TO_PAGE_SUB[page] = { page, sub: null }
 }
 
 export const useAppStore = defineStore('app', () => {
@@ -61,6 +60,7 @@ export const useAppStore = defineStore('app', () => {
   function openTabFromId(id) {
     const existing = tabs.value.find((t) => t.id === id)
     if (existing) {
+      existing.title = getTabTitle(id)
       activeTabId.value = id
       return
     }
@@ -92,6 +92,10 @@ export const useAppStore = defineStore('app', () => {
     tabs.value = tabs.value.filter((t) => t.id === activeTabId.value || !t.closable)
   }
 
+  function syncTabTitles() {
+    tabs.value.forEach((tab) => { tab.title = getTabTitle(tab.id) })
+  }
+
   const activeTab = computed(() => tabs.value.find((t) => t.id === activeTabId.value))
 
   function toggleSidebar() {
@@ -113,6 +117,7 @@ export const useAppStore = defineStore('app', () => {
     openTabFromId,
     closeTab,
     closeOtherTabs,
+    syncTabTitles,
     toggleSidebar,
     setServerStatus,
   }
