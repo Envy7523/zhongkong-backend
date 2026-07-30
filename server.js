@@ -248,67 +248,11 @@ app.post('/api/wechat/table/pipeline', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ===== Bot 机器人（bot id + secret 实现企业微信数据互通）=====
-let botTokenCache = { token: null, expiresAt: 0 };
-
-/** 安全 HTTP GET — 返回原始文本 + 尝试 JSON 解析 */
-async function httpGetSafe(url, headers = {}) {
-  const resp = await fetch(url, { headers });
-  const text = await resp.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    // 返回包含原始文本的错误对象
-    return { errcode: -1, errmsg: '非 JSON 响应', _raw_status: resp.status, _raw_body: text.slice(0, 500) };
-  }
-}
-
-/** 获取 Bot access_token（优先使用 botId/botSecret，回退到 corpid/corpsecret） */
-async function ensureBotToken() {
-  const cfg = loadConfig();
-  const botId = cfg.botId || cfg.corpid;
-  const botSecret = cfg.botSecret || cfg.corpsecret;
-  if (!botId || !botSecret) throw new Error('请先配置 botId 和 botSecret（或 corpid 和 corpsecret）');
-
-  // 如果使用的是 corpid/corpsecret 回退，复用主 token 缓存
-  if (!cfg.botId && !cfg.botSecret) return ensureToken();
-
-  const now = Date.now();
-  if (botTokenCache.token && now < botTokenCache.expiresAt) return botTokenCache.token;
-
-  // 尝试多种可能的企业微信 API 端点（按优先级）
-  const botTokenEndpoints = [
-    { name: '标准 gettoken', url: `https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${botId}&corpsecret=${botSecret}` },
-    { name: 'aibot gettoken', url: `https://qyapi.weixin.qq.com/cgi-bin/aibot/gettoken?corpid=${botId}&corpsecret=${botSecret}` },
-    // 尝试使用主 corpid + botSecret
-    ...(cfg.corpid && cfg.corpid !== botId ? [{ name: '主 corpid + botSecret', url: `https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${cfg.corpid}&corpsecret=${botSecret}` }] : []),
-  ];
-
-  const errors = [];
-  for (const ep of botTokenEndpoints) {
-    try {
-      const data = await httpGetSafe(ep.url);
-      if (data.errcode === 0 || data.access_token) {
-        botTokenCache = {
-          token: data.access_token,
-          expiresAt: now + ((data.expires_in || 7200) - 300) * 1000,
-          endpoint: ep.name,
-        };
-        return botTokenCache.token;
-      }
-      errors.push(`${ep.name}: [${data.errcode}] ${data.errmsg}`);
-    } catch (e) {
-      errors.push(`${ep.name}: 网络错误 — ${e.message}`);
-    }
-  }
-
-  throw new Error(`Bot 获取 token 失败，尝试了 ${botTokenEndpoints.length} 种方式:\n${errors.map(e => '  • ' + e).join('\n')}`);
-}
-
-// POST /api/bot/test — 测试 Bot 连接（获取 token + 拉取部门列表）
+// POST /api/bot/test — 测试 Bot 连接（使用 corpid/corpsecret 获取 token + 拉取部门列表）
+// 注意：botId/botSecret 仅用于 WebSocket 长连接（wecom-bot.js），HTTP API 使用 corpid/corpsecret
 app.post('/api/bot/test', async (req, res) => {
   try {
-    const token = await ensureBotToken();
+    const token = await ensureToken();
     const deptData = await httpGet(`https://qyapi.weixin.qq.com/cgi-bin/department/list?access_token=${token}`);
     if (deptData.errcode !== 0 && deptData.errcode !== undefined) {
       return res.status(400).json({
@@ -330,10 +274,10 @@ app.post('/api/bot/test', async (req, res) => {
   }
 });
 
-// POST /api/bot/query — 使用 Bot 凭证通用查询企业微信 API
+// POST /api/bot/query — 使用 corpid/corpsecret 凭证通用查询企业微信 API
 app.post('/api/bot/query', async (req, res) => {
   try {
-    const token = await ensureBotToken();
+    const token = await ensureToken();
     const { api, params = {} } = req.body;
     if (!api) {
       return res.status(400).json({
