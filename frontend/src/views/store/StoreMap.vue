@@ -1172,7 +1172,14 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   --map-blue: #4f7cff;
   --map-blue-dark: #2e51be;
   --map-soft-blue: #eef3ff;
+  --map-surface: #ffffff;
+  --map-canvas-bg: #f4f7fb;
+  --map-success: #15803d;
+  --map-warning: #c97808;
+  --map-shadow-sm: 0 8px 24px rgba(31, 47, 82, .08);
+  --map-shadow-lg: 0 20px 48px rgba(23, 45, 91, .16);
   min-width: 0;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--map-ink);
 }
 
@@ -1182,16 +1189,17 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   align-items: flex-end;
   justify-content: space-between;
   gap: 30px;
-  min-height: 120px;
-  margin-bottom: 18px;
-  padding: 26px 30px;
+  min-height: 132px;
+  margin-bottom: 20px;
+  padding: 28px 32px;
   overflow: hidden;
   color: #fff;
   border-radius: 18px;
   background:
-    radial-gradient(circle at 82% 10%, rgba(143, 179, 255, .28), transparent 32%),
-    linear-gradient(125deg, #172b66 0%, #294da9 55%, #4f7cff 100%);
-  box-shadow: 0 18px 40px rgba(34, 66, 150, .18);
+    radial-gradient(circle at 82% 10%, rgba(121, 214, 180, .24), transparent 31%),
+    radial-gradient(circle at 94% 90%, rgba(107, 161, 255, .28), transparent 35%),
+    linear-gradient(125deg, #122456 0%, #1d4c95 56%, #367ee4 100%);
+  box-shadow: var(--map-shadow-lg);
 }
 .map-hero::after {
   content: "";
@@ -1206,14 +1214,14 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
 }
 .map-eyebrow {
   margin-bottom: 7px;
-  color: #a9c1ff;
+  color: #b8d5ff;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .22em;
 }
 .map-hero h2 {
   margin: 0;
-  font-size: 26px;
+  font-size: 28px;
   line-height: 1.2;
   letter-spacing: -.02em;
 }
@@ -1230,11 +1238,11 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   gap: 10px;
 }
 .hero-metric {
-  min-width: 92px;
-  padding: 11px 14px;
-  border: 1px solid rgba(255,255,255,.16);
-  border-radius: 12px;
-  background: rgba(255,255,255,.09);
+  min-width: 100px;
+  padding: 12px 15px;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 14px;
+  background: rgba(255,255,255,.11);
   backdrop-filter: blur(8px);
 }
 .hero-metric span {
@@ -1247,22 +1255,23 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   font-size: 22px;
   line-height: 1;
 }
-.hero-metric strong.success { color: #79e7b1; }
+.hero-metric strong.success { color: #8df1ba; }
 .hero-metric strong.accent { color: #ffd887; }
 
 .map-workspace {
   overflow: hidden;
   border: 1px solid var(--map-line);
-  border-radius: 18px;
-  background: #fff;
-  box-shadow: 0 10px 30px rgba(27, 39, 67, .07);
+  border-radius: 20px;
+  background: var(--map-surface);
+  box-shadow: var(--map-shadow-sm);
 }
 .workspace-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 76px;
-  padding: 0 22px;
+  min-height: 80px;
+  padding: 0 24px;
+  background: linear-gradient(180deg, #fff 0%, #fbfcff 100%);
   border-bottom: 1px solid var(--map-line);
 }
 .level-breadcrumb {
@@ -1318,7 +1327,7 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   border-color: var(--map-blue);
   background: var(--map-blue);
   color: #fff;
-  box-shadow: 0 0 0 5px rgba(79,124,255,.11);
+  box-shadow: 0 0 0 5px rgba(79,124,255,.12), 0 4px 10px rgba(79,124,255,.2);
 }
 .level-breadcrumb small,
 .level-breadcrumb b {
@@ -1355,20 +1364,27 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   box-shadow: 0 0 0 4px rgba(49,196,141,.12);
 }
 .workspace-actions .el-button { margin-left: 10px; }
+.level-breadcrumb button:focus-visible,
+.side-title button:focus-visible,
+.place-pin-button:focus-visible,
+.pin-list > button:focus-visible {
+  outline: 3px solid rgba(79,124,255,.32);
+  outline-offset: 2px;
+}
 
 .map-layout {
   display: grid;
   grid-template-columns: 258px minmax(0, 1fr);
-  min-height: 650px;
+  min-height: 668px;
 }
 .map-side-panel {
-  padding: 22px 18px;
+  padding: 22px 18px 18px;
   border-right: 1px solid var(--map-line);
-  background: #fafbfc;
+  background: linear-gradient(180deg, #fbfcff 0%, #f6f8fc 100%);
 }
 .side-section {
-  padding: 0 4px 20px;
-  margin-bottom: 20px;
+  padding: 0 4px 18px;
+  margin-bottom: 18px;
   border-bottom: 1px solid var(--map-line);
 }
 .side-section:last-child {
@@ -1433,7 +1449,8 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   margin-top: 3px;
   padding: 10px 11px;
   border-radius: 9px;
-  background: #f0f3f8;
+  border: 1px solid #e5ebf5;
+  background: #f3f7fc;
   color: #8590a2;
   font-size: 11px;
 }
@@ -1446,8 +1463,8 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   width: 100%;
   padding: 12px;
   border: 1px solid #dce4fb;
-  border-radius: 11px;
-  background: #fff;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff 0%, #f7f9ff 100%);
   color: var(--map-ink);
   cursor: pointer;
   text-align: left;
@@ -1459,8 +1476,8 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   transform: translateY(-1px);
 }
 .place-pin-button.active {
-  border-color: #ffbe64;
-  background: #fff8eb;
+  border-color: #f3c06b;
+  background: #fff9ed;
 }
 .place-pin-icon {
   display: grid;
@@ -1499,6 +1516,8 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   text-align: left;
 }
 .pin-list > button:hover { background: #f0f3f8; }
+.pin-list > button:active,
+.place-pin-button:active { transform: translateY(0); }
 .pin-swatch {
   flex: 0 0 auto;
   width: 9px;
@@ -1533,8 +1552,8 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   align-items: center;
   padding: 20px 12px 24px;
   border: 1px dashed #d6ddeb;
-  border-radius: 12px;
-  background: #fff;
+  border-radius: 14px;
+  background: rgba(255,255,255,.8);
   text-align: center;
 }
 .guide-icon {
@@ -1588,7 +1607,7 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
 .map-stage {
   position: relative;
   min-width: 0;
-  background: #fff;
+  background: var(--map-canvas-bg);
 }
 .map-stage-top {
   position: absolute;
@@ -1602,11 +1621,11 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   pointer-events: none;
 }
 .map-stage-top > div:first-child {
-  padding: 10px 13px;
-  border: 1px solid rgba(226,230,238,.9);
-  border-radius: 11px;
-  background: rgba(255,255,255,.92);
-  box-shadow: 0 8px 22px rgba(29,41,68,.09);
+  padding: 11px 14px;
+  border: 1px solid rgba(218,225,237,.94);
+  border-radius: 12px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 10px 24px rgba(29,41,68,.11);
   backdrop-filter: blur(10px);
 }
 .stage-label {
@@ -1617,22 +1636,23 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
 }
 .map-stage-top strong { font-size: 13px; }
 .stage-tools {
-  padding: 7px 10px;
+  padding: 8px 11px;
+  border: 1px solid rgba(255,255,255,.15);
   border-radius: 20px;
-  background: rgba(28,37,55,.72);
-  color: rgba(255,255,255,.76);
+  background: rgba(24,41,76,.78);
+  color: rgba(255,255,255,.84);
   font-size: 9px;
   backdrop-filter: blur(8px);
 }
 .map-canvas-wrap {
   position: relative;
-  min-height: 650px;
+  min-height: 668px;
   overflow: hidden;
   background: #f4f6f9;
 }
 .map-canvas {
   width: 100%;
-  height: 650px;
+  height: 668px;
   opacity: 1;
   filter: blur(0);
   transform: scale(1);
@@ -1677,10 +1697,10 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   gap: 10px;
   padding: 10px 12px;
   border: 1px solid #ffd28e;
-  border-radius: 11px;
+  border-radius: 12px;
   background: rgba(255,249,237,.96);
   color: #83520c;
-  box-shadow: 0 10px 28px rgba(139,91,20,.15);
+  box-shadow: 0 14px 32px rgba(139,91,20,.18);
   transform: translateX(-50%);
   backdrop-filter: blur(9px);
   animation: bannerDrop .28s ease both;
@@ -2022,6 +2042,29 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   .level-breadcrumb button { min-width: 72px; padding-right: 18px; }
   .level-breadcrumb button:not(:last-child)::after { right: 6px; }
   .level-breadcrumb small { display: none; }
+  .map-stage-top { top: 14px; left: 14px; right: 14px; }
+  .stage-tools { display: none; }
+  .map-canvas-wrap,
+  .map-canvas { min-height: 520px; height: 520px; }
+}
+@media (max-width: 640px) {
+  .map-hero { gap: 18px; min-height: 0; padding: 22px 20px; border-radius: 16px; }
+  .map-hero h2 { font-size: 24px; }
+  .map-hero p { font-size: 12px; line-height: 1.65; }
+  .hero-metrics { width: 100%; }
+  .hero-metric { flex: 1; min-width: 0; }
+  .workspace-header { min-height: 68px; padding: 0 14px; }
+  .level-breadcrumb button { min-width: 0; flex: 1; gap: 6px; padding-right: 12px; }
+  .level-breadcrumb button:not(:last-child)::after { display: none; }
+  .level-breadcrumb b { max-width: 56px; font-size: 11px; }
+  .workspace-actions .el-button { margin-left: 0; }
+  .map-side-panel { display: block; padding: 18px 14px 4px; }
+  .side-section { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--map-line); }
+  .map-canvas-wrap,
+  .map-canvas { min-height: 480px; height: 480px; }
+  .placing-mode-banner { left: 14px; right: 14px; align-items: flex-start; flex-wrap: wrap; transform: none; }
+  .placing-mode-banner kbd { display: none; }
+  .draft-actions { width: 100%; margin-left: 18px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .map-canvas,

@@ -17,6 +17,7 @@ const PAGE_TITLES = {
   'store-management': '门店管理',
   'menu-management': '菜品管理',
   'cost-accounting': '成本核算',
+  'staff-management': '员工管理',
 }
 
 const SUB_LABELS = {
@@ -24,6 +25,7 @@ const SUB_LABELS = {
   'store-management': { 'info-basic': '门店基本信息', 'info-circle': '门店商圈', 'info-platform': '第三方平台', 'info-config': '门店配置', map: '全国地图', fixed: '固定成本', operating: '运营成本' },
   'menu-management': { overview: '菜品总览', cost: '菜品成本', expiry: '效期管理' },
   'cost-accounting': { daily: '日成本核算', weekly: '周成本核算', monthly: '月成本核算' },
+  'staff-management': { manager: '店长管理', clerk: '店员管理', test: '测试数据' },
 }
 
 // 从 menu index 解析 page 和 sub

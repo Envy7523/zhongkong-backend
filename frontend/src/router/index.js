@@ -28,6 +28,10 @@ const routes = [
     redirect: '/cost-accounting/daily',
   },
   {
+    path: '/staff-management',
+    redirect: '/staff-management/manager',
+  },
+  {
     path: '/collab',
     redirect: '/collab/list',
   },

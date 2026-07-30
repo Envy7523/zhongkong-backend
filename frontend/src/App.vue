@@ -63,6 +63,16 @@
             <template #title><span>成本核算</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
 
+          <el-menu-item
+            index="staff-management-group"
+            @mouseenter="showPopup('staff-management', $event)"
+            @mouseleave="scheduleHidePopup"
+            :class="{ 'is-popup-open': popupMenu.group === 'staff-management', 'is-active': store.activeTabId?.startsWith('staff-management-') }"
+          >
+            <el-icon><Avatar /></el-icon>
+            <template #title><span>员工管理</span><span class="nav-arrow">›</span></template>
+          </el-menu-item>
+
           <div class="sidebar-section-label">运营工具</div>
           <el-menu-item index="collab-list">
             <el-icon><List /></el-icon>
@@ -213,6 +223,9 @@ import MenuExpiry from '@/views/menu/MenuExpiry.vue'
 import DailyCost from '@/views/cost/DailyCost.vue'
 import WeeklyCost from '@/views/cost/WeeklyCost.vue'
 import MonthlyCost from '@/views/cost/MonthlyCost.vue'
+import StaffManager from '@/views/staff/StaffManager.vue'
+import StaffClerk from '@/views/staff/StaffClerk.vue'
+import StaffTest from '@/views/staff/StaffTest.vue'
 
 const COMPONENT_MAP = {
   dashboard: DashboardView,
@@ -239,6 +252,9 @@ const COMPONENT_MAP = {
   'cost-accounting-daily': DailyCost,
   'cost-accounting-weekly': WeeklyCost,
   'cost-accounting-monthly': MonthlyCost,
+  'staff-management-manager': StaffManager,
+  'staff-management-clerk': StaffClerk,
+  'staff-management-test': StaffTest,
 }
 
 // ===== 浮动弹出菜单配置 =====
@@ -307,6 +323,18 @@ const POPUP_CONFIG = {
           { index: 'cost-accounting-daily', label: '日成本核算' },
           { index: 'cost-accounting-weekly', label: '周成本核算' },
           { index: 'cost-accounting-monthly', label: '月成本核算' },
+        ],
+      },
+    ],
+  },
+  'staff-management': {
+    sections: [
+      {
+        title: '人员管理',
+        items: [
+          { index: 'staff-management-manager', label: '店长管理' },
+          { index: 'staff-management-clerk', label: '店员管理' },
+          { index: 'staff-management-test', label: '测试数据' },
         ],
       },
     ],

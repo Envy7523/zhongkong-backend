@@ -154,3 +154,17 @@ export const advanceCollabIssue = (id, data) => http.put(`/api/collab/issues/${i
 export const reviewCollabCompletion = (id, replyId, data) => http.put(`/api/collab/issues/${id}/completions/${replyId}/review`, data)
 export const extendCollabIssue = (id, data) => http.post(`/api/collab/issues/${id}/extensions`, data)
 export const getCollabUsers = () => http.get('/api/collab/users')
+
+// ===== 智能表格 Webhook 测试 =====
+export const sendSmartSheet = (data) => http.post('/api/webhook/smartsheet', data)
+
+// ===== Bot 机器人（bot id + secret 数据互通）=====
+export const botTest = () => http.post('/api/bot/test')
+export const botQuery = (data) => http.post('/api/bot/query', data)
+
+// ===== 员工管理（店长 + 店员）=====
+export const getStaffList = (params) => http.get('/api/staff', { params })
+export const getStaffStats = (params) => http.get('/api/staff/stats', { params })
+export const updateStaff = (id, data) => http.put(`/api/staff/${id}`, data)
+export const seedStaff = () => http.post('/api/staff/seed')
+export const syncPullStaff = () => http.get('/api/staff/sync-pull')

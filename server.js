@@ -13,6 +13,7 @@ const { drawStoreDailyReport } = require('./lib/report');
 const { parseDailyExcel, toReportData } = require('./lib/daily-data');
 const db = require('./lib/db');
 const collabService = require('./lib/collab-service');
+const wecomBot = require('./lib/wecom-bot');
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = 'etaigong-zhongkong-jwt-secret-2024';
@@ -29,7 +30,7 @@ app.use(express.json({ limit: '50mb' }));
 
 // JWT 认证中间件（保护 /api/*，放行登录接口）
 app.use((req, res, next) => {
-  if (req.path === '/api/auth/login') return next();
+  if (req.path === '/api/auth/login' || req.path === '/api/bot/status') return next();
   if (!req.path.startsWith('/api/')) return next();
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -106,7 +107,7 @@ const STORE_FIELDS = ['businessType','storeName','legalPerson','paymentType','st
 // ===== 配置 API =====
 app.get('/api/config', (_req, res) => {
   const cfg = loadConfig();
-  res.json({ corpid: cfg.corpid || '', corpsecret_masked: cfg.corpsecret ? cfg.corpsecret.slice(0, 6) + '****' + cfg.corpsecret.slice(-4) : '', webhook: cfg.webhook || '', webhookName: cfg.webhookName || '', configured: !!(cfg.corpid && cfg.corpsecret), webhookConfigured: !!cfg.webhook });
+  res.json({ corpid: cfg.corpid || '', corpsecret_masked: cfg.corpsecret ? cfg.corpsecret.slice(0, 6) + '****' + cfg.corpsecret.slice(-4) : '', webhook: cfg.webhook || '', webhookName: cfg.webhookName || '', configured: !!(cfg.corpid && cfg.corpsecret), webhookConfigured: !!cfg.webhook, botIdMasked: cfg.botId ? cfg.botId.slice(0, 6) + '****' + cfg.botId.slice(-4) : '', botConfigured: !!(cfg.botId && cfg.botSecret) });
 });
 app.post('/api/config', (req, res) => {
   const { corpid, corpsecret, webhook, webhookName } = req.body;
@@ -245,6 +246,139 @@ app.post('/api/wechat/table/pipeline', async (req, res) => {
   const cfg = loadConfig(); if (!cfg.webhook) return res.status(400).json({ error: '请先配置 Webhook 地址' });
   try { const token = await ensureToken(); const { doc_id, sheet_id, limit = 100, offset = 0 } = req.body; if (!doc_id || !sheet_id) return res.status(400).json({ error: '缺少 doc_id 或 sheet_id' }); const rr = await httpPost(`https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet/get_records?access_token=${token}`, { docid: doc_id, sheet_id, limit: Math.min(limit, 500), offset }); if (rr.errcode !== 0) return res.status(400).json({ error: `读取失败: [${rr.errcode}] ${rr.errmsg}` }); const records = rr.records || []; const now = new Date().toLocaleString('zh-CN'); let msg = `## 📊 表格数据\n> 更新时间：${now}\n> 共 **${records.length}** 条\n\n`; records.slice(0, 20).forEach((rec, i) => { const values = rec.values || {}; msg += `**${i + 1}.** `; msg += Object.entries(values).slice(0, 5).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.map(x => x.text || x).join(', ') : v}`).join(' | ') + '\n'; }); if (records.length > 20) msg += `\n> ... 还有 ${records.length - 20} 条`; const sr = await httpPost(cfg.webhook, { msgtype: 'markdown', markdown: { content: msg } }); if (sr.errcode !== 0) return res.status(400).json({ error: `发送失败: [${sr.errcode}] ${sr.errmsg}` }); res.json({ ok: true, message: '表格已推送', recordCount: records.length }); }
   catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== Bot 机器人（bot id + secret 实现企业微信数据互通）=====
+let botTokenCache = { token: null, expiresAt: 0 };
+
+/** 安全 HTTP GET — 返回原始文本 + 尝试 JSON 解析 */
+async function httpGetSafe(url, headers = {}) {
+  const resp = await fetch(url, { headers });
+  const text = await resp.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    // 返回包含原始文本的错误对象
+    return { errcode: -1, errmsg: '非 JSON 响应', _raw_status: resp.status, _raw_body: text.slice(0, 500) };
+  }
+}
+
+/** 获取 Bot access_token（优先使用 botId/botSecret，回退到 corpid/corpsecret） */
+async function ensureBotToken() {
+  const cfg = loadConfig();
+  const botId = cfg.botId || cfg.corpid;
+  const botSecret = cfg.botSecret || cfg.corpsecret;
+  if (!botId || !botSecret) throw new Error('请先配置 botId 和 botSecret（或 corpid 和 corpsecret）');
+
+  // 如果使用的是 corpid/corpsecret 回退，复用主 token 缓存
+  if (!cfg.botId && !cfg.botSecret) return ensureToken();
+
+  const now = Date.now();
+  if (botTokenCache.token && now < botTokenCache.expiresAt) return botTokenCache.token;
+
+  // 尝试多种可能的企业微信 API 端点（按优先级）
+  const botTokenEndpoints = [
+    { name: '标准 gettoken', url: `https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${botId}&corpsecret=${botSecret}` },
+    { name: 'aibot gettoken', url: `https://qyapi.weixin.qq.com/cgi-bin/aibot/gettoken?corpid=${botId}&corpsecret=${botSecret}` },
+    // 尝试使用主 corpid + botSecret
+    ...(cfg.corpid && cfg.corpid !== botId ? [{ name: '主 corpid + botSecret', url: `https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${cfg.corpid}&corpsecret=${botSecret}` }] : []),
+  ];
+
+  const errors = [];
+  for (const ep of botTokenEndpoints) {
+    try {
+      const data = await httpGetSafe(ep.url);
+      if (data.errcode === 0 || data.access_token) {
+        botTokenCache = {
+          token: data.access_token,
+          expiresAt: now + ((data.expires_in || 7200) - 300) * 1000,
+          endpoint: ep.name,
+        };
+        return botTokenCache.token;
+      }
+      errors.push(`${ep.name}: [${data.errcode}] ${data.errmsg}`);
+    } catch (e) {
+      errors.push(`${ep.name}: 网络错误 — ${e.message}`);
+    }
+  }
+
+  throw new Error(`Bot 获取 token 失败，尝试了 ${botTokenEndpoints.length} 种方式:\n${errors.map(e => '  • ' + e).join('\n')}`);
+}
+
+// POST /api/bot/test — 测试 Bot 连接（获取 token + 拉取部门列表）
+app.post('/api/bot/test', async (req, res) => {
+  try {
+    const token = await ensureBotToken();
+    const deptData = await httpGet(`https://qyapi.weixin.qq.com/cgi-bin/department/list?access_token=${token}`);
+    if (deptData.errcode !== 0 && deptData.errcode !== undefined) {
+      return res.status(400).json({
+        ok: false,
+        step: 'department_list',
+        error: `[${deptData.errcode}] ${deptData.errmsg}`,
+        detail: deptData,
+      });
+    }
+    const departments = deptData.department || [];
+    res.json({
+      ok: true,
+      message: `Bot 连接成功！获取到 ${departments.length} 个部门`,
+      departments,
+      token_preview: token.slice(0, 8) + '...',
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/bot/query — 使用 Bot 凭证通用查询企业微信 API
+app.post('/api/bot/query', async (req, res) => {
+  try {
+    const token = await ensureBotToken();
+    const { api, params = {} } = req.body;
+    if (!api) {
+      return res.status(400).json({
+        error: '请指定 API 类型',
+        available: [
+          { api: 'department_list', desc: '获取部门列表' },
+          { api: 'user_list', desc: '获取部门成员', params: ['department_id'] },
+          { api: 'user_info', desc: '获取成员信息', params: ['userid'] },
+          { api: 'custom', desc: '自定义 API 路径', params: ['path'] },
+        ],
+      });
+    }
+    let url, result;
+    switch (api) {
+      case 'department_list':
+        url = `https://qyapi.weixin.qq.com/cgi-bin/department/list?access_token=${token}`;
+        result = await httpGet(url);
+        break;
+      case 'user_list':
+        url = `https://qyapi.weixin.qq.com/cgi-bin/user/list?access_token=${token}&department_id=${params.department_id || 1}&fetch_child=1`;
+        result = await httpGet(url);
+        break;
+      case 'user_info':
+        if (!params.userid) return res.status(400).json({ error: '缺少 userid 参数' });
+        url = `https://qyapi.weixin.qq.com/cgi-bin/user/get?access_token=${token}&userid=${params.userid}`;
+        result = await httpGet(url);
+        break;
+      case 'custom':
+        if (!params.path) return res.status(400).json({ error: '缺少 path 参数' });
+        url = `https://qyapi.weixin.qq.com${params.path}?access_token=${token}`;
+        for (const [k, v] of Object.entries(params)) {
+          if (k !== 'path') url += `&${k}=${encodeURIComponent(v)}`;
+        }
+        result = await httpGet(url);
+        break;
+      default:
+        return res.status(400).json({ error: `未知 API: ${api}` });
+    }
+    if (result.errcode !== undefined && result.errcode !== 0) {
+      return res.status(400).json({ error: `API 调用失败: [${result.errcode}] ${result.errmsg}`, detail: result });
+    }
+    res.json({ ok: true, api, data: result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ===== 日报图表推送 =====
@@ -500,6 +634,289 @@ app.get('/api/stores/:id/employees', (req, res) => {
 app.post('/api/stores/:id/employees', (req, res) => { try { const { name, status, hire_date, hire_type, position, salary } = req.body; if (!name) return res.status(400).json({ error: '员工姓名不能为空' }); const id = db.insert('INSERT INTO employees (store_id,name,status,hire_date,hire_type,position,salary) VALUES (?,?,?,?,?,?,?)', [req.params.id, name, status||'在职', hire_date||null, hire_type||'全职', position||'', salary||0]); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put('/api/employees/:id', (req, res) => { try { const fields = ['store_id','name','status','hire_date','hire_type','position','salary','leave_date']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE employees SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.delete('/api/employees/:id', (req, res) => { try { db.run('DELETE FROM employees WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// ===== 员工管理（店长 + 店员）=====
+// GET /api/staff — 列表（分页、搜索、角色筛选）
+app.get('/api/staff', (req, res) => {
+  try {
+    const { page = 1, page_size = 10, keyword, status, store_name, position, role } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(page_size) || 10));
+    const offset = (pageNum - 1) * pageSize;
+
+    let where = [];
+    let params = [];
+
+    if (role) { where.push('e.role=?'); params.push(role); }
+    if (keyword) { where.push('(e.name LIKE ? OR e.phone LIKE ?)'); params.push(`%${keyword}%`, `%${keyword}%`); }
+    if (status) { where.push('e.status=?'); params.push(status); }
+    if (store_name) { where.push('e.store_name LIKE ?'); params.push(`%${store_name}%`); }
+    if (position) { where.push('e.position=?'); params.push(position); }
+
+    const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
+
+    const total = db.queryOne(`SELECT COUNT(*) as cnt FROM employees e ${whereClause}`, params).cnt;
+    const list = db.queryAll(
+      `SELECT e.* FROM employees e ${whereClause} ORDER BY e.id DESC LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    );
+
+    res.json({ ok: true, list, total, page: pageNum, page_size: pageSize });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/staff/stats — 统计
+app.get('/api/staff/stats', (req, res) => {
+  try {
+    const { role } = req.query;
+    let where = '';
+    const params = [];
+    if (role) { where = 'WHERE role=?'; params.push(role); }
+
+    const total = db.queryOne(`SELECT COUNT(*) as cnt FROM employees ${where}`, params).cnt;
+    const active = db.queryOne(`SELECT COUNT(*) as cnt FROM employees ${where}${where ? ' AND' : ' WHERE'} status='在职'`, params).cnt;
+    const inactive = db.queryOne(`SELECT COUNT(*) as cnt FROM employees ${where}${where ? ' AND' : ' WHERE'} status='离职'`, params).cnt;
+
+    res.json({ ok: true, stats: { total, active, inactive } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 员工同步到企微智能表格的辅助函数
+async function syncStaffToSmartsheet(employee, cfg) {
+  // 优先使用 access_token API (支持 update_records)，回退到 webhook
+  const hasApiConfig = cfg.staffSmartSheetDocId && cfg.staffSmartSheetSheetId;
+  const hasWebhook = cfg.staffSmartSheetUrl;
+
+  if (!hasApiConfig && !hasWebhook) return { synced: false, reason: '未配置企微表格' };
+
+  const values = {
+    '姓名': employee.name || '',
+    '手机号': employee.phone || '',
+    '性别': employee.gender || '',
+    '年龄': String(employee.age || ''),
+    '所属门店': employee.store_name || '',
+    '状态': employee.status || '',
+    '入职日期': employee.entry_date || '',
+    '职位': employee.position || '',
+    '角色': employee.role || '',
+    '备注': employee.remark || '',
+  };
+
+  // 方式一：access_token API（支持 add + update）
+  if (hasApiConfig) {
+    try {
+      const token = await ensureToken();
+      const baseUrl = 'https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet';
+      const recordId = employee.smartsheet_record_id;
+
+      let result;
+      if (recordId) {
+        // 更新已有记录
+        result = await httpPost(`${baseUrl}/update_records?access_token=${token}`, {
+          docid: cfg.staffSmartSheetDocId,
+          sheet_id: cfg.staffSmartSheetSheetId,
+          key_type: 'CELL_VALUE_KEY_TYPE_FIELD_TITLE',
+          records: [{ record_id: recordId, values }],
+        });
+      } else {
+        // 新增记录
+        result = await httpPost(`${baseUrl}/add_records?access_token=${token}`, {
+          docid: cfg.staffSmartSheetDocId,
+          sheet_id: cfg.staffSmartSheetSheetId,
+          key_type: 'CELL_VALUE_KEY_TYPE_FIELD_TITLE',
+          records: [{ values }],
+        });
+      }
+
+      if (result.errcode === 0) {
+        // 新增成功后，保存返回的 record_id
+        if (!recordId && result.records && result.records[0]) {
+          db.run('UPDATE employees SET smartsheet_record_id=? WHERE id=?',
+            [result.records[0].record_id, employee.id]);
+          db.save();
+        }
+        return { synced: true, action: recordId ? 'update' : 'add' };
+      }
+      console.error('[staff sync] API 失败:', result.errmsg);
+      return { synced: false, reason: result.errmsg };
+    } catch (e) {
+      console.error('[staff sync] API 异常:', e.message);
+      return { synced: false, reason: e.message };
+    }
+  }
+
+  // 方式二：webhook（仅支持 add_records，兼容旧配置）
+  if (hasWebhook) {
+    try {
+      const payload = {
+        schema: {
+          '姓名': { title: '姓名', type: 'text' },
+          '手机号': { title: '手机号', type: 'text' },
+          '性别': { title: '性别', type: 'text' },
+          '年龄': { title: '年龄', type: 'text' },
+          '所属门店': { title: '所属门店', type: 'text' },
+          '状态': { title: '状态', type: 'text' },
+          '入职日期': { title: '入职日期', type: 'text' },
+          '职位': { title: '职位', type: 'text' },
+          '角色': { title: '角色', type: 'text' },
+          '备注': { title: '备注', type: 'text' },
+        },
+        add_records: [{ values }],
+      };
+      const resp = await fetch(cfg.staffSmartSheetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json();
+      if (data.errcode === 0) return { synced: true, action: 'add_webhook' };
+      console.error('[staff sync] Webhook 失败:', data.errmsg);
+      return { synced: false, reason: data.errmsg };
+    } catch (e) {
+      console.error('[staff sync] Webhook 异常:', e.message);
+      return { synced: false, reason: e.message };
+    }
+  }
+
+  return { synced: false, reason: '未知错误' };
+}
+
+// PUT /api/staff/:id — 更新员工 + 同步到企微智能表格
+app.put('/api/staff/:id', async (req, res) => {
+  try {
+    const fields = ['name', 'phone', 'gender', 'age', 'store_name', 'status', 'entry_date', 'position', 'remark', 'role'];
+    const sets = [];
+    const params = [];
+
+    fields.forEach(f => {
+      if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); }
+    });
+
+    if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' });
+
+    sets.push("updated_at=datetime('now','localtime')");
+    params.push(req.params.id);
+
+    db.run(`UPDATE employees SET ${sets.join(',')} WHERE id=?`, params);
+    db.save();
+
+    const updated = db.queryOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
+
+    // 异步同步到企微智能表格
+    const cfg = loadConfig();
+    syncStaffToSmartsheet(updated, cfg).then(r => {
+      if (r.synced) console.log(`[staff sync] 企微同步成功 (${r.action}): ${updated.name}`);
+      else console.error(`[staff sync] 企微同步失败: ${r.reason}`);
+    }).catch(e => console.error('[staff sync] 同步异常:', e.message));
+
+    res.json({ ok: true, staff: updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/staff/seed — 重新生成测试员工数据
+app.post('/api/staff/seed', (req, res) => {
+  try {
+    const count = db.reseedStaff();
+    res.json({ ok: true, count, message: `已重新生成 ${count} 条测试员工数据` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/staff/sync-pull — 从企微智能表格拉取员工数据到本地
+app.get('/api/staff/sync-pull', async (req, res) => {
+  try {
+    const cfg = loadConfig();
+    if (!cfg.staffSmartSheetDocId || !cfg.staffSmartSheetSheetId) {
+      return res.status(400).json({ error: '请先配置 staffSmartSheetDocId 和 staffSmartSheetSheetId' });
+    }
+
+    const token = await ensureToken();
+
+    // 1. 拉取企微表格全部记录
+    let allRecords = [];
+    let offset = 0;
+    const limit = 500;
+    while (true) {
+      const result = await httpPost(
+        `https://qyapi.weixin.qq.com/cgi-bin/wedoc/smartsheet/get_records?access_token=${token}`,
+        { docid: cfg.staffSmartSheetDocId, sheet_id: cfg.staffSmartSheetSheetId, limit, offset }
+      );
+      if (result.errcode !== 0) {
+        return res.status(400).json({ error: `读取企微表格失败: [${result.errcode}] ${result.errmsg}` });
+      }
+      const records = result.records || [];
+      allRecords = allRecords.concat(records);
+      if (!result.has_more || records.length < limit) break;
+      offset += limit;
+    }
+
+    console.log(`[staff pull] 从企微拉取到 ${allRecords.length} 条记录`);
+
+    // 2. 获取本地已有员工的 record_id 映射
+    const localMap = {};
+    const allLocal = db.queryAll('SELECT id, smartsheet_record_id, name FROM employees');
+    for (const e of allLocal) {
+      if (e.smartsheet_record_id) localMap[e.smartsheet_record_id] = e;
+    }
+
+    // 3. 逐条同步
+    let created = 0, updated = 0, skipped = 0;
+    for (const rec of allRecords) {
+      const vals = rec.values || {};
+      // 企微字段标题 → 值映射
+      const name = (vals['姓名'] || []).map(v => v.text || v).join('') || '';
+      if (!name) { skipped++; continue; }
+
+      const rowData = {
+        name,
+        phone: (vals['手机号'] || []).map(v => v.text || v).join('') || '',
+        gender: (vals['性别'] || []).map(v => v.text || v).join('') || '',
+        age: parseInt((vals['年龄'] || []).map(v => v.text || v).join('')) || 0,
+        store_name: (vals['所属门店'] || []).map(v => v.text || v).join('') || '',
+        status: (vals['状态'] || []).map(v => v.text || v).join('') || '在职',
+        entry_date: (vals['入职日期'] || []).map(v => v.text || v).join('') || '',
+        position: (vals['职位'] || []).map(v => v.text || v).join('') || '',
+        role: (vals['角色'] || []).map(v => v.text || v).join('') || '店员',
+        remark: (vals['备注'] || []).map(v => v.text || v).join('') || '',
+      };
+
+      // 尝试匹配：先按 record_id，再按姓名
+      let localEmployee = localMap[rec.record_id];
+      if (!localEmployee) {
+        localEmployee = allLocal.find(e => e.name === rowData.name && !e.smartsheet_record_id);
+      }
+
+      if (localEmployee) {
+        // 更新本地记录 + 写入 record_id
+        db.run(
+          `UPDATE employees SET smartsheet_record_id=?, name=?, phone=?, gender=?, age=?,
+           store_name=?, status=?, entry_date=?, position=?, role=?, remark=?,
+           updated_at=datetime('now','localtime') WHERE id=?`,
+          [rec.record_id, rowData.name, rowData.phone, rowData.gender, rowData.age,
+           rowData.store_name, rowData.status, rowData.entry_date, rowData.position,
+           rowData.role, rowData.remark, localEmployee.id]
+        );
+        updated++;
+      } else {
+        // 新建本地员工
+        const newId = db.insert(
+          `INSERT INTO employees (name, phone, gender, age, store_name, status, entry_date,
+           position, role, remark, smartsheet_record_id, store_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [rowData.name, rowData.phone, rowData.gender, rowData.age,
+           rowData.store_name, rowData.status, rowData.entry_date,
+           rowData.position, rowData.role, rowData.remark, rec.record_id, 0]
+        );
+        allLocal.push({ id: newId, smartsheet_record_id: rec.record_id, name: rowData.name });
+        created++;
+      }
+    }
+
+    db.save();
+    const message = `同步完成：新增 ${created} 人，更新 ${updated} 人，跳过 ${skipped} 条空记录`;
+    console.log(`[staff pull] ${message}`);
+    res.json({ ok: true, created, updated, skipped, total: allRecords.length, message });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ===== 固定成本 =====
 app.get('/api/stores/:id/fixed-costs', (req, res) => { try { res.json({ ok: true, costs: db.queryAll('SELECT * FROM store_fixed_costs WHERE store_id=?', [req.params.id]) }); } catch (e) { res.status(500).json({ error: e.message }); } });
@@ -1118,8 +1535,15 @@ app.delete('/api/stores/:storeId/comments/:commentId', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ===== 智能机器人状态 =====
+app.get('/api/bot/status', (_req, res) => {
+  res.json(wecomBot.getStatus());
+});
+
 // ===== 启动 =====
 (async () => {
+  // 启动智能机器人长连接
+  wecomBot.start().catch(err => console.error('[wecom-bot] 启动失败:', err.message));
   setupConsoleEncoding();
   await db.init();
   db.seed();
@@ -1150,8 +1574,36 @@ app.delete('/api/stores/:storeId/comments/:commentId', (req, res) => {
   console.log('  文件编码 : UTF-8 (所有 fs 读写均显式指定)');
   console.log('  响应编码 : Content-Type + charset=utf-8');
   console.log('═'.repeat(50));
-  app.listen(PORT, () => {
+// ===== 智能表格 Webhook 代理 =====
+app.post('/api/webhook/smartsheet', async (req, res) => {
+  const { url, payload } = req.body;
+  if (!url) return res.status(400).json({ error: '请提供 webhook URL' });
+  if (!payload) return res.status(400).json({ error: '请提供 payload' });
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    res.json({ ok: true, status: resp.status, data });
+  } catch (e) {
+    res.status(500).json({ error: '请求失败: ' + e.message });
+  }
+});
+
+  const server = app.listen(PORT, () => {
     console.log(`🚀 中控后台已启动: http://localhost:${PORT}`);
     console.log(`📦 数据库: data/database.sqlite`);
   });
+
+  // 优雅退出：断开智能机器人
+  const graceful = (signal) => {
+    console.log(`\n[server] 收到 ${signal}，正在关闭...`);
+    wecomBot.stop();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 3000);
+  };
+  process.on('SIGINT', () => graceful('SIGINT'));
+  process.on('SIGTERM', () => graceful('SIGTERM'));
 })();
