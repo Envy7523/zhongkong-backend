@@ -1,8 +1,8 @@
 <template>
   <div class="menu-module-page">
     <MenuModuleHeader
-      title="菜品成本分析"
-      description="对比菜品成本与渠道售价，快速识别低毛利和异常定价。"
+      title="菜品成本管理"
+      description="按材料明细核算单份成本，并联动渠道售价分析毛利表现。"
       active="menu-management-cost"
       :metrics="heroMetrics"
     />
@@ -16,7 +16,7 @@
 
     <section class="menu-panel">
       <header class="menu-panel-header">
-        <div class="menu-panel-title"><h3>成本与毛利</h3><span>按渠道比较实际毛利表现</span></div>
+        <div class="menu-panel-title"><h3>成本构成与毛利</h3><span>维护材料明细，按渠道比较实际毛利表现</span></div>
         <div class="menu-filters">
           <el-input v-model="search" clearable placeholder="搜索菜品名称" class="wide-filter" />
           <el-select v-model="categoryFilter" clearable placeholder="全部分类">
@@ -37,7 +37,9 @@
           </template>
         </el-table-column>
         <el-table-column label="单份成本" width="115" align="right">
-          <template #default="{ row }"><span class="menu-price">¥{{ money(row.cost) }}</span></template>
+          <template #default="{ row }">
+            <div class="cost-cell"><span class="menu-price">¥{{ money(row.cost) }}</span><small>{{ row.cost_component_count ? `${row.cost_component_count} 项构成` : '待拆分' }}</small></div>
+          </template>
         </el-table-column>
         <el-table-column label="堂食价" width="100" align="right">
           <template #default="{ row }"><span class="menu-price">¥{{ money(row.dine_in_price || row.price) }}</span></template>
@@ -52,7 +54,7 @@
           <template #default="{ row }"><MarginCell :value="margin(row, 'takeout_price')" /></template>
         </el-table-column>
         <el-table-column label="操作" width="100" fixed="right" align="right">
-          <template #default="{ row }"><el-button link type="primary" @click="openCostDialog(row)">调整成本</el-button></template>
+          <template #default="{ row }"><el-button link type="primary" @click="openCostDialog(row)">成本明细</el-button></template>
         </el-table-column>
       </el-table>
       <div v-if="!loading && !filteredItems.length" class="menu-empty">没有符合条件的菜品</div>
@@ -69,23 +71,42 @@
       </footer>
     </section>
 
-    <el-dialog v-model="dialogVisible" title="调整菜品成本" width="460px" align-center class="menu-dialog">
+    <el-dialog v-model="dialogVisible" title="录入菜品成本构成" width="min(920px, calc(100vw - 32px))" align-center class="menu-dialog cost-builder-dialog">
       <div v-if="editingItem" class="cost-dialog-summary">
         <span class="dish-monogram">{{ String(editingItem.name || '菜').slice(0,1) }}</span>
-        <div><b>{{ editingItem.name }}</b><small>当前堂食价 ¥{{ money(editingItem.dine_in_price || editingItem.price) }}</small></div>
+        <div><b>{{ editingItem.name }}</b><small>{{ editingItem.category || '未分类' }} · 当前堂食价 ¥{{ money(editingItem.dine_in_price || editingItem.price) }}</small></div>
+        <div class="current-cost"><small>当前成本</small><strong>¥{{ money(editingItem.cost) }}</strong></div>
       </div>
-      <el-form label-position="top">
-        <el-form-item label="单份成本">
-          <el-input-number v-model="costValue" :min="0" :precision="2" :controls="false" style="width:100%;" />
-        </el-form-item>
-        <div class="cost-preview">
-          调整后堂食毛利率
-          <strong :class="marginTone(previewMargin)">{{ previewMargin }}%</strong>
+      <div class="cost-builder" v-loading="componentLoading">
+        <div class="builder-heading">
+          <div><b>材料明细</b><small>每项小计 = 用量 × 单位成本，总和自动成为该菜品单份成本。</small></div>
+          <el-button plain type="primary" @click="addComponent">+ 添加材料</el-button>
         </div>
-      </el-form>
+        <div class="component-table" role="table" aria-label="菜品材料成本明细">
+          <div class="component-row component-header" role="row">
+            <span>材料名称</span><span>用量</span><span>单位</span><span>单位成本</span><span>小计</span><span></span>
+          </div>
+          <div v-for="(component, index) in costComponents" :key="component.localId" class="component-row" role="row">
+            <el-input v-model="component.ingredient_name" :placeholder="index === 0 ? '如：烧鹅肉' : '材料名称'" maxlength="40" />
+            <el-input-number v-model="component.quantity" :min="0.001" :precision="3" :controls="false" />
+            <el-select v-model="component.unit" filterable allow-create default-first-option>
+              <el-option v-for="unit in materialUnits" :key="unit" :label="unit" :value="unit" />
+            </el-select>
+            <el-input-number v-model="component.unit_cost" :min="0" :precision="4" :controls="false" />
+            <strong class="component-subtotal">¥{{ money(componentSubtotal(component)) }}</strong>
+            <el-button link type="danger" :disabled="costComponents.length === 1" @click="removeComponent(index)">删除</el-button>
+          </div>
+        </div>
+        <div v-if="!componentLoading && !costComponents.length" class="component-empty">尚未添加材料明细</div>
+        <div class="cost-preview-grid">
+          <div><span>材料项</span><strong>{{ costComponents.length }}</strong></div>
+          <div><span>单份总成本</span><strong class="total-cost">¥{{ money(costValue) }}</strong></div>
+          <div><span>调整后堂食毛利率</span><strong :class="marginTone(previewMargin)">{{ previewMargin }}%</strong></div>
+        </div>
+      </div>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveCost">保存成本</el-button>
+        <el-button type="primary" :loading="saving" :disabled="componentLoading" @click="saveCost">保存成本明细</el-button>
       </template>
     </el-dialog>
   </div>
@@ -93,7 +114,7 @@
 
 <script setup>
 import { computed, defineComponent, h, onMounted, ref } from 'vue'
-import { getMenuItems, updateMenuItem } from '@/api'
+import { getMenuCostComponents, getMenuItems, saveMenuCostComponents } from '@/api'
 import { ElMessage } from 'element-plus'
 import MenuModuleHeader from './MenuModuleHeader.vue'
 import { useMenuPagination } from './useMenuPagination'
@@ -102,12 +123,15 @@ import './menu-theme.css'
 const items = ref([])
 const loading = ref(false)
 const saving = ref(false)
+const componentLoading = ref(false)
 const search = ref('')
 const categoryFilter = ref('')
 const marginFilter = ref('')
 const dialogVisible = ref(false)
 const editingItem = ref(null)
-const costValue = ref(0)
+const costComponents = ref([])
+const materialUnits = ['克', '千克', '个', '只', '份', '片', '毫升', '升', '勺', '包']
+let componentSeed = 0
 
 function margin(row, field) {
   const price = Number(row[field] || (field === 'dine_in_price' ? row.price : 0)) || 0
@@ -153,24 +177,59 @@ const heroMetrics = computed(() => [
   { label: '平均毛利', value: `${avgMargin.value}%`, tone: avgMargin.value >= 60 ? 'success' : 'warning' },
   { label: '预警菜品', value: riskCount.value, tone: riskCount.value ? 'danger' : 'success' },
 ])
+const costValue = computed(() => Math.round(costComponents.value.reduce((sum, component) => sum + componentSubtotal(component), 0) * 100) / 100)
 const previewMargin = computed(() => {
   if (!editingItem.value) return 0
   const price = Number(editingItem.value.dine_in_price || editingItem.value.price) || 0
   return price > 0 ? Math.round(((price - costValue.value) / price) * 100) : 0
 })
 function money(value) { return (Number(value) || 0).toFixed(2) }
-function openCostDialog(row) {
+function newComponent(values = {}) {
+  return { localId: ++componentSeed, ingredient_name: '', quantity: 1, unit: '份', unit_cost: 0, ...values }
+}
+function componentSubtotal(component) {
+  return Math.round((Number(component.quantity) || 0) * (Number(component.unit_cost) || 0) * 100) / 100
+}
+function addComponent() { costComponents.value.push(newComponent()) }
+function removeComponent(index) { if (costComponents.value.length > 1) costComponents.value.splice(index, 1) }
+async function openCostDialog(row) {
   editingItem.value = row
-  costValue.value = Number(row.cost) || 0
   dialogVisible.value = true
+  componentLoading.value = true
+  try {
+    const result = await getMenuCostComponents(row.id)
+    costComponents.value = (result.components || []).map(component => newComponent({
+      ingredient_name: component.ingredient_name,
+      quantity: Number(component.quantity) || 1,
+      unit: component.unit || '份',
+      unit_cost: Number(component.unit_cost) || 0,
+    }))
+    if (!costComponents.value.length) {
+      const legacyCost = Number(row.cost) || 0
+      costComponents.value = [newComponent({ ingredient_name: legacyCost ? '现有单份成本（待拆分）' : '', quantity: 1, unit: '份', unit_cost: legacyCost })]
+    }
+  } catch (error) {
+    ElMessage.error('成本明细加载失败：' + error.message)
+    dialogVisible.value = false
+  } finally { componentLoading.value = false }
 }
 async function saveCost() {
+  const invalidIndex = costComponents.value.findIndex(component => !component.ingredient_name.trim() || Number(component.quantity) <= 0 || Number(component.unit_cost) < 0)
+  if (invalidIndex >= 0) {
+    ElMessage.warning(`请完整填写第 ${invalidIndex + 1} 条材料明细`)
+    return
+  }
   saving.value = true
   try {
-    await updateMenuItem(editingItem.value.id, { cost: costValue.value })
+    await saveMenuCostComponents(editingItem.value.id, costComponents.value.map(component => ({
+      ingredient_name: component.ingredient_name.trim(),
+      quantity: Number(component.quantity),
+      unit: component.unit,
+      unit_cost: Number(component.unit_cost),
+    })))
     dialogVisible.value = false
     await loadData()
-    ElMessage.success('菜品成本已更新')
+    ElMessage.success('成本明细与总成本已更新')
   } catch (error) { ElMessage.error('保存失败：' + error.message) }
   finally { saving.value = false }
 }
@@ -200,15 +259,10 @@ onMounted(loadData)
 .cost-dialog-summary small { display: block; }
 .cost-dialog-summary b { color: #344054; font-size: 14px; }
 .cost-dialog-summary small { margin-top: 3px; color: #7f899a; font-size: 11px; }
-.cost-preview {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 11px 12px;
-  border-radius: 9px;
-  background: #f3f5f8;
-  color: #7d8797;
-  font-size: 12px;
-}
-.cost-preview strong { font-size: 17px; }
+.current-cost{margin-left:auto;text-align:right}.current-cost strong{display:block;margin-top:3px;color:#263247;font-size:18px}
+.cost-cell{display:flex;align-items:flex-end;flex-direction:column}.cost-cell small{margin-top:3px;color:#98a2b3;font-size:9px}
+.cost-builder{min-height:260px}.builder-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px}.builder-heading b,.builder-heading small{display:block}.builder-heading b{color:#344054;font-size:13px}.builder-heading small{margin-top:4px;color:#8a94a6;font-size:10px}
+.component-table{overflow:hidden;border:1px solid #e5e9f0;border-radius:12px;background:#fff}.component-row{display:grid;grid-template-columns:minmax(180px,1.6fr) 110px 105px 130px 100px 54px;align-items:center;gap:9px;padding:9px 11px;border-top:1px solid #edf0f4}.component-row:first-child{border-top:0}.component-header{padding-top:8px;padding-bottom:8px;background:#f7f9fc;color:#8490a3;font-size:10px;font-weight:700}.component-row :deep(.el-input-number){width:100%}.component-subtotal{color:#263247;text-align:right;font-size:12px}.component-empty{padding:38px;text-align:center;color:#98a2b3;font-size:12px}
+.cost-preview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:13px}.cost-preview-grid>div{padding:12px 14px;border-radius:10px;background:#f3f5f8}.cost-preview-grid span,.cost-preview-grid strong{display:block}.cost-preview-grid span{color:#7d8797;font-size:10px}.cost-preview-grid strong{margin-top:5px;font-size:17px}.cost-preview-grid .total-cost{color:#2563b8}
+@media(max-width:760px){.component-table{overflow-x:auto}.component-row{min-width:760px}.cost-preview-grid{grid-template-columns:1fr}.builder-heading{align-items:flex-start;flex-direction:column}.builder-heading :deep(.el-button){width:100%}}
 </style>

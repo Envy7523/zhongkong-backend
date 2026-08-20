@@ -876,9 +876,11 @@ app.delete('/api/operating-costs/:id', (req, res) => { try { db.run('DELETE FROM
 app.get('/api/menu', (req, res) => {
   try {
     const { store_id, category, status } = req.query;
-    let sql = 'SELECT m.*, s.store_name FROM menu_items m LEFT JOIN stores s ON m.store_id=s.id WHERE 1=1';
+    let sql = `SELECT m.*, s.store_name,
+      (SELECT COUNT(*) FROM menu_cost_components c WHERE c.menu_item_id=m.id) AS cost_component_count
+      FROM menu_items m LEFT JOIN stores s ON m.store_id=s.id WHERE 1=1`;
     const params = [];
-    if (store_id) { sql += ' AND m.store_id=?'; params.push(store_id); }
+    if (store_id) { sql += ' AND (m.store_id=? OR m.store_id IS NULL)'; params.push(store_id); }
     if (category) { sql += ' AND m.category=?'; params.push(category); }
     if (status) { sql += ' AND m.status=?'; params.push(status); }
     sql += ' ORDER BY m.id';
@@ -902,7 +904,7 @@ app.post('/api/menu', (req, res) => {
        (store_id,name,category,method,spec,price,dine_in_price,member_price,takeout_price,spec_unit,spec_weight,cost,expiry_days,status)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
-        store_id || 1,
+        store_id || null,
         cleanName,
         String(category || '').trim(),
         String(method || '').trim(),
@@ -924,6 +926,59 @@ app.post('/api/menu', (req, res) => {
 });
 app.put('/api/menu/:id', (req, res) => { try { const fields = ['name','category','method','spec','price','dine_in_price','member_price','takeout_price','spec_unit','spec_weight','cost','expiry_days','status']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE menu_items SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.delete('/api/menu/:id', (req, res) => { try { db.run('DELETE FROM menu_items WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+app.get('/api/menu/:id/cost-components', (req, res) => {
+  try {
+    const item = db.queryOne('SELECT id,name,cost FROM menu_items WHERE id=?', [req.params.id]);
+    if (!item) return res.status(404).json({ error: '菜品不存在' });
+    const components = db.queryAll(
+      'SELECT id,ingredient_name,quantity,unit,unit_cost,subtotal,sort_order FROM menu_cost_components WHERE menu_item_id=? ORDER BY sort_order,id',
+      [req.params.id]
+    );
+    res.json({ ok: true, item, components, total_cost: Number(item.cost) || 0 });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/menu/:id/cost-components', (req, res) => {
+  const itemId = Number(req.params.id);
+  try {
+    if (!db.queryOne('SELECT id FROM menu_items WHERE id=?', [itemId])) return res.status(404).json({ error: '菜品不存在' });
+    if (!Array.isArray(req.body?.components)) return res.status(400).json({ error: '成本明细格式不正确' });
+    if (req.body.components.length > 100) return res.status(400).json({ error: '单个菜品最多录入 100 条成本明细' });
+    const components = req.body.components.map((row, index) => {
+      const name = String(row.ingredient_name || '').trim();
+      const quantity = Number(row.quantity);
+      const unitCost = Number(row.unit_cost);
+      if (!name) throw new Error(`第 ${index + 1} 行请填写材料名称`);
+      if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`第 ${index + 1} 行用量必须大于 0`);
+      if (!Number.isFinite(unitCost) || unitCost < 0) throw new Error(`第 ${index + 1} 行单位成本不能小于 0`);
+      return {
+        ingredient_name: name,
+        quantity,
+        unit: String(row.unit || '份').trim() || '份',
+        unit_cost: unitCost,
+        subtotal: Math.round(quantity * unitCost * 100) / 100,
+        sort_order: index,
+      };
+    });
+    const totalCost = Math.round(components.reduce((sum, row) => sum + row.subtotal, 0) * 100) / 100;
+    db.exec('BEGIN');
+    try {
+      db.run('DELETE FROM menu_cost_components WHERE menu_item_id=?', [itemId]);
+      components.forEach(row => db.insert(
+        'INSERT INTO menu_cost_components (menu_item_id,ingredient_name,quantity,unit,unit_cost,subtotal,sort_order) VALUES (?,?,?,?,?,?,?)',
+        [itemId, row.ingredient_name, row.quantity, row.unit, row.unit_cost, row.subtotal, row.sort_order]
+      ));
+      db.run('UPDATE menu_items SET cost=? WHERE id=?', [totalCost, itemId]);
+      db.exec('COMMIT');
+      db.save();
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    res.json({ ok: true, components, total_cost: totalCost });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 // ===== 菜品模板 =====
 // 获取所有分类（从现有菜单中提取）
@@ -1485,8 +1540,6 @@ app.get('/api/analysis/sales', (req, res) => { try { res.json({ ok: true, rows: 
 // ===== 经营数据分析（收银系统 + 线上平台双向核对） =====
 app.get('/api/business-analytics/overview', (req, res) => {
   try {
-    const role = String(req.user?.role || '');
-    if (role.includes('团购') || role.includes('外卖')) return res.status(403).json({ error: '当前账号无权查看完整经营总览' });
     res.json({ ok: true, ...businessAnalytics.getOverview(db, req.query) });
   }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -1496,26 +1549,34 @@ app.get('/api/business-analytics/views/:scope', (req, res) => {
   try {
     const requested = req.params.scope;
     if (!['overview', 'group-buy', 'delivery'].includes(requested)) return res.status(404).json({ error: '分析视图不存在' });
-    const role = String(req.user?.role || '');
-    if (role.includes('负责人') && requested !== 'overview') return res.status(403).json({ error: '当前账号仅可查看负责人总览' });
-    if (role.includes('团购') && requested !== 'group-buy') return res.status(403).json({ error: '当前账号仅可查看团购分析' });
-    if (role.includes('外卖') && requested !== 'delivery') return res.status(403).json({ error: '当前账号仅可查看外卖分析' });
     const result = businessAnalytics.getScopedOverview(db, requested === 'group-buy' ? 'group_buy' : requested, req.query);
     res.json({ ok: true, ...result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/business-analytics/products/:scope', (req, res) => {
+  try {
+    const scope = req.params.scope;
+    if (!['overview','group-buy','delivery'].includes(scope)) return res.status(404).json({ error: '分析视角不存在' });
+    res.json({ ok: true, ...businessAnalytics.getProductAnalytics(db, scope, req.query) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/business-analytics/mappings/:scope', (req, res) => {
+  try {
+    const scope = req.params.scope;
+    if (!['overview','group-buy','delivery'].includes(scope)) return res.status(404).json({ error: '分析视角不存在' });
+    res.json({ ok: true, ...businessAnalytics.getProductMappings(db, scope, req.query) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/business-analytics/mappings', (req, res) => {
+  try { res.json(businessAnalytics.saveProductMapping(db, req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 app.post('/api/business-analytics/import', (req, res) => {
   try {
-    const role = String(req.user?.role || '');
-    const sourceType = req.body?.source_type === 'platform' ? 'platform' : 'pos';
-    const platform = String(req.body?.platform || '');
-    if (role.includes('团购') && (sourceType !== 'platform' || !['美团团购', '抖音团购'].includes(platform))) {
-      return res.status(403).json({ error: '团购岗位只能导入美团团购或抖音团购数据' });
-    }
-    if (role.includes('外卖') && (sourceType !== 'platform' || !['美团外卖', '淘宝闪购', '京东外卖'].includes(platform))) {
-      return res.status(403).json({ error: '外卖岗位只能导入外卖平台数据' });
-    }
     const result = businessAnalytics.importWorkbook(db, req.body || {}, req.user);
     res.status(201).json({ ok: true, ...result });
   } catch (e) { res.status(400).json({ error: e.message }); }

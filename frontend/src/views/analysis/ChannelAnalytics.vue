@@ -1,9 +1,11 @@
 <template>
   <div class="channel-analytics-page" :class="scopeClass">
+    <AnalysisPerspectiveNav />
+    <AnalysisSectionNav />
     <section class="channel-hero">
       <div>
         <span class="eyebrow">{{ heroEyebrow }}</span>
-        <h2>{{ scopeLabel }}经营分析</h2>
+        <h2>{{ scopeLabel }}经营视角</h2>
         <p>仅展示门店总收入、{{ scopeLabel }}收入与占比，不包含其他渠道的收入明细。</p>
       </div>
       <el-button plain @click="loadData"><el-icon><Refresh /></el-icon>刷新数据</el-button>
@@ -37,6 +39,11 @@
         <el-progress :percentage="Math.round((data.totals.scope_ratio || 0) * 100)" :show-text="false" :stroke-width="7" />
         <small>{{ scopeLabel }}收入 ÷ 门店总收入</small>
       </article>
+      <article class="metric promotion">
+        <span>第三方推广费</span>
+        <strong>{{ money(promotionTotal) }}</strong>
+        <small>按门店、按平台归集，不跨门店分摊</small>
+      </article>
     </section>
 
     <section class="content-grid">
@@ -58,6 +65,23 @@
         <el-empty v-else :description="`暂无门店${scopeLabel}数据`" />
       </article>
     </section>
+
+    <section class="panel promotion-panel">
+      <header>
+        <div><h3>门店平台费用明细</h3><p>{{ platformHint }}；推广费按门店和平台独立统计</p></div>
+        <span>{{ data.platform_breakdown.length }} 条</span>
+      </header>
+      <el-table v-if="data.platform_breakdown.length" :data="data.platform_breakdown" stripe>
+        <el-table-column prop="store_name" label="门店" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="platform" label="平台" width="130" />
+        <el-table-column label="交易总额" width="125" align="right"><template #default="{ row }">{{ money(row.gross_amount) }}</template></el-table-column>
+        <el-table-column label="推广费" width="120" align="right"><template #default="{ row }"><b class="promotion-value">{{ money(row.promotion_fee) }}</b></template></el-table-column>
+        <el-table-column label="其他费用" width="120" align="right"><template #default="{ row }">{{ money(row.other_fees) }}</template></el-table-column>
+        <el-table-column label="平台实收" width="125" align="right"><template #default="{ row }">{{ money(row.actual_amount) }}</template></el-table-column>
+        <el-table-column prop="order_count" label="订单数" width="90" align="right" />
+      </el-table>
+      <el-empty v-else :description="`暂无${scopeLabel}平台费用数据`" />
+    </section>
   </div>
 </template>
 
@@ -68,6 +92,8 @@ import * as echarts from 'echarts'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getBusinessAnalytics, getStores } from '@/api'
+import AnalysisPerspectiveNav from './AnalysisPerspectiveNav.vue'
+import AnalysisSectionNav from './AnalysisSectionNav.vue'
 
 const route = useRoute()
 const periods = [{ label: '日', value: 'day' }, { label: '周', value: 'week' }, { label: '月', value: 'month' }]
@@ -75,14 +101,16 @@ const stores = ref([])
 const loading = ref(false)
 const trendRef = ref()
 const filters = reactive({ period: 'day', store_id: null, range: [] })
-const data = reactive({ totals: {}, trend: [], stores: [] })
+const data = reactive({ totals: {}, trend: [], stores: [], platform_breakdown: [] })
 let chart
 
 const routeScope = computed(() => route.meta.analyticsScope === 'delivery' ? 'delivery' : 'group-buy')
 const scopeLabel = computed(() => routeScope.value === 'delivery' ? '外卖' : '团购')
 const scopeClass = computed(() => `scope-${routeScope.value}`)
 const heroEyebrow = computed(() => routeScope.value === 'delivery' ? 'DELIVERY PERFORMANCE' : 'GROUP BUY PERFORMANCE')
-const scopeHint = computed(() => routeScope.value === 'delivery' ? '美团外卖、淘宝闪购、京东外卖' : '美团团购、抖音团购')
+const scopeHint = computed(() => routeScope.value === 'delivery' ? '美团外卖、淘宝闪购、京东外卖' : '美团团购、抖音团购、免费试')
+const platformHint = computed(() => routeScope.value === 'delivery' ? '美团外卖 / 淘宝闪购 / 京东外卖' : '美团团购 / 抖音团购 / 免费试')
+const promotionTotal = computed(() => data.platform_breakdown.reduce((sum, row) => sum + Number(row.promotion_fee || 0), 0))
 const periodText = computed(() => ({ day: '日', week: '周', month: '月' }[filters.period]))
 const rangeLabel = computed(() => filters.range?.length === 2 ? `${filters.range[0]} 至 ${filters.range[1]}` : '全部营业周期')
 
@@ -120,7 +148,7 @@ function renderChart() {
 }
 
 function resizeChart() { chart?.resize() }
-watch(() => route.fullPath, async () => { chart?.dispose(); chart = null; Object.assign(data, { totals: {}, trend: [], stores: [] }); await loadData() })
+watch(() => route.fullPath, async () => { chart?.dispose(); chart = null; Object.assign(data, { totals: {}, trend: [], stores: [], platform_breakdown: [] }); await loadData() })
 onMounted(async () => { const result = await getStores({ page: 1, pageSize: 200 }).catch(() => ({ stores: [] })); stores.value = result.stores || []; await loadData(); window.addEventListener('resize', resizeChart) })
 onBeforeUnmount(() => { chart?.dispose(); window.removeEventListener('resize', resizeChart) })
 </script>
@@ -129,8 +157,9 @@ onBeforeUnmount(() => { chart?.dispose(); window.removeEventListener('resize', r
 .channel-analytics-page{--accent:#8b5cf6;--accent-soft:#f3efff;--ink:#172033;--muted:#78849a;--line:#e6eaf0;color:var(--ink)}.channel-analytics-page.scope-delivery{--accent:#0d9488;--accent-soft:#ecfdf9}
 .channel-hero{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:16px;padding:28px 30px;border-radius:18px;color:#fff;background:radial-gradient(circle at 90% 0,rgba(255,255,255,.18),transparent 34%),linear-gradient(125deg,#222b55 0%,var(--accent) 100%);box-shadow:0 16px 36px color-mix(in srgb,var(--accent) 22%,transparent)}.channel-hero .eyebrow{color:rgba(255,255,255,.7);font-size:10px;font-weight:800;letter-spacing:.18em}.channel-hero h2{margin:7px 0 6px;font-size:27px}.channel-hero p{margin:0;color:rgba(255,255,255,.75);font-size:13px}.channel-hero :deep(.el-button){border-color:rgba(255,255,255,.3);background:rgba(255,255,255,.12);color:#fff}
 .filter-bar{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:0 6px 18px rgba(33,48,78,.05)}.period-switch{display:flex;padding:3px;border-radius:9px;background:#f1f4f8}.period-switch button{min-width:68px;height:32px;border:0;border-radius:7px;background:transparent;color:#69758a;cursor:pointer}.period-switch button.active{background:#fff;color:var(--accent);font-weight:700;box-shadow:0 2px 7px rgba(32,48,78,.12)}.range-label{display:flex;align-items:center;gap:7px;margin-left:auto;color:#7c8799;font-size:11px;white-space:nowrap}.range-label i{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--accent-soft)}
-.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}.metric{min-height:142px;padding:20px;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 7px 21px rgba(33,48,78,.055)}.metric span,.metric small{display:block}.metric span{font-size:12px;font-weight:700}.metric strong{display:block;margin:18px 0 13px;font-size:25px}.metric small{color:#929cad;font-size:10px}.metric.total{background:linear-gradient(145deg,#fff,#f7f9fc)}.metric.channel{border-color:color-mix(in srgb,var(--accent) 35%,#e6eaf0);background:linear-gradient(145deg,#fff,var(--accent-soft))}.metric.channel strong,.metric.ratio strong,.channel-value{color:var(--accent)}.metric.ratio :deep(.el-progress){margin:-3px 0 13px}.metric.ratio :deep(.el-progress-bar__inner){background:var(--accent)}
-.content-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(430px,1fr);gap:14px}.panel{overflow:hidden;min-height:450px;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 7px 22px rgba(33,48,78,.055)}.panel>header{display:flex;align-items:center;justify-content:space-between;padding:17px 19px;border-bottom:1px solid #edf0f4}.panel h3{margin:0;font-size:14px}.panel header p{margin:4px 0 0;color:#929cad;font-size:10px}.panel header>span{padding:5px 9px;border-radius:20px;background:var(--accent-soft);color:var(--accent);font-size:10px}.trend-chart{height:390px}.ranking-panel :deep(.el-table){padding:7px 12px 12px}
-@media(max-width:1050px){.content-grid{grid-template-columns:1fr}.panel{min-height:390px}}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:14px}.metric{min-height:142px;padding:20px;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 7px 21px rgba(33,48,78,.055)}.metric span,.metric small{display:block}.metric span{font-size:12px;font-weight:700}.metric strong{display:block;margin:18px 0 13px;font-size:25px}.metric small{color:#929cad;font-size:10px}.metric.total{background:linear-gradient(145deg,#fff,#f7f9fc)}.metric.channel{border-color:color-mix(in srgb,var(--accent) 35%,#e6eaf0);background:linear-gradient(145deg,#fff,var(--accent-soft))}.metric.channel strong,.metric.ratio strong,.channel-value{color:var(--accent)}.metric.promotion strong,.promotion-value{color:#d97706}.metric.ratio :deep(.el-progress){margin:-3px 0 13px}.metric.ratio :deep(.el-progress-bar__inner){background:var(--accent)}
+.content-grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(430px,1fr);gap:14px}.panel{overflow:hidden;min-height:450px;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 7px 22px rgba(33,48,78,.055)}.panel>header{display:flex;align-items:center;justify-content:space-between;padding:17px 19px;border-bottom:1px solid #edf0f4}.panel h3{margin:0;font-size:14px}.panel header p{margin:4px 0 0;color:#929cad;font-size:10px}.panel header>span{padding:5px 9px;border-radius:20px;background:var(--accent-soft);color:var(--accent);font-size:10px}.trend-chart{height:390px}.ranking-panel :deep(.el-table){padding:7px 12px 12px}.promotion-panel{min-height:220px;margin-top:14px}.promotion-panel :deep(.el-table){padding:7px 12px 12px}
+@media(max-width:1180px){.metrics{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:1050px){.content-grid{grid-template-columns:1fr}.panel{min-height:390px}.promotion-panel{min-height:220px}}
 @media(max-width:760px){.channel-hero{align-items:flex-start;flex-direction:column;padding:22px 20px}.filter-bar{align-items:stretch;flex-wrap:wrap}.range-label{width:100%;margin-left:0}.metrics{grid-template-columns:1fr}.period-switch{width:100%}.period-switch button{flex:1}}
 </style>

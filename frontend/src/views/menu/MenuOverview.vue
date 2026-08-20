@@ -22,7 +22,7 @@
       <header class="menu-panel-header">
         <div class="menu-panel-title">
           <h3>菜品档案</h3>
-          <span>维护名称、分类、规格、价格与成本信息</span>
+          <span>维护名称、分类、规格、价格与销售状态</span>
         </div>
         <div class="menu-filters">
           <el-select v-model="storeFilter" clearable filterable placeholder="全部门店" @change="loadData">
@@ -62,9 +62,6 @@
         </el-table-column>
         <el-table-column label="外卖价" width="100" align="right">
           <template #default="{ row }"><span class="menu-price takeout">¥{{ formatPrice(row.takeout_price) }}</span></template>
-        </el-table-column>
-        <el-table-column label="成本" width="95" align="right">
-          <template #default="{ row }"><span class="menu-price">¥{{ formatPrice(row.cost) }}</span></template>
         </el-table-column>
         <el-table-column label="状态" width="90" align="center">
           <template #default="{ row }"><span :class="['status-pill', row.status === '停售' ? 'off' : 'on']">{{ row.status || '在售' }}</span></template>

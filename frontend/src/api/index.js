@@ -113,6 +113,8 @@ export const createMenuItem = (data) => http.post('/api/menu', data)
 export const updateMenuItem = (id, data) => http.put(`/api/menu/${id}`, data)
 export const deleteMenuItem = (id) => http.delete(`/api/menu/${id}`)
 export const getMenuCategories = () => http.get('/api/menu-categories')
+export const getMenuCostComponents = (id) => http.get(`/api/menu/${id}/cost-components`)
+export const saveMenuCostComponents = (id, components) => http.put(`/api/menu/${id}/cost-components`, { components })
 
 // ===== 菜品模板 =====
 export const getMenuTemplates = () => http.get('/api/menu-templates')
@@ -135,6 +137,9 @@ export const getRevenueAnalysis = (params) => http.get('/api/analysis/revenue', 
 export const getCostAnalysis = (params) => http.get('/api/analysis/cost', { params })
 export const getSalesAnalysis = () => http.get('/api/analysis/sales')
 export const getBusinessAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/views/${scope}`, { params })
+export const getBusinessProductAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/products/${scope}`, { params })
+export const getBusinessProductMappings = (scope = 'overview', params) => http.get(`/api/business-analytics/mappings/${scope}`, { params })
+export const saveBusinessProductMapping = (data) => http.put('/api/business-analytics/mappings', data)
 export const importBusinessData = (data) => http.post('/api/business-analytics/import', data, { timeout: 120000 })
 export const getBusinessTemplate = (sourceType) => http.get('/api/business-analytics/template', { params: { source_type: sourceType } })
 

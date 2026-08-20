@@ -203,6 +203,7 @@
 <script setup>
 import { computed, onMounted, reactive, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { SwitchButton } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { getConfig } from '@/api'
@@ -216,8 +217,6 @@ import BusinessDataImport from '@/views/BusinessDataImport.vue'
 import UserManagementView from '@/views/UserManagementView.vue'
 import AiAssistantView from '@/views/AiAssistantView.vue'
 import SettingsView from '@/views/SettingsView.vue'
-import RevenueAnalysis from '@/views/analysis/RevenueAnalysis.vue'
-import CostAnalysis from '@/views/analysis/CostAnalysis.vue'
 import SalesAnalysis from '@/views/analysis/SalesAnalysis.vue'
 import SuppliesAnalysis from '@/views/analysis/SuppliesAnalysis.vue'
 import BusinessAnalytics from '@/views/analysis/BusinessAnalytics.vue'
@@ -255,8 +254,6 @@ const COMPONENT_MAP = {
   'user-management': UserManagementView,
   'ai-assistant': AiAssistantView,
   settings: SettingsView,
-  'analysis-revenue': RevenueAnalysis,
-  'analysis-cost': CostAnalysis,
   'analysis-sales': SalesAnalysis,
   'analysis-supplies': SuppliesAnalysis,
   'analysis-business-overview': BusinessAnalytics,
@@ -289,13 +286,11 @@ const POPUP_CONFIG = {
   analysis: {
     sections: [
       {
-        title: '经营分析',
+        title: '经营视角',
         items: [
-          { index: 'analysis-business-overview', label: '负责人总览' },
-          { index: 'analysis-business-group-buy', label: '团购分析' },
-          { index: 'analysis-business-delivery', label: '外卖分析' },
-          { index: 'analysis-revenue', label: '门店营收构成' },
-          { index: 'analysis-cost', label: '门店成本分析' },
+          { index: 'analysis-business-overview', label: '集团总视角' },
+          { index: 'analysis-business-group-buy', label: '团购视角' },
+          { index: 'analysis-business-delivery', label: '外卖视角' },
         ],
       },
       {
@@ -409,11 +404,16 @@ const isLoginPage = computed(() => router.currentRoute.value.path === '/login')
 const isCollabRoute = computed(() => router.currentRoute.value.path.startsWith('/collab'))
 const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path.startsWith('/analysis/business'))
 const isDataImportRoute = computed(() => router.currentRoute.value.path.startsWith('/data-import/'))
+const analyticsScope = computed(() => ({
+  group: 'overview',
+  'group-buy': 'group-buy',
+  delivery: 'delivery',
+}[router.currentRoute.value.params.perspective] || router.currentRoute.value.meta.analyticsScope || 'overview'))
 const businessRouteTabId = computed(() => ({
   overview: 'analysis-business-overview',
   'group-buy': 'analysis-business-group-buy',
   delivery: 'analysis-business-delivery',
-}[router.currentRoute.value.meta.analyticsScope] || 'analysis-business-overview'))
+}[analyticsScope.value] || 'analysis-business-overview'))
 const dataImportRouteTabId = computed(() => ({
   pos: 'data-import-pos',
   'group-buy': 'data-import-group-buy',
@@ -423,8 +423,9 @@ const dataImportRouteTabId = computed(() => ({
 const pageTitle = computed(() => {
   if (isCollabRoute.value) return '协同事项'
   if (isBusinessAnalyticsRoute.value) {
-    const label = { overview: '负责人总览', 'group-buy': '团购分析', delivery: '外卖分析' }[router.currentRoute.value.meta.analyticsScope] || '负责人总览'
-    return `数据分析 · ${label}`
+    const label = { overview: '集团总视角', 'group-buy': '团购视角', delivery: '外卖视角' }[analyticsScope.value] || '集团总视角'
+    const section = { operations: '营业数据', products: '商品销售数据', mappings: '菜品关联' }[router.currentRoute.value.meta.analyticsSection] || '营业数据'
+    return `数据分析 · ${label} · ${section}`
   }
   if (isDataImportRoute.value) {
     const label = { pos: '收银系统数据', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
@@ -465,25 +466,7 @@ function showPopup(group, event) {
   clearTimeout(hideTimer)
   const rect = event.currentTarget.getBoundingClientRect()
   popupMenu.group = group
-  const sections = POPUP_CONFIG[group]?.sections || []
-  const role = String(auth.user?.role || '')
-  if (group === 'analysis' && ['负责人', '团购', '外卖'].includes(role)) {
-    const permitted = {
-      负责人: 'analysis-business-overview',
-      团购: 'analysis-business-group-buy',
-      外卖: 'analysis-business-delivery',
-    }[role]
-    popupMenu.sections = sections
-      .map(section => ({ ...section, items: section.items.filter(item => item.index === permitted) }))
-      .filter(section => section.items.length)
-  } else if (group === 'data-import' && ['负责人', '团购', '外卖'].includes(role)) {
-    const permitted = { 负责人: 'data-import-pos', 团购: 'data-import-group-buy', 外卖: 'data-import-delivery' }[role]
-    popupMenu.sections = sections
-      .map(section => ({ ...section, items: section.items.filter(item => item.index === permitted) }))
-      .filter(section => section.items.length)
-  } else {
-    popupMenu.sections = sections
-  }
+  popupMenu.sections = POPUP_CONFIG[group]?.sections || []
   popupMenu.top = Math.min(rect.top - 4, window.innerHeight - 240)
   popupMenu.left = rect.right + 10
   popupMenu.visible = true
@@ -509,9 +492,9 @@ async function selectPopupItem(index) {
   if (index.startsWith('analysis-business-')) {
     store.openTabFromId(index)
     const routePath = {
-      'analysis-business-overview': '/analysis/business/overview',
-      'analysis-business-group-buy': '/analysis/business/group-buy',
-      'analysis-business-delivery': '/analysis/business/delivery',
+      'analysis-business-overview': '/analysis/business/group/operations',
+      'analysis-business-group-buy': '/analysis/business/group-buy/operations',
+      'analysis-business-delivery': '/analysis/business/delivery/operations',
     }[index]
     await router.push(routePath)
     popupMenu.visible = false
@@ -561,9 +544,9 @@ async function selectTab(id) {
   if (id.startsWith('analysis-business-')) {
     store.activeTabId = id
     const routePath = {
-      'analysis-business-overview': '/analysis/business/overview',
-      'analysis-business-group-buy': '/analysis/business/group-buy',
-      'analysis-business-delivery': '/analysis/business/delivery',
+      'analysis-business-overview': '/analysis/business/group/operations',
+      'analysis-business-group-buy': '/analysis/business/group-buy/operations',
+      'analysis-business-delivery': '/analysis/business/delivery/operations',
     }[id]
     await router.push(routePath)
     return

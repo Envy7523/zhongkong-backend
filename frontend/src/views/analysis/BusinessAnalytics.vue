@@ -1,10 +1,12 @@
 <template>
   <div class="business-analytics-page">
+    <AnalysisPerspectiveNav />
+    <AnalysisSectionNav />
     <section class="analytics-hero">
       <div class="hero-copy">
         <span class="eyebrow">BUSINESS INTELLIGENCE</span>
-        <h2>经营数据分析</h2>
-        <p>统一收银系统与线上平台数据，按日、周、月观察门店实收，并自动识别渠道差异与平台费用。</p>
+        <h2>集团经营总视角</h2>
+        <p>统一查看全部门店与渠道的经营结果，按日、周、月观察实收、渠道构成、平台费用与核对差异。</p>
       </div>
       <div class="hero-actions">
         <el-button plain @click="loadData"><el-icon><Refresh /></el-icon>刷新数据</el-button>
@@ -37,7 +39,7 @@
         <div class="metric-foot">占实收 {{ ratio(data.totals.offline, data.totals.confirmed) }}</div>
       </article>
       <article class="metric-card">
-        <div><span>团购实收</span><small>美团团购 + 抖音团购</small></div>
+        <div><span>团购实收</span><small>美团团购 + 抖音团购 + 免费试</small></div>
         <strong>{{ money(data.totals.group_buy) }}</strong>
         <div class="metric-foot">占实收 {{ ratio(data.totals.group_buy, data.totals.confirmed) }}</div>
       </article>
@@ -89,16 +91,6 @@
             </div>
           </div>
           <el-empty v-else description="暂无门店数据" />
-        </article>
-        <article class="panel product-ranking">
-          <header><div><h3>线上商品销量</h3><p>来自平台商品销量明细</p></div></header>
-          <el-table v-if="data.top_products.length" :data="data.top_products" size="small">
-            <el-table-column type="index" width="50" label="#" />
-            <el-table-column prop="product_name" label="商品" min-width="130" show-overflow-tooltip />
-            <el-table-column label="销量" width="90" align="right"><template #default="{ row }">{{ numberText(row.quantity) }}</template></el-table-column>
-            <el-table-column label="销售额" width="120" align="right"><template #default="{ row }">{{ money(row.sales_amount) }}</template></el-table-column>
-          </el-table>
-          <el-empty v-else description="导入平台商品销量后显示排名" />
         </article>
       </section>
     </template>
@@ -173,10 +165,12 @@ import * as echarts from 'echarts'
 import { DocumentAdd, Download, Refresh, Upload } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getBusinessAnalytics, getBusinessTemplate, getStores, importBusinessData } from '@/api'
+import AnalysisPerspectiveNav from './AnalysisPerspectiveNav.vue'
+import AnalysisSectionNav from './AnalysisSectionNav.vue'
 
 const periods = [{ label: '日', value: 'day' }, { label: '周', value: 'week' }, { label: '月', value: 'month' }]
 const tabs = [{ label: '经营总览', value: 'overview' }, { label: '双向核对', value: 'reconciliation' }, { label: '导入记录', value: 'imports' }]
-const platforms = ['美团团购', '抖音团购', '美团外卖', '淘宝闪购', '京东外卖']
+const platforms = ['美团团购', '抖音团购', '免费试', '美团外卖', '淘宝闪购', '京东外卖']
 const activeTab = ref('overview')
 const loading = ref(false)
 const importing = ref(false)
@@ -257,6 +251,10 @@ async function submitImport() {
   importing.value = true
   try {
     const result = await importBusinessData({ source_type: importForm.source_type, platform: importForm.platform, file_name: importForm.file.name, data: await readFile(importForm.file) })
+    if (!Number(result.imported || 0)) {
+      const reasons = (result.errors || []).slice(0, 3).join('；')
+      throw new Error(reasons ? `没有有效数据：${reasons}` : '文件中没有通过校验的营业数据')
+    }
     ElMessage.success(`已导入 ${result.imported} 条营收记录${result.product_rows ? `、${result.product_rows} 条商品销量` : ''}`)
     if (result.skipped) ElMessage.warning(`${result.skipped} 行未能识别，请检查门店名称和日期`)
     importVisible.value = false
@@ -289,7 +287,7 @@ onBeforeUnmount(() => { trendChart?.dispose(); compositionChart?.dispose(); wind
 .filter-bar{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:0 6px 18px rgba(33,48,78,.05)}.period-switch{display:flex;padding:3px;border-radius:9px;background:#f1f4f8}.period-switch button{min-width:68px;height:32px;border:0;border-radius:7px;background:transparent;color:#69758a;cursor:pointer;font-size:12px}.period-switch button.active{background:#fff;color:var(--blue);font-weight:700;box-shadow:0 2px 7px rgba(32,48,78,.12)}.filter-summary{display:flex;align-items:center;gap:7px;margin-left:auto;color:#7c8799;font-size:11px;white-space:nowrap}.live-dot{width:7px;height:7px;border-radius:50%;background:#22b980;box-shadow:0 0 0 4px rgba(34,185,128,.1)}
 .metric-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:17px}.metric-card{min-height:130px;padding:17px;border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:0 6px 18px rgba(33,48,78,.05)}.metric-card>div:first-child span,.metric-card>div:first-child small{display:block}.metric-card span{font-size:12px;font-weight:700}.metric-card small{margin-top:5px;color:#98a2b3;font-size:9px;line-height:1.5}.metric-card strong{display:block;margin:17px 0 12px;font-size:21px;letter-spacing:-.02em}.metric-foot{color:#8a94a6;font-size:10px}.metric-card.primary{border-color:#8ebcff;background:linear-gradient(145deg,#f7fbff,#edf5ff)}.metric-card.primary strong{color:#246bd4}.metric-card.warning strong{color:#d37b12}.metric-card.success strong{color:#159467}.metric-card.success :deep(.el-progress-bar__inner){background:#22b980}
 .content-tabs{display:flex;gap:4px;margin-bottom:12px;padding:4px;border:1px solid var(--line);border-radius:11px;background:#f7f8fa;width:max-content}.content-tabs button{height:33px;padding:0 16px;border:0;border-radius:8px;background:transparent;color:#667085;cursor:pointer;font-size:12px}.content-tabs button.active{background:#fff;color:#246bd4;font-weight:700;box-shadow:0 3px 9px rgba(36,57,91,.09)}.content-tabs em{display:inline-grid;min-width:18px;height:18px;margin-left:6px;place-items:center;border-radius:9px;background:#fff1db;color:#c87008;font-size:9px;font-style:normal}
-.chart-grid{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(300px,.75fr);gap:14px;margin-bottom:14px}.lower-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.panel{overflow:hidden;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 7px 22px rgba(33,48,78,.055)}.panel>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:17px 19px;border-bottom:1px solid #edf0f4}.panel h3{margin:0;font-size:14px}.panel header p{margin:4px 0 0;color:#929cad;font-size:10px}.panel-badge{padding:5px 9px;border-radius:20px;background:#eef4ff;color:#3d6fc5;font-size:10px}.chart{height:330px}.ranking-list{padding:6px 18px 12px}.ranking-list>div{display:flex;align-items:center;gap:11px;padding:12px 2px;border-bottom:1px solid #eef1f5}.ranking-list>div:last-child{border-bottom:0}.rank{display:grid;width:24px;height:24px;place-items:center;border-radius:7px;background:#f0f2f6;color:#7e899b;font-size:10px;font-weight:700}.rank.top{background:#e8f1ff;color:#3275de}.ranking-list>div>div{min-width:0;flex:1}.ranking-list b,.ranking-list small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ranking-list b{font-size:11px}.ranking-list small{margin-top:3px;color:#9aa3b2;font-size:9px}.ranking-list strong{font-size:12px}.product-ranking :deep(.el-table){padding:6px 12px 12px}.reconciliation-panel,.import-history{min-height:420px}.difference-ok{color:#189768}.difference-warn{color:#d97706;font-weight:700}
+.chart-grid{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(300px,.75fr);gap:14px;margin-bottom:14px}.lower-grid{display:grid;grid-template-columns:1fr;gap:14px}.panel{overflow:hidden;border:1px solid var(--line);border-radius:15px;background:#fff;box-shadow:0 7px 22px rgba(33,48,78,.055)}.panel>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:17px 19px;border-bottom:1px solid #edf0f4}.panel h3{margin:0;font-size:14px}.panel header p{margin:4px 0 0;color:#929cad;font-size:10px}.panel-badge{padding:5px 9px;border-radius:20px;background:#eef4ff;color:#3d6fc5;font-size:10px}.chart{height:330px}.ranking-list{padding:6px 18px 12px}.ranking-list>div{display:flex;align-items:center;gap:11px;padding:12px 2px;border-bottom:1px solid #eef1f5}.ranking-list>div:last-child{border-bottom:0}.rank{display:grid;width:24px;height:24px;place-items:center;border-radius:7px;background:#f0f2f6;color:#7e899b;font-size:10px;font-weight:700}.rank.top{background:#e8f1ff;color:#3275de}.ranking-list>div>div{min-width:0;flex:1}.ranking-list b,.ranking-list small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ranking-list b{font-size:11px}.ranking-list small{margin-top:3px;color:#9aa3b2;font-size:9px}.ranking-list strong{font-size:12px}.reconciliation-panel,.import-history{min-height:420px}.difference-ok{color:#189768}.difference-warn{color:#d97706;font-weight:700}
 .import-steps{display:flex;align-items:center;margin-bottom:20px;padding:11px 14px;border-radius:10px;background:#f6f8fb;color:#a0a8b6;font-size:10px}.import-steps span.active{color:#3275de;font-weight:700}.import-steps i{height:1px;flex:1;margin:0 10px;background:#dfe4ec}.file-drop{display:flex;flex-direction:column;align-items:center;width:100%;padding:25px;border:1px dashed #cfd8e6;border-radius:12px;background:#fafcff;cursor:pointer;transition:.2s}.file-drop:hover,.file-drop.selected{border-color:#6fa3f5;background:#f4f8ff}.file-drop input{display:none}.file-drop .el-icon{margin-bottom:8px;color:#4b86e2;font-size:28px}.file-drop b{font-size:12px}.file-drop small{margin-top:5px;color:#98a2b3;font-size:10px}.template-link{display:flex;align-items:center;gap:5px;margin-top:-4px;padding:0;border:0;background:none;color:#3275de;cursor:pointer;font-size:11px}.import-note{margin-top:17px;padding:13px 14px;border-left:3px solid #72a4f1;border-radius:0 9px 9px 0;background:#f5f8fd}.import-note b{font-size:11px}.import-note p{margin:5px 0 0;color:#7b879a;font-size:10px;line-height:1.65}
 @media(max-width:1280px){.metric-grid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.analytics-hero{align-items:flex-start;flex-direction:column}.filter-bar{align-items:stretch;flex-wrap:wrap}.filter-summary{width:100%;margin-left:0}.metric-grid{grid-template-columns:repeat(2,1fr)}.chart-grid,.lower-grid{grid-template-columns:1fr}.chart{height:300px}}

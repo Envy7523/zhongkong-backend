@@ -8,34 +8,66 @@ const routes = [
     component: LoginView,
   },
   {
-    path: '/',
-    redirect: '/dashboard',
+    path: '/dashboard',
+    alias: '/',
+    name: 'dashboard',
+    // App.vue 负责渲染普通工作台标签；这里仅提供一个有效路由记录，
+    // 让直接访问或刷新 /dashboard 时不会落入未匹配状态。
+    component: { render: () => null },
   },
   {
     path: '/analysis',
-    redirect: '/analysis/business/overview',
+    redirect: '/analysis/business/group/operations',
   },
   {
     path: '/analysis/business',
-    redirect: '/analysis/business/overview',
+    redirect: '/analysis/business/group/operations',
   },
   {
     path: '/analysis/business/overview',
-    name: 'analysis-business-overview',
-    component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analyticsScope: 'overview' },
+    redirect: '/analysis/business/group/operations',
   },
   {
     path: '/analysis/business/group-buy',
-    name: 'analysis-business-group-buy',
-    component: () => import('@/views/analysis/ChannelAnalytics.vue'),
-    meta: { analyticsScope: 'group-buy' },
+    redirect: '/analysis/business/group-buy/operations',
   },
   {
     path: '/analysis/business/delivery',
-    name: 'analysis-business-delivery',
+    redirect: '/analysis/business/delivery/operations',
+  },
+  {
+    path: '/analysis/business/group',
+    redirect: '/analysis/business/group/operations',
+  },
+  {
+    path: '/analysis/business/group/operations',
+    name: 'analysis-group-operations',
+    component: () => import('@/views/analysis/BusinessAnalytics.vue'),
+    meta: { analyticsScope: 'overview', analyticsSection: 'operations' },
+  },
+  {
+    path: '/analysis/business/group-buy/operations',
+    name: 'analysis-group-buy-operations',
     component: () => import('@/views/analysis/ChannelAnalytics.vue'),
-    meta: { analyticsScope: 'delivery' },
+    meta: { analyticsScope: 'group-buy', analyticsSection: 'operations' },
+  },
+  {
+    path: '/analysis/business/delivery/operations',
+    name: 'analysis-delivery-operations',
+    component: () => import('@/views/analysis/ChannelAnalytics.vue'),
+    meta: { analyticsScope: 'delivery', analyticsSection: 'operations' },
+  },
+  {
+    path: '/analysis/business/:perspective(group|group-buy|delivery)/products',
+    name: 'analysis-products',
+    component: () => import('@/views/analysis/ProductSalesAnalytics.vue'),
+    meta: { analyticsSection: 'products' },
+  },
+  {
+    path: '/analysis/business/:perspective(group|group-buy|delivery)/mappings',
+    name: 'analysis-mappings',
+    component: () => import('@/views/analysis/ProductDishMapping.vue'),
+    meta: { analyticsSection: 'mappings' },
   },
   {
     path: '/data-import',
