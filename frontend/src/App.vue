@@ -78,9 +78,18 @@
             <el-icon><List /></el-icon>
             <template #title><span>协同事项</span><small class="nav-badge new">NEW</small></template>
           </el-menu-item>
-          <el-menu-item index="data-import">
+          <el-menu-item index="bookkeeping-entry">
+            <el-icon><Notebook /></el-icon>
+            <template #title><span>记账本</span><small class="nav-badge new">NEW</small></template>
+          </el-menu-item>
+          <el-menu-item
+            index="data-import-group"
+            @mouseenter="showPopup('data-import', $event)"
+            @mouseleave="scheduleHidePopup"
+            :class="{ 'is-popup-open': popupMenu.group === 'data-import', 'is-active': store.activeTabId?.startsWith('data-import-') }"
+          >
             <el-icon><Download /></el-icon>
-            <template #title>数据导入</template>
+            <template #title><span>数据导入</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
           <el-menu-item index="pipeline">
             <el-icon><Upload /></el-icon>
@@ -184,7 +193,7 @@
       </div>
 
       <div class="content-area">
-        <router-view v-if="isCollabRoute" />
+        <router-view v-if="isCollabRoute || isBusinessAnalyticsRoute || isDataImportRoute" />
         <component v-else :is="currentView" :key="store.activeTabId" />
       </div>
     </div>
@@ -203,6 +212,7 @@ import DashboardView from '@/views/DashboardView.vue'
 import ApiConfigView from '@/views/ApiConfigView.vue'
 import PipelineView from '@/views/PipelineView.vue'
 import DataImportView from '@/views/DataImportView.vue'
+import BusinessDataImport from '@/views/BusinessDataImport.vue'
 import UserManagementView from '@/views/UserManagementView.vue'
 import AiAssistantView from '@/views/AiAssistantView.vue'
 import SettingsView from '@/views/SettingsView.vue'
@@ -210,6 +220,8 @@ import RevenueAnalysis from '@/views/analysis/RevenueAnalysis.vue'
 import CostAnalysis from '@/views/analysis/CostAnalysis.vue'
 import SalesAnalysis from '@/views/analysis/SalesAnalysis.vue'
 import SuppliesAnalysis from '@/views/analysis/SuppliesAnalysis.vue'
+import BusinessAnalytics from '@/views/analysis/BusinessAnalytics.vue'
+import ChannelAnalytics from '@/views/analysis/ChannelAnalytics.vue'
 import StoreBasic from '@/views/store/StoreBasic.vue'
 import StorePlatform from '@/views/store/StorePlatform.vue'
 import StoreConfig from '@/views/store/StoreConfig.vue'
@@ -220,18 +232,26 @@ import StoreMap from '@/views/store/StoreMap.vue'
 import MenuOverview from '@/views/menu/MenuOverview.vue'
 import MenuCost from '@/views/menu/MenuCost.vue'
 import MenuExpiry from '@/views/menu/MenuExpiry.vue'
+import MenuTemplate from '@/views/menu/MenuTemplate.vue'
 import DailyCost from '@/views/cost/DailyCost.vue'
 import WeeklyCost from '@/views/cost/WeeklyCost.vue'
 import MonthlyCost from '@/views/cost/MonthlyCost.vue'
 import StaffManager from '@/views/staff/StaffManager.vue'
 import StaffClerk from '@/views/staff/StaffClerk.vue'
 import StaffTest from '@/views/staff/StaffTest.vue'
+import BookkeepingEntry from '@/views/bookkeeping/BookkeepingEntry.vue'
+import BookkeepingCategories from '@/views/bookkeeping/BookkeepingCategories.vue'
+import BookkeepingRecords from '@/views/bookkeeping/BookkeepingRecords.vue'
 
 const COMPONENT_MAP = {
   dashboard: DashboardView,
   'api-config': ApiConfigView,
   pipeline: PipelineView,
   'data-import': DataImportView,
+  'data-import-pos': BusinessDataImport,
+  'data-import-group-buy': BusinessDataImport,
+  'data-import-delivery': BusinessDataImport,
+  'data-import-legacy': DataImportView,
   'user-management': UserManagementView,
   'ai-assistant': AiAssistantView,
   settings: SettingsView,
@@ -239,6 +259,9 @@ const COMPONENT_MAP = {
   'analysis-cost': CostAnalysis,
   'analysis-sales': SalesAnalysis,
   'analysis-supplies': SuppliesAnalysis,
+  'analysis-business-overview': BusinessAnalytics,
+  'analysis-business-group-buy': ChannelAnalytics,
+  'analysis-business-delivery': ChannelAnalytics,
   'store-management-info-basic': StoreBasic,
   'store-management-info-circle': StoreBusinessCircle,
   'store-management-info-platform': StorePlatform,
@@ -247,6 +270,7 @@ const COMPONENT_MAP = {
   'store-management-fixed': StoreFixedCost,
   'store-management-operating': StoreOperatingCost,
   'menu-management-overview': MenuOverview,
+  'menu-management-template': MenuTemplate,
   'menu-management-cost': MenuCost,
   'menu-management-expiry': MenuExpiry,
   'cost-accounting-daily': DailyCost,
@@ -255,6 +279,9 @@ const COMPONENT_MAP = {
   'staff-management-manager': StaffManager,
   'staff-management-clerk': StaffClerk,
   'staff-management-test': StaffTest,
+  'bookkeeping-entry': BookkeepingEntry,
+  'bookkeeping-categories': BookkeepingCategories,
+  'bookkeeping-records': BookkeepingRecords,
 }
 
 // ===== 浮动弹出菜单配置 =====
@@ -262,8 +289,11 @@ const POPUP_CONFIG = {
   analysis: {
     sections: [
       {
-        title: '营收分析',
+        title: '经营分析',
         items: [
+          { index: 'analysis-business-overview', label: '负责人总览' },
+          { index: 'analysis-business-group-buy', label: '团购分析' },
+          { index: 'analysis-business-delivery', label: '外卖分析' },
           { index: 'analysis-revenue', label: '门店营收构成' },
           { index: 'analysis-cost', label: '门店成本分析' },
         ],
@@ -309,6 +339,7 @@ const POPUP_CONFIG = {
         title: '菜品数据',
         items: [
           { index: 'menu-management-overview', label: '菜品总览' },
+          { index: 'menu-management-template', label: '菜品模板' },
           { index: 'menu-management-cost', label: '菜品成本' },
           { index: 'menu-management-expiry', label: '效期管理' },
         ],
@@ -339,6 +370,34 @@ const POPUP_CONFIG = {
       },
     ],
   },
+  bookkeeping: {
+    sections: [
+      {
+        title: '记账管理',
+        items: [
+          { index: 'bookkeeping-entry', label: '门店记账' },
+          { index: 'bookkeeping-categories', label: '记账分类' },
+          { index: 'bookkeeping-records', label: '门店账本' },
+        ],
+      },
+    ],
+  },
+  'data-import': {
+    sections: [
+      {
+        title: '经营数据',
+        items: [
+          { index: 'data-import-pos', label: '收银系统数据' },
+          { index: 'data-import-group-buy', label: '团购平台数据' },
+          { index: 'data-import-delivery', label: '外卖平台数据' },
+        ],
+      },
+      {
+        title: '其他数据',
+        items: [{ index: 'data-import-legacy', label: '日报与耗材' }],
+      },
+    ],
+  },
 }
 
 const store = useAppStore()
@@ -348,9 +407,35 @@ const currentView = shallowRef(DashboardView)
 
 const isLoginPage = computed(() => router.currentRoute.value.path === '/login')
 const isCollabRoute = computed(() => router.currentRoute.value.path.startsWith('/collab'))
-const pageTitle = computed(() => isCollabRoute.value ? '协同事项' : (store.activeTab?.title || '数据概括'))
+const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path.startsWith('/analysis/business'))
+const isDataImportRoute = computed(() => router.currentRoute.value.path.startsWith('/data-import/'))
+const businessRouteTabId = computed(() => ({
+  overview: 'analysis-business-overview',
+  'group-buy': 'analysis-business-group-buy',
+  delivery: 'analysis-business-delivery',
+}[router.currentRoute.value.meta.analyticsScope] || 'analysis-business-overview'))
+const dataImportRouteTabId = computed(() => ({
+  pos: 'data-import-pos',
+  'group-buy': 'data-import-group-buy',
+  delivery: 'data-import-delivery',
+  legacy: 'data-import-legacy',
+}[router.currentRoute.value.meta.importMode] || 'data-import-pos'))
+const pageTitle = computed(() => {
+  if (isCollabRoute.value) return '协同事项'
+  if (isBusinessAnalyticsRoute.value) {
+    const label = { overview: '负责人总览', 'group-buy': '团购分析', delivery: '外卖分析' }[router.currentRoute.value.meta.analyticsScope] || '负责人总览'
+    return `数据分析 · ${label}`
+  }
+  if (isDataImportRoute.value) {
+    const label = { pos: '收银系统数据', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
+    return `数据导入 · ${label}`
+  }
+  return store.activeTab?.title || '数据概括'
+})
 const sidebarActive = computed(() => {
   if (isCollabRoute.value) return 'collab-list'
+  if (isBusinessAnalyticsRoute.value) return 'analysis-group'
+  if (isDataImportRoute.value) return 'data-import-group'
   return store.activeTabId
 })
 const userInitial = computed(() => {
@@ -380,7 +465,25 @@ function showPopup(group, event) {
   clearTimeout(hideTimer)
   const rect = event.currentTarget.getBoundingClientRect()
   popupMenu.group = group
-  popupMenu.sections = POPUP_CONFIG[group]?.sections || []
+  const sections = POPUP_CONFIG[group]?.sections || []
+  const role = String(auth.user?.role || '')
+  if (group === 'analysis' && ['负责人', '团购', '外卖'].includes(role)) {
+    const permitted = {
+      负责人: 'analysis-business-overview',
+      团购: 'analysis-business-group-buy',
+      外卖: 'analysis-business-delivery',
+    }[role]
+    popupMenu.sections = sections
+      .map(section => ({ ...section, items: section.items.filter(item => item.index === permitted) }))
+      .filter(section => section.items.length)
+  } else if (group === 'data-import' && ['负责人', '团购', '外卖'].includes(role)) {
+    const permitted = { 负责人: 'data-import-pos', 团购: 'data-import-group-buy', 外卖: 'data-import-delivery' }[role]
+    popupMenu.sections = sections
+      .map(section => ({ ...section, items: section.items.filter(item => item.index === permitted) }))
+      .filter(section => section.items.length)
+  } else {
+    popupMenu.sections = sections
+  }
   popupMenu.top = Math.min(rect.top - 4, window.innerHeight - 240)
   popupMenu.left = rect.right + 10
   popupMenu.visible = true
@@ -399,10 +502,37 @@ function cancelHidePopup() {
 }
 
 async function leaveCollabRoute() {
-  if (isCollabRoute.value) await router.replace('/')
+  if (isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value) await router.replace('/')
 }
 
 async function selectPopupItem(index) {
+  if (index.startsWith('analysis-business-')) {
+    store.openTabFromId(index)
+    const routePath = {
+      'analysis-business-overview': '/analysis/business/overview',
+      'analysis-business-group-buy': '/analysis/business/group-buy',
+      'analysis-business-delivery': '/analysis/business/delivery',
+    }[index]
+    await router.push(routePath)
+    popupMenu.visible = false
+    popupMenu.group = null
+    popupMenu.sections = []
+    return
+  }
+  if (index.startsWith('data-import-')) {
+    store.openTabFromId(index)
+    const routePath = {
+      'data-import-pos': '/data-import/pos',
+      'data-import-group-buy': '/data-import/group-buy',
+      'data-import-delivery': '/data-import/delivery',
+      'data-import-legacy': '/data-import/legacy',
+    }[index]
+    await router.push(routePath)
+    popupMenu.visible = false
+    popupMenu.group = null
+    popupMenu.sections = []
+    return
+  }
   await leaveCollabRoute()
   store.openTabFromId(index)
   popupMenu.visible = false
@@ -428,6 +558,27 @@ async function selectTab(id) {
     await router.push('/collab/list')
     return
   }
+  if (id.startsWith('analysis-business-')) {
+    store.activeTabId = id
+    const routePath = {
+      'analysis-business-overview': '/analysis/business/overview',
+      'analysis-business-group-buy': '/analysis/business/group-buy',
+      'analysis-business-delivery': '/analysis/business/delivery',
+    }[id]
+    await router.push(routePath)
+    return
+  }
+  if (id.startsWith('data-import-')) {
+    store.activeTabId = id
+    const routePath = {
+      'data-import-pos': '/data-import/pos',
+      'data-import-group-buy': '/data-import/group-buy',
+      'data-import-delivery': '/data-import/delivery',
+      'data-import-legacy': '/data-import/legacy',
+    }[id]
+    await router.push(routePath)
+    return
+  }
   await leaveCollabRoute()
   store.activeTabId = id
 }
@@ -435,6 +586,8 @@ async function selectTab(id) {
 async function closeTab(id) {
   store.closeTab(id)
   if (id === 'collab' && isCollabRoute.value) await router.push('/')
+  if (id.startsWith('analysis-business-') && isBusinessAnalyticsRoute.value) await router.push('/')
+  if (id.startsWith('data-import-') && isDataImportRoute.value) await router.push('/')
 }
 
 watch(() => store.activeTabId, (id) => {
@@ -444,6 +597,18 @@ watch(() => store.activeTabId, (id) => {
 
 watch(isCollabRoute, (active) => {
   if (active) store.openTabFromId('collab')
+})
+watch(isBusinessAnalyticsRoute, (active) => {
+  if (active) store.openTabFromId(businessRouteTabId.value)
+})
+watch(businessRouteTabId, (id) => {
+  if (isBusinessAnalyticsRoute.value) store.openTabFromId(id)
+})
+watch(isDataImportRoute, (active) => {
+  if (active) store.openTabFromId(dataImportRouteTabId.value)
+})
+watch(dataImportRouteTabId, (id) => {
+  if (isDataImportRoute.value) store.openTabFromId(id)
 })
 
 onMounted(async () => {
@@ -463,6 +628,8 @@ onMounted(async () => {
   // 刷新或直接打开协同事项时，保留当前路由；否则会出现 URL 是 /collab，
   // 页面却被初始化逻辑切回数据概括的情况。
   if (isCollabRoute.value) store.openTabFromId('collab')
+  else if (isBusinessAnalyticsRoute.value) store.openTabFromId(businessRouteTabId.value)
+  else if (isDataImportRoute.value) store.openTabFromId(dataImportRouteTabId.value)
   else store.openTabFromId('dashboard')
 })
 </script>

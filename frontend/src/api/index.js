@@ -112,6 +112,17 @@ export const getMenuItems = (params) => http.get('/api/menu', { params })
 export const createMenuItem = (data) => http.post('/api/menu', data)
 export const updateMenuItem = (id, data) => http.put(`/api/menu/${id}`, data)
 export const deleteMenuItem = (id) => http.delete(`/api/menu/${id}`)
+export const getMenuCategories = () => http.get('/api/menu-categories')
+
+// ===== 菜品模板 =====
+export const getMenuTemplates = () => http.get('/api/menu-templates')
+export const createMenuTemplate = (data) => http.post('/api/menu-templates', data)
+export const updateMenuTemplate = (id, data) => http.put(`/api/menu-templates/${id}`, data)
+export const deleteMenuTemplate = (id) => http.delete(`/api/menu-templates/${id}`)
+export const getMenuTemplateDetail = (id) => http.get(`/api/menu-templates/${id}`)
+export const createTemplateItem = (templateId, data) => http.post(`/api/menu-templates/${templateId}/items`, data)
+export const updateTemplateItem = (templateId, itemId, data) => http.put(`/api/menu-templates/${templateId}/items/${itemId}`, data)
+export const deleteTemplateItem = (templateId, itemId) => http.delete(`/api/menu-templates/${templateId}/items/${itemId}`)
 
 // ===== 成本核算 =====
 export const getCostAccounting = (params) => http.get('/api/cost-accounting', { params })
@@ -123,6 +134,9 @@ export const getMonthlyCost = () => http.get('/api/cost-accounting/monthly')
 export const getRevenueAnalysis = (params) => http.get('/api/analysis/revenue', { params })
 export const getCostAnalysis = (params) => http.get('/api/analysis/cost', { params })
 export const getSalesAnalysis = () => http.get('/api/analysis/sales')
+export const getBusinessAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/views/${scope}`, { params })
+export const importBusinessData = (data) => http.post('/api/business-analytics/import', data, { timeout: 120000 })
+export const getBusinessTemplate = (sourceType) => http.get('/api/business-analytics/template', { params: { source_type: sourceType } })
 
 // ===== 日报导入 =====
 export const importDailyReport = (data) => http.post('/api/reports/daily/import', data)
@@ -161,6 +175,19 @@ export const sendSmartSheet = (data) => http.post('/api/webhook/smartsheet', dat
 // ===== Bot 机器人（bot id + secret 数据互通）=====
 export const botTest = () => http.post('/api/bot/test')
 export const botQuery = (data) => http.post('/api/bot/query', data)
+
+// ===== 记账本 =====
+export const getBookkeepingCategories = () => http.get('/api/bookkeeping/categories')
+export const createBookkeepingCategory = (data) => http.post('/api/bookkeeping/categories', data)
+export const updateBookkeepingCategory = (id, data) => http.put(`/api/bookkeeping/categories/${id}`, data)
+export const deleteBookkeepingCategory = (id) => http.delete(`/api/bookkeeping/categories/${id}`)
+export const getBookkeepingSubcategories = (params) => http.get('/api/bookkeeping/subcategories', { params })
+export const createBookkeepingSubcategory = (data) => http.post('/api/bookkeeping/subcategories', data)
+export const updateBookkeepingSubcategory = (id, data) => http.put(`/api/bookkeeping/subcategories/${id}`, data)
+export const deleteBookkeepingSubcategory = (id) => http.delete(`/api/bookkeeping/subcategories/${id}`)
+export const getBookkeepingEntries = (params) => http.get('/api/bookkeeping/entries', { params })
+export const createBookkeepingEntry = (data) => http.post('/api/bookkeeping/entries', data)
+export const deleteBookkeepingEntry = (id) => http.delete(`/api/bookkeeping/entries/${id}`)
 
 // ===== 员工管理（店长 + 店员）=====
 export const getStaffList = (params) => http.get('/api/staff', { params })

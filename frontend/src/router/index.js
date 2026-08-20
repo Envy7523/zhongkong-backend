@@ -13,7 +13,57 @@ const routes = [
   },
   {
     path: '/analysis',
-    redirect: '/analysis/revenue',
+    redirect: '/analysis/business/overview',
+  },
+  {
+    path: '/analysis/business',
+    redirect: '/analysis/business/overview',
+  },
+  {
+    path: '/analysis/business/overview',
+    name: 'analysis-business-overview',
+    component: () => import('@/views/analysis/BusinessAnalytics.vue'),
+    meta: { analyticsScope: 'overview' },
+  },
+  {
+    path: '/analysis/business/group-buy',
+    name: 'analysis-business-group-buy',
+    component: () => import('@/views/analysis/ChannelAnalytics.vue'),
+    meta: { analyticsScope: 'group-buy' },
+  },
+  {
+    path: '/analysis/business/delivery',
+    name: 'analysis-business-delivery',
+    component: () => import('@/views/analysis/ChannelAnalytics.vue'),
+    meta: { analyticsScope: 'delivery' },
+  },
+  {
+    path: '/data-import',
+    redirect: '/data-import/pos',
+  },
+  {
+    path: '/data-import/pos',
+    name: 'data-import-pos',
+    component: () => import('@/views/BusinessDataImport.vue'),
+    meta: { importMode: 'pos' },
+  },
+  {
+    path: '/data-import/group-buy',
+    name: 'data-import-group-buy',
+    component: () => import('@/views/BusinessDataImport.vue'),
+    meta: { importMode: 'group-buy' },
+  },
+  {
+    path: '/data-import/delivery',
+    name: 'data-import-delivery',
+    component: () => import('@/views/BusinessDataImport.vue'),
+    meta: { importMode: 'delivery' },
+  },
+  {
+    path: '/data-import/legacy',
+    name: 'data-import-legacy',
+    component: () => import('@/views/DataImportView.vue'),
+    meta: { importMode: 'legacy' },
   },
   {
     path: '/store-management',

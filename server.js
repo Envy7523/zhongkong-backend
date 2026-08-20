@@ -13,6 +13,7 @@ const { drawStoreDailyReport } = require('./lib/report');
 const { parseDailyExcel, toReportData } = require('./lib/daily-data');
 const db = require('./lib/db');
 const collabService = require('./lib/collab-service');
+const businessAnalytics = require('./lib/business-analytics');
 const wecomBot = require('./lib/wecom-bot');
 const jwt = require('jsonwebtoken');
 
@@ -924,6 +925,82 @@ app.post('/api/menu', (req, res) => {
 app.put('/api/menu/:id', (req, res) => { try { const fields = ['name','category','method','spec','price','dine_in_price','member_price','takeout_price','spec_unit','spec_weight','cost','expiry_days','status']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE menu_items SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.delete('/api/menu/:id', (req, res) => { try { db.run('DELETE FROM menu_items WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
+// ===== 菜品模板 =====
+// 获取所有分类（从现有菜单中提取）
+app.get('/api/menu-categories', (req, res) => {
+  try { const rows = db.queryAll("SELECT DISTINCT category FROM menu_items WHERE category IS NOT NULL AND category != '' ORDER BY category"); res.json({ ok: true, categories: rows.map(r => r.category) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 模板列表
+app.get('/api/menu-templates', (req, res) => {
+  try { const rows = db.queryAll("SELECT * FROM menu_templates ORDER BY updated_at DESC"); res.json({ ok: true, templates: rows }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 创建模板
+app.post('/api/menu-templates', (req, res) => {
+  try { const { name, remark } = req.body; const cleanName = String(name || '').trim(); if (!cleanName) return res.status(400).json({ error: '模板名称不能为空' }); const id = db.insert("INSERT INTO menu_templates (name,remark) VALUES (?,?)", [cleanName, remark || '']); db.save(); res.json({ ok: true, id, name: cleanName }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 更新模板
+app.put('/api/menu-templates/:id', (req, res) => {
+  try { const { name, remark } = req.body; const sets = [], params = []; if (name !== undefined) { sets.push('name=?'); params.push(String(name).trim()); } if (remark !== undefined) { sets.push('remark=?'); params.push(remark); } if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); db.run(`UPDATE menu_templates SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 删除模板
+app.delete('/api/menu-templates/:id', (req, res) => {
+  try { db.run('DELETE FROM menu_template_items WHERE template_id=?', [req.params.id]); db.run('DELETE FROM menu_templates WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 获取模板详情（含菜品列表 + 系统成本参考）
+app.get('/api/menu-templates/:id', (req, res) => {
+  try {
+    const template = db.queryOne('SELECT * FROM menu_templates WHERE id=?', [req.params.id]);
+    if (!template) return res.status(404).json({ error: '模板不存在' });
+    const items = db.queryAll('SELECT * FROM menu_template_items WHERE template_id=? ORDER BY sort_order, id', [req.params.id]);
+    // 附带系统成本：对每个 item 查找同名菜品的最新成本
+    const costMap = {};
+    db.queryAll("SELECT name, cost FROM menu_items WHERE cost > 0").forEach(row => { if (!costMap[row.name] || costMap[row.name] < row.cost) costMap[row.name] = row.cost; });
+    const itemsWithCost = items.map(item => ({ ...item, system_cost: costMap[item.name] || 0 }));
+    res.json({ ok: true, template, items: itemsWithCost });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 添加菜品到模板
+app.post('/api/menu-templates/:id/items', (req, res) => {
+  try {
+    const template = db.queryOne('SELECT id FROM menu_templates WHERE id=?', [req.params.id]);
+    if (!template) return res.status(404).json({ error: '模板不存在' });
+    const { name, category, dine_in_price, member_price, takeout_price } = req.body;
+    const cleanName = String(name || '').trim();
+    if (!cleanName) return res.status(400).json({ error: '菜品名称不能为空' });
+    const maxSort = db.queryOne('SELECT MAX(sort_order) as mx FROM menu_template_items WHERE template_id=?', [req.params.id]);
+    const id = db.insert('INSERT INTO menu_template_items (template_id,name,category,dine_in_price,member_price,takeout_price,sort_order) VALUES (?,?,?,?,?,?,?)', [req.params.id, cleanName, category || '', Number(dine_in_price) || 0, Number(member_price) || 0, Number(takeout_price) || 0, (maxSort?.mx ?? -1) + 1]);
+    db.run("UPDATE menu_templates SET updated_at=datetime('now','localtime') WHERE id=?", [req.params.id]);
+    db.save();
+    res.json({ ok: true, id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 编辑模板菜品
+app.put('/api/menu-templates/:id/items/:itemId', (req, res) => {
+  try {
+    const item = db.queryOne('SELECT * FROM menu_template_items WHERE id=? AND template_id=?', [req.params.itemId, req.params.id]);
+    if (!item) return res.status(404).json({ error: '菜品不存在' });
+    const fields = ['name', 'category', 'dine_in_price', 'member_price', 'takeout_price'];
+    const sets = [], params = [];
+    fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(f === 'name' ? String(req.body[f]).trim() : req.body[f]); } });
+    if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' });
+    params.push(req.params.itemId);
+    db.run(`UPDATE menu_template_items SET ${sets.join(',')} WHERE id=?`, params);
+    db.run("UPDATE menu_templates SET updated_at=datetime('now','localtime') WHERE id=?", [req.params.id]);
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 删除模板菜品
+app.delete('/api/menu-templates/:id/items/:itemId', (req, res) => {
+  try { db.run('DELETE FROM menu_template_items WHERE id=? AND template_id=?', [req.params.itemId, req.params.id]); db.run("UPDATE menu_templates SET updated_at=datetime('now','localtime') WHERE id=?", [req.params.id]); db.save(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ===== 耗材消耗 =====
 app.get('/api/supplies', (req, res) => {
   try { const { store_id, date_from, date_to, limit } = req.query; let sql = 'SELECT * FROM store_supplies WHERE 1=1'; const params = []; if (store_id) { sql += ' AND store_id=?'; params.push(store_id); } if (date_from) { sql += ' AND date>=?'; params.push(date_from); } if (date_to) { sql += ' AND date<=?'; params.push(date_to); } sql += ' ORDER BY date DESC, id DESC LIMIT ?'; params.push(limit || 100); res.json({ ok: true, rows: db.queryAll(sql, params) }); }
@@ -988,7 +1065,8 @@ app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
     const hash = crypto.createHash('md5').update(password).digest('hex');
-    const user = db.queryOne('SELECT id,username,role,display_name,phone,avatar_url FROM users WHERE username=? AND password_hash=?', [username, hash]);
+    const user = db.queryOne(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.store_id,s.store_name
+      FROM users u LEFT JOIN stores s ON u.store_id=s.id WHERE u.username=? AND u.password_hash=?`, [username, hash]);
     if (!user) return res.status(401).json({ error: '用户名或密码错误' });
     const token = jwt.sign({
       id: user.id,
@@ -996,13 +1074,115 @@ app.post('/api/auth/login', (req, res) => {
       role: user.role,
       display_name: user.display_name,
       avatar_url: user.avatar_url,
+      store_id: user.store_id,
+      store_name: user.store_name || '',
     }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
     res.json({ ok: true, token, user });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/auth/me', (req, res) => {
-  res.json({ ok: true, user: req.user });
+  // 补充最新的 store 信息
+  const u = req.user;
+  if (u.store_id) {
+    const s = db.queryOne('SELECT store_name FROM stores WHERE id=?', [u.store_id]);
+    if (s) u.store_name = s.store_name;
+  }
+  res.json({ ok: true, user: u });
+});
+
+// ===== 记账本 =====
+
+function getBookkeepingStore(req) {
+  if (req.user.store_id) return { store_id: req.user.store_id, store_name: req.user.store_name || '' };
+  return { store_id: null, store_name: '' };
+}
+
+// 大类 CRUD
+app.get('/api/bookkeeping/categories', (req, res) => {
+  try { const rows = db.queryAll('SELECT * FROM bookkeeping_categories ORDER BY sort_order, id'); res.json({ ok: true, categories: rows }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/bookkeeping/categories', (req, res) => {
+  try { const name = String(req.body.name || '').trim(); if (!name) return res.status(400).json({ error: '分类名称不能为空' }); const id = db.insert('INSERT INTO bookkeeping_categories (name,sort_order) VALUES (?,?)', [name, req.body.sort_order || 0]); db.save(); res.json({ ok: true, id }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/bookkeeping/categories/:id', (req, res) => {
+  try { const sets = [], params = []; ['name','sort_order'].forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE bookkeeping_categories SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/bookkeeping/categories/:id', (req, res) => {
+  try { db.run('DELETE FROM bookkeeping_subcategories WHERE category_id=?', [req.params.id]); db.run('DELETE FROM bookkeeping_categories WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 小类 CRUD
+app.get('/api/bookkeeping/subcategories', (req, res) => {
+  try { const { category_id } = req.query; let sql = 'SELECT * FROM bookkeeping_subcategories'; const params = []; if (category_id) { sql += ' WHERE category_id=?'; params.push(category_id); } sql += ' ORDER BY sort_order, id'; res.json({ ok: true, subcategories: db.queryAll(sql, params) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/bookkeeping/subcategories', (req, res) => {
+  try { const { category_id, name, sort_order } = req.body; if (!category_id) return res.status(400).json({ error: '请指定所属大类' }); const cleanName = String(name || '').trim(); if (!cleanName) return res.status(400).json({ error: '小类名称不能为空' }); const id = db.insert('INSERT INTO bookkeeping_subcategories (category_id,name,sort_order) VALUES (?,?,?)', [category_id, cleanName, sort_order || 0]); db.save(); res.json({ ok: true, id }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/bookkeeping/subcategories/:id', (req, res) => {
+  try { const sets = [], params = []; ['name','category_id','sort_order'].forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE bookkeeping_subcategories SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/bookkeeping/subcategories/:id', (req, res) => {
+  try { db.run('DELETE FROM bookkeeping_subcategories WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 记账记录 CRUD
+app.get('/api/bookkeeping/entries', (req, res) => {
+  try {
+    const { store_id } = getBookkeepingStore(req);
+    const { date_from, date_to, category_id, subcategory_id, aggregate } = req.query;
+    let sql = 'SELECT * FROM bookkeeping_entries WHERE 1=1';
+    const params = [];
+    if (store_id) { sql += ' AND store_id=?'; params.push(store_id); }
+    else if (req.query.store_id) { sql += ' AND store_id=?'; params.push(req.query.store_id); }
+    if (date_from) { sql += ' AND date>=?'; params.push(date_from); }
+    if (date_to) { sql += ' AND date<=?'; params.push(date_to); }
+    if (category_id) { sql += ' AND category_id=?'; params.push(category_id); }
+    if (subcategory_id) { sql += ' AND subcategory_id=?'; params.push(subcategory_id); }
+    if (aggregate === 'daily') {
+      sql = sql.replace('SELECT *', 'SELECT date, SUM(amount) as total_amount, COUNT(*) as entry_count');
+      sql += ' GROUP BY date ORDER BY date DESC';
+      const rows = db.queryAll(sql, params);
+      return res.json({ ok: true, rows, aggregate: 'daily' });
+    }
+    sql += ' ORDER BY date DESC, id DESC LIMIT 500';
+    res.json({ ok: true, entries: db.queryAll(sql, params) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/bookkeeping/entries', (req, res) => {
+  try {
+    const { store_id, store_name } = getBookkeepingStore(req);
+    const { date, category_id, category_name, subcategory_id, subcategory_name, amount, images, remark } = req.body;
+    if (!store_id) return res.status(400).json({ error: '您的账号未绑定门店，无法记账' });
+    if (!date) return res.status(400).json({ error: '请选择日期' });
+    const amt = Number(amount) || 0;
+    const id = db.insert(
+      'INSERT INTO bookkeeping_entries (store_id,store_name,user_id,user_name,date,category_id,category_name,subcategory_id,subcategory_name,amount,images,remark) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      [store_id, store_name, req.user.id, req.user.display_name || req.user.username, date,
+       category_id || null, category_name || '', subcategory_id || null, subcategory_name || '',
+       amt, JSON.stringify(images || []), remark || '']
+    );
+    db.save();
+    res.json({ ok: true, id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/bookkeeping/entries/:id', (req, res) => {
+  try {
+    const { store_id } = getBookkeepingStore(req);
+    const where = store_id ? ' AND store_id=?' : '';
+    const params = store_id ? [req.params.id, store_id] : [req.params.id];
+    db.run(`DELETE FROM bookkeeping_entries WHERE id=?${where}`, params);
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== 用户管理 =====
@@ -1301,6 +1481,56 @@ app.get('/api/analysis/revenue', (req, res) => {
 });
 app.get('/api/analysis/cost', (req, res) => { try { const { store_id } = req.query; let sql = 'SELECT * FROM cost_accounting WHERE 1=1'; const params = []; if (store_id) { sql += ' AND store_id=?'; params.push(store_id); } sql += ' ORDER BY date DESC LIMIT 30'; res.json({ ok: true, rows: db.queryAll(sql, params) }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/analysis/sales', (req, res) => { try { res.json({ ok: true, rows: db.queryAll('SELECT store_name,date,revenue,actual_revenue,order_count,discount_amount FROM daily_reports ORDER BY date DESC LIMIT 50') }); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// ===== 经营数据分析（收银系统 + 线上平台双向核对） =====
+app.get('/api/business-analytics/overview', (req, res) => {
+  try {
+    const role = String(req.user?.role || '');
+    if (role.includes('团购') || role.includes('外卖')) return res.status(403).json({ error: '当前账号无权查看完整经营总览' });
+    res.json({ ok: true, ...businessAnalytics.getOverview(db, req.query) });
+  }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/business-analytics/views/:scope', (req, res) => {
+  try {
+    const requested = req.params.scope;
+    if (!['overview', 'group-buy', 'delivery'].includes(requested)) return res.status(404).json({ error: '分析视图不存在' });
+    const role = String(req.user?.role || '');
+    if (role.includes('负责人') && requested !== 'overview') return res.status(403).json({ error: '当前账号仅可查看负责人总览' });
+    if (role.includes('团购') && requested !== 'group-buy') return res.status(403).json({ error: '当前账号仅可查看团购分析' });
+    if (role.includes('外卖') && requested !== 'delivery') return res.status(403).json({ error: '当前账号仅可查看外卖分析' });
+    const result = businessAnalytics.getScopedOverview(db, requested === 'group-buy' ? 'group_buy' : requested, req.query);
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/business-analytics/import', (req, res) => {
+  try {
+    const role = String(req.user?.role || '');
+    const sourceType = req.body?.source_type === 'platform' ? 'platform' : 'pos';
+    const platform = String(req.body?.platform || '');
+    if (role.includes('团购') && (sourceType !== 'platform' || !['美团团购', '抖音团购'].includes(platform))) {
+      return res.status(403).json({ error: '团购岗位只能导入美团团购或抖音团购数据' });
+    }
+    if (role.includes('外卖') && (sourceType !== 'platform' || !['美团外卖', '淘宝闪购', '京东外卖'].includes(platform))) {
+      return res.status(403).json({ error: '外卖岗位只能导入外卖平台数据' });
+    }
+    const result = businessAnalytics.importWorkbook(db, req.body || {}, req.user);
+    res.status(201).json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/business-analytics/template', (req, res) => {
+  try {
+    const sourceType = req.query.source_type === 'platform' ? 'platform' : 'pos';
+    res.json({
+      ok: true,
+      file_name: sourceType === 'platform' ? '线上平台营业数据模板.xlsx' : '收银系统营业数据模板.xlsx',
+      data: businessAnalytics.createTemplate(sourceType),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ===== 数据导出 =====
 app.get('/api/data/export', (req, res) => {

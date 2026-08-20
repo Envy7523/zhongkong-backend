@@ -2,10 +2,18 @@
   <div class="card-compact">
     <div class="card-header">🏙️ 门店商圈调查</div>
 
-    <!-- 选择门店 -->
+    <!-- 数据源切换 -->
+    <el-radio-group v-model="sourceMode" style="margin-bottom:16px;" @change="onModeChange">
+      <el-radio-button value="store">🏪 门店</el-radio-button>
+      <el-radio-button value="pin">📌 自定义点位</el-radio-button>
+    </el-radio-group>
+
+    <!-- 选择数据源 -->
     <el-row :gutter="12" style="margin-bottom:16px;">
       <el-col :span="10">
+        <!-- 门店模式 -->
         <el-select
+          v-if="sourceMode === 'store'"
           v-model="selectedStoreId"
           filterable
           placeholder="请选择门店"
@@ -18,6 +26,23 @@
             :key="s.id"
             :label="s.store_name"
             :value="s.id"
+          />
+        </el-select>
+        <!-- 点位模式 -->
+        <el-select
+          v-else
+          v-model="selectedPinId"
+          filterable
+          placeholder="请选择自定义点位"
+          clearable
+          style="width:100%;"
+          @change="onPinChange"
+        >
+          <el-option
+            v-for="p in allPins"
+            :key="p.id"
+            :label="p.name || `自定义点位${p.id}`"
+            :value="p.id"
           />
         </el-select>
       </el-col>
@@ -34,23 +59,36 @@
         <el-button
           type="primary"
           :loading="querying"
-          :disabled="!selectedStore || !selectedStore.lat || !selectedStore.lng"
+          :disabled="!activeLocation"
           @click="doQuery"
         >
           🔍 查询商圈
         </el-button>
-        <span v-if="selectedStore && (!selectedStore.lat || !selectedStore.lng)" style="color:#e6a23c;font-size:12px;margin-left:8px;">
+        <span v-if="sourceMode === 'store' && selectedStore && (!selectedStore.lat || !selectedStore.lng)" style="color:#e6a23c;font-size:12px;margin-left:8px;">
           该门店缺经纬度，请先在编辑中设置
+        </span>
+        <span v-if="sourceMode === 'pin' && selectedPin && (!selectedPin.lat || !selectedPin.lng)" style="color:#e6a23c;font-size:12px;margin-left:8px;">
+          该点缺经纬度
         </span>
       </el-col>
     </el-row>
 
-    <!-- 选中门店信息 -->
-    <div v-if="selectedStore" style="background:#f5f7fa;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:16px;font-size:13px;">
+    <!-- 选中的信息 -->
+    <div v-if="sourceMode === 'store' && selectedStore" style="background:#f5f7fa;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:16px;font-size:13px;">
       <span><b>{{ selectedStore.store_name }}</b></span>
       <span>📍 {{ [selectedStore.province, selectedStore.city, selectedStore.district, selectedStore.address].filter(Boolean).join(' ') || '—' }}</span>
       <span v-if="selectedStore.lat && selectedStore.lng">🌐 {{ selectedStore.lng }}, {{ selectedStore.lat }}</span>
       <el-tag :type="statusTag(selectedStore.status)" size="small">{{ selectedStore.status || '—' }}</el-tag>
+    </div>
+    <div v-if="sourceMode === 'pin' && selectedPin" style="background:#f0f5ff;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:16px;font-size:13px;align-items:center;">
+      <span><b>{{ selectedPin.name || '自定义点位' }}</b></span>
+      <span v-if="selectedPin.remark">💬 {{ selectedPin.remark }}</span>
+      <span>🌐 {{ selectedPin.lng }}, {{ selectedPin.lat }}</span>
+      <span
+        class="pin-color-dot"
+        :style="{ background: selectedPin.color || '#409EFF', width: '12px', height: '12px', borderRadius: '50%', display: 'inline-block' }"
+      ></span>
+      <span style="color:#909399;font-size:12px;">默认半径 {{ (selectedPin.radius || 3000) }}m</span>
     </div>
 
     <!-- 查询结果 -->
@@ -86,22 +124,38 @@
     <!-- 空状态 -->
     <div v-if="!queryResult && !querying" style="text-align:center;padding:60px 0;color:#c0c4cc;">
       <div style="font-size:48px;margin-bottom:12px;">🔍</div>
-      <div>选择门店并点击「查询商圈」，查看周边商业环境</div>
+      <div v-if="sourceMode === 'store'">选择门店并点击「查询商圈」，查看周边商业环境</div>
+      <div v-else>选择自定义点位并点击「查询商圈」，查看周边商业环境</div>
     </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getStores, searchAround } from '@/api'
+import { getStores, getMapPins, searchAround } from '@/api'
 import { ElMessage } from 'element-plus'
 
+const sourceMode = ref('store')
 const allStores = ref([])
+const allPins = ref([])
 const selectedStoreId = ref(null)
 const selectedStore = ref(null)
+const selectedPinId = ref(null)
+const selectedPin = ref(null)
 const radius = ref(3000)
 const querying = ref(false)
 const queryResult = ref(null)
+
+// 当前活跃的查询位置
+const activeLocation = computed(() => {
+  if (sourceMode.value === 'pin' && selectedPin.value) {
+    return { lng: selectedPin.value.lng, lat: selectedPin.value.lat }
+  }
+  if (sourceMode.value === 'store' && selectedStore.value) {
+    return { lng: selectedStore.value.lng, lat: selectedStore.value.lat }
+  }
+  return null
+})
 
 // POI 大类映射
 const TYPE_MAP = {
@@ -142,10 +196,41 @@ onMounted(async () => {
     const data = await getStores({ page: 1, page_size: 9999 })
     allStores.value = data.stores || []
   } catch { /* ignore */ }
+  fetchPins()
 })
+
+async function fetchPins() {
+  try {
+    const res = await getMapPins()
+    allPins.value = res.data || []
+  } catch { /* ignore */ }
+}
+
+function onModeChange() {
+  // 切换模式时清空选中和查询结果
+  selectedStoreId.value = null
+  selectedStore.value = null
+  selectedPinId.value = null
+  selectedPin.value = null
+  queryResult.value = null
+  if (sourceMode.value === 'pin') {
+    // 切换回点位时重新加载数据
+    fetchPins()
+  }
+}
 
 function onStoreChange(id) {
   selectedStore.value = allStores.value.find(s => s.id === id) || null
+  queryResult.value = null
+}
+
+function onPinChange(id) {
+  const pin = allPins.value.find(p => p.id === id) || null
+  selectedPin.value = pin
+  // 自动使用点位的默认半径
+  if (pin && pin.radius) {
+    radius.value = pin.radius
+  }
   queryResult.value = null
 }
 
@@ -165,15 +250,15 @@ function formatDist(meters) {
 }
 
 async function doQuery() {
-  if (!selectedStore.value?.lng || !selectedStore.value?.lat) {
-    ElMessage.warning('该门店缺少经纬度信息')
+  if (!activeLocation.value?.lng || !activeLocation.value?.lat) {
+    ElMessage.warning('缺少经纬度信息')
     return
   }
   querying.value = true
   queryResult.value = null
   try {
     const data = await searchAround({
-      location: `${selectedStore.value.lng},${selectedStore.value.lat}`,
+      location: `${activeLocation.value.lng},${activeLocation.value.lat}`,
       radius: radius.value,
       offset: 24,
       page: 1,

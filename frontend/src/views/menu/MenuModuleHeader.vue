@@ -38,6 +38,7 @@ defineProps({
 const store = useAppStore()
 const navItems = [
   { id: 'menu-management-overview', label: '菜品总览' },
+  { id: 'menu-management-template', label: '菜品模板' },
   { id: 'menu-management-cost', label: '成本分析' },
   { id: 'menu-management-expiry', label: '效期管理' },
 ]

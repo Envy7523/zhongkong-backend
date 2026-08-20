@@ -228,7 +228,7 @@ const passwordDialogVisible = ref(false)
 const profileMode = ref('create')
 const editingUser = ref(null)
 const passwordTarget = ref(null)
-const roleOptions = ['管理员', '督导', '专员', '客服']
+const roleOptions = ['管理员', '负责人', '团购', '外卖', '督导', '专员', '客服']
 const avatarPalette = ['#4F7CFF', '#7B61E8', '#1FA98C', '#E29036', '#D65C76', '#337FAF', '#596579', '#8B6F47']
 
 const emptyProfile = () => ({
@@ -282,6 +282,9 @@ function avatarColor(user) {
 function roleClass(role) {
   return {
     管理员: 'admin',
+    负责人: 'supervisor',
+    团购: 'specialist',
+    外卖: 'service',
     督导: 'supervisor',
     专员: 'specialist',
     客服: 'service',
