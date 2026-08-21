@@ -36,6 +36,11 @@ export const getMe = () => http.get('/api/auth/me')
 // ===== 配置 =====
 export const getConfig = () => http.get('/api/config')
 export const saveConfig = (data) => http.post('/api/config', data)
+export const getBotStatus = () => http.get('/api/bot/status')
+export const reconnectEnterpriseRobot = () => http.post('/api/enterprise-settings/robot/reconnect')
+export const previewEnterpriseBotQuestion = (content) => http.post('/api/enterprise-settings/robot/preview-query', { content })
+export const createEnterpriseAiProfile = (data) => http.post('/api/enterprise-settings/ai-profiles', data)
+export const updateEnterpriseAiProfile = (profileId, data) => http.put(`/api/enterprise-settings/ai-profiles/${profileId}`, data)
 
 // ===== 企业微信 Token =====
 export const getToken = () => http.get('/api/wechat/token')
@@ -140,6 +145,8 @@ export const getBusinessAnalytics = (scope = 'overview', params) => http.get(`/a
 export const getBusinessProductAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/products/${scope}`, { params })
 export const getBusinessProductMappings = (scope = 'overview', params) => http.get(`/api/business-analytics/mappings/${scope}`, { params })
 export const saveBusinessProductMapping = (data) => http.put('/api/business-analytics/mappings', data)
+export const getBusinessDiagnosis = (params) => http.get('/api/business-analytics/diagnoses', { params })
+export const generateBusinessDiagnosis = (data) => http.post('/api/business-analytics/diagnoses', data)
 export const importBusinessData = (data) => http.post('/api/business-analytics/import', data, { timeout: 120000 })
 export const getBusinessTemplate = (sourceType) => http.get('/api/business-analytics/template', { params: { source_type: sourceType } })
 

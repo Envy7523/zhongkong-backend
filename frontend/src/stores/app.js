@@ -4,7 +4,7 @@ import { ref, computed } from 'vue'
 const PAGE_TITLES = {
   dashboard: '数据概括',
   collab: '协同事项',
-  'api-config': '中控绑定',
+  'enterprise-settings': '企业设置',
   pipeline: '一键推送',
   'table-reader': '表格读取',
   'data-query': '数据查询',
@@ -22,7 +22,11 @@ const PAGE_TITLES = {
 }
 
 const SUB_LABELS = {
-  analysis: { 'business-overview': '集团总视角', 'business-group-buy': '团购视角', 'business-delivery': '外卖视角', sales: '门店销量统计', supplies: '门店耗材消耗' },
+  analysis: {
+    'total-brand': '总数据 · 全门店汇总', 'total-store': '总数据 · 单店数据', 'total-custom': '总数据 · 自选门店汇总',
+    'group-meituan': '团购 · 美团团购', 'group-douyin': '团购 · 抖音团购', 'group-free-trial': '团购 · 美团免费试', 'group-brand': '品牌团购汇总', 'group-store': '门店团购汇总',
+    'delivery-meituan': '外卖 · 美团外卖', 'delivery-taobao': '外卖 · 淘宝闪购', 'delivery-jd': '外卖 · 京东外卖', 'delivery-brand': '品牌外卖汇总', 'delivery-store': '门店外卖汇总',
+  },
   'store-management': { 'info-basic': '门店基本信息', 'info-circle': '门店商圈', 'info-platform': '第三方平台', 'info-config': '门店配置', map: '全国地图', fixed: '固定成本', operating: '运营成本' },
   'menu-management': { overview: '菜品总览', template: '菜品模板', cost: '菜品成本', expiry: '效期管理' },
   'cost-accounting': { daily: '日成本核算', weekly: '周成本核算', monthly: '月成本核算' },

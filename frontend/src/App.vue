@@ -101,9 +101,9 @@
           </el-menu-item>
 
           <div class="sidebar-section-label">系统管理</div>
-          <el-menu-item index="api-config">
-            <el-icon><Link /></el-icon>
-            <template #title>中控绑定</template>
+          <el-menu-item index="enterprise-settings">
+            <el-icon><Setting /></el-icon>
+            <template #title>企业设置</template>
           </el-menu-item>
           <el-menu-item index="user-management">
             <el-icon><User /></el-icon>
@@ -193,7 +193,7 @@
       </div>
 
       <div class="content-area">
-        <router-view v-if="isCollabRoute || isBusinessAnalyticsRoute || isDataImportRoute" />
+        <router-view v-if="isCollabRoute || isBusinessAnalyticsRoute || isDataImportRoute || isEnterpriseSettingsRoute" />
         <component v-else :is="currentView" :key="store.activeTabId" />
       </div>
     </div>
@@ -210,7 +210,6 @@ import { getConfig } from '@/api'
 import LoginView from '@/views/LoginView.vue'
 
 import DashboardView from '@/views/DashboardView.vue'
-import ApiConfigView from '@/views/ApiConfigView.vue'
 import PipelineView from '@/views/PipelineView.vue'
 import DataImportView from '@/views/DataImportView.vue'
 import BusinessDataImport from '@/views/BusinessDataImport.vue'
@@ -219,8 +218,6 @@ import AiAssistantView from '@/views/AiAssistantView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 import SalesAnalysis from '@/views/analysis/SalesAnalysis.vue'
 import SuppliesAnalysis from '@/views/analysis/SuppliesAnalysis.vue'
-import BusinessAnalytics from '@/views/analysis/BusinessAnalytics.vue'
-import ChannelAnalytics from '@/views/analysis/ChannelAnalytics.vue'
 import StoreBasic from '@/views/store/StoreBasic.vue'
 import StorePlatform from '@/views/store/StorePlatform.vue'
 import StoreConfig from '@/views/store/StoreConfig.vue'
@@ -244,7 +241,6 @@ import BookkeepingRecords from '@/views/bookkeeping/BookkeepingRecords.vue'
 
 const COMPONENT_MAP = {
   dashboard: DashboardView,
-  'api-config': ApiConfigView,
   pipeline: PipelineView,
   'data-import': DataImportView,
   'data-import-pos': BusinessDataImport,
@@ -256,9 +252,6 @@ const COMPONENT_MAP = {
   settings: SettingsView,
   'analysis-sales': SalesAnalysis,
   'analysis-supplies': SuppliesAnalysis,
-  'analysis-business-overview': BusinessAnalytics,
-  'analysis-business-group-buy': ChannelAnalytics,
-  'analysis-business-delivery': ChannelAnalytics,
   'store-management-info-basic': StoreBasic,
   'store-management-info-circle': StoreBusinessCircle,
   'store-management-info-platform': StorePlatform,
@@ -286,18 +279,31 @@ const POPUP_CONFIG = {
   analysis: {
     sections: [
       {
-        title: '经营视角',
+        title: '总数据视角',
         items: [
-          { index: 'analysis-business-overview', label: '集团总视角' },
-          { index: 'analysis-business-group-buy', label: '团购视角' },
-          { index: 'analysis-business-delivery', label: '外卖视角' },
+          { index: 'analysis-total-brand', label: '全门店汇总' },
+          { index: 'analysis-total-store', label: '单店数据' },
+          { index: 'analysis-total-custom', label: '自选门店汇总' },
         ],
       },
       {
-        title: '销售分析',
+        title: '团购视角',
         items: [
-          { index: 'analysis-sales', label: '门店销量统计' },
-          { index: 'analysis-supplies', label: '门店耗材消耗' },
+          { index: 'analysis-group-meituan', label: '美团团购' },
+          { index: 'analysis-group-douyin', label: '抖音团购' },
+          { index: 'analysis-group-free-trial', label: '美团免费试' },
+          { index: 'analysis-group-brand', label: '品牌团购汇总' },
+          { index: 'analysis-group-store', label: '门店团购汇总' },
+        ],
+      },
+      {
+        title: '外卖视角',
+        items: [
+          { index: 'analysis-delivery-meituan', label: '美团外卖' },
+          { index: 'analysis-delivery-taobao', label: '淘宝闪购' },
+          { index: 'analysis-delivery-jd', label: '京东外卖' },
+          { index: 'analysis-delivery-brand', label: '品牌外卖汇总' },
+          { index: 'analysis-delivery-store', label: '门店外卖汇总' },
         ],
       },
     ],
@@ -402,18 +408,10 @@ const currentView = shallowRef(DashboardView)
 
 const isLoginPage = computed(() => router.currentRoute.value.path === '/login')
 const isCollabRoute = computed(() => router.currentRoute.value.path.startsWith('/collab'))
-const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path.startsWith('/analysis/business'))
+const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path === '/analysis' || router.currentRoute.value.path.startsWith('/analysis/'))
 const isDataImportRoute = computed(() => router.currentRoute.value.path.startsWith('/data-import/'))
-const analyticsScope = computed(() => ({
-  group: 'overview',
-  'group-buy': 'group-buy',
-  delivery: 'delivery',
-}[router.currentRoute.value.params.perspective] || router.currentRoute.value.meta.analyticsScope || 'overview'))
-const businessRouteTabId = computed(() => ({
-  overview: 'analysis-business-overview',
-  'group-buy': 'analysis-business-group-buy',
-  delivery: 'analysis-business-delivery',
-}[analyticsScope.value] || 'analysis-business-overview'))
+const isEnterpriseSettingsRoute = computed(() => router.currentRoute.value.path.startsWith('/enterprise-settings'))
+const businessRouteTabId = computed(() => router.currentRoute.value.meta.analysisKey || 'analysis-total-brand')
 const dataImportRouteTabId = computed(() => ({
   pos: 'data-import-pos',
   'group-buy': 'data-import-group-buy',
@@ -423,20 +421,20 @@ const dataImportRouteTabId = computed(() => ({
 const pageTitle = computed(() => {
   if (isCollabRoute.value) return '协同事项'
   if (isBusinessAnalyticsRoute.value) {
-    const label = { overview: '集团总视角', 'group-buy': '团购视角', delivery: '外卖视角' }[analyticsScope.value] || '集团总视角'
-    const section = { operations: '营业数据', products: '商品销售数据', mappings: '菜品关联' }[router.currentRoute.value.meta.analyticsSection] || '营业数据'
-    return `数据分析 · ${label} · ${section}`
+    return `数据分析 · ${router.currentRoute.value.meta.analysisTitle || '总数据视角'}`
   }
   if (isDataImportRoute.value) {
     const label = { pos: '收银系统数据', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
     return `数据导入 · ${label}`
   }
+  if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
   return store.activeTab?.title || '数据概括'
 })
 const sidebarActive = computed(() => {
   if (isCollabRoute.value) return 'collab-list'
   if (isBusinessAnalyticsRoute.value) return 'analysis-group'
   if (isDataImportRoute.value) return 'data-import-group'
+  if (isEnterpriseSettingsRoute.value) return 'enterprise-settings'
   return store.activeTabId
 })
 const userInitial = computed(() => {
@@ -484,19 +482,29 @@ function cancelHidePopup() {
   clearTimeout(hideTimer)
 }
 
-async function leaveCollabRoute() {
-  if (isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value) await router.replace('/')
+async function leaveSpecialRoute() {
+  if (isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value) await router.replace('/')
 }
 
 async function selectPopupItem(index) {
-  if (index.startsWith('analysis-business-')) {
+  if (index.startsWith('analysis-')) {
     store.openTabFromId(index)
     const routePath = {
-      'analysis-business-overview': '/analysis/business/group/operations',
-      'analysis-business-group-buy': '/analysis/business/group-buy/operations',
-      'analysis-business-delivery': '/analysis/business/delivery/operations',
+      'analysis-total-brand': '/analysis/total/brand',
+      'analysis-total-store': '/analysis/total/store',
+      'analysis-total-custom': '/analysis/total/custom',
+      'analysis-group-meituan': '/analysis/group-buy/platform/meituan',
+      'analysis-group-douyin': '/analysis/group-buy/platform/douyin',
+      'analysis-group-free-trial': '/analysis/group-buy/platform/free-trial',
+      'analysis-group-brand': '/analysis/group-buy/brand',
+      'analysis-group-store': '/analysis/group-buy/store',
+      'analysis-delivery-meituan': '/analysis/delivery/platform/meituan',
+      'analysis-delivery-taobao': '/analysis/delivery/platform/taobao',
+      'analysis-delivery-jd': '/analysis/delivery/platform/jd',
+      'analysis-delivery-brand': '/analysis/delivery/brand',
+      'analysis-delivery-store': '/analysis/delivery/store',
     }[index]
-    await router.push(routePath)
+    await router.push(routePath || '/analysis/total/brand')
     popupMenu.visible = false
     popupMenu.group = null
     popupMenu.sections = []
@@ -516,7 +524,7 @@ async function selectPopupItem(index) {
     popupMenu.sections = []
     return
   }
-  await leaveCollabRoute()
+  await leaveSpecialRoute()
   store.openTabFromId(index)
   popupMenu.visible = false
   popupMenu.group = null
@@ -529,9 +537,14 @@ async function handleMenuSelect(index) {
     await router.push('/collab/list')
     return
   }
+  if (index === 'enterprise-settings') {
+    store.openTabFromId('enterprise-settings')
+    await router.push('/enterprise-settings/robot')
+    return
+  }
   // 跳过分组菜单项
   if (index.endsWith('-group')) return
-  await leaveCollabRoute()
+  await leaveSpecialRoute()
   store.openTabFromId(index)
 }
 
@@ -541,14 +554,29 @@ async function selectTab(id) {
     await router.push('/collab/list')
     return
   }
-  if (id.startsWith('analysis-business-')) {
+  if (id === 'enterprise-settings') {
+    store.activeTabId = id
+    await router.push('/enterprise-settings/robot')
+    return
+  }
+  if (id.startsWith('analysis-')) {
     store.activeTabId = id
     const routePath = {
-      'analysis-business-overview': '/analysis/business/group/operations',
-      'analysis-business-group-buy': '/analysis/business/group-buy/operations',
-      'analysis-business-delivery': '/analysis/business/delivery/operations',
+      'analysis-total-brand': '/analysis/total/brand',
+      'analysis-total-store': '/analysis/total/store',
+      'analysis-total-custom': '/analysis/total/custom',
+      'analysis-group-meituan': '/analysis/group-buy/platform/meituan',
+      'analysis-group-douyin': '/analysis/group-buy/platform/douyin',
+      'analysis-group-free-trial': '/analysis/group-buy/platform/free-trial',
+      'analysis-group-brand': '/analysis/group-buy/brand',
+      'analysis-group-store': '/analysis/group-buy/store',
+      'analysis-delivery-meituan': '/analysis/delivery/platform/meituan',
+      'analysis-delivery-taobao': '/analysis/delivery/platform/taobao',
+      'analysis-delivery-jd': '/analysis/delivery/platform/jd',
+      'analysis-delivery-brand': '/analysis/delivery/brand',
+      'analysis-delivery-store': '/analysis/delivery/store',
     }[id]
-    await router.push(routePath)
+    await router.push(routePath || '/analysis/total/brand')
     return
   }
   if (id.startsWith('data-import-')) {
@@ -562,15 +590,16 @@ async function selectTab(id) {
     await router.push(routePath)
     return
   }
-  await leaveCollabRoute()
+  await leaveSpecialRoute()
   store.activeTabId = id
 }
 
 async function closeTab(id) {
   store.closeTab(id)
   if (id === 'collab' && isCollabRoute.value) await router.push('/')
-  if (id.startsWith('analysis-business-') && isBusinessAnalyticsRoute.value) await router.push('/')
+  if (id.startsWith('analysis-') && isBusinessAnalyticsRoute.value) await router.push('/')
   if (id.startsWith('data-import-') && isDataImportRoute.value) await router.push('/')
+  if (id === 'enterprise-settings' && isEnterpriseSettingsRoute.value) await router.push('/')
 }
 
 watch(() => store.activeTabId, (id) => {
@@ -589,6 +618,9 @@ watch(businessRouteTabId, (id) => {
 })
 watch(isDataImportRoute, (active) => {
   if (active) store.openTabFromId(dataImportRouteTabId.value)
+})
+watch(isEnterpriseSettingsRoute, (active) => {
+  if (active) store.openTabFromId('enterprise-settings')
 })
 watch(dataImportRouteTabId, (id) => {
   if (isDataImportRoute.value) store.openTabFromId(id)
@@ -613,6 +645,7 @@ onMounted(async () => {
   if (isCollabRoute.value) store.openTabFromId('collab')
   else if (isBusinessAnalyticsRoute.value) store.openTabFromId(businessRouteTabId.value)
   else if (isDataImportRoute.value) store.openTabFromId(dataImportRouteTabId.value)
+  else if (isEnterpriseSettingsRoute.value) store.openTabFromId('enterprise-settings')
   else store.openTabFromId('dashboard')
 })
 </script>

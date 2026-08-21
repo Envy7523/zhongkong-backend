@@ -15,6 +15,7 @@ const db = require('./lib/db');
 const collabService = require('./lib/collab-service');
 const businessAnalytics = require('./lib/business-analytics');
 const wecomBot = require('./lib/wecom-bot');
+const { createBusinessAssistant } = require('./lib/wecom-business-assistant');
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = 'etaigong-zhongkong-jwt-secret-2024';
@@ -25,6 +26,8 @@ const PORT = process.env.PORT || 3456;
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const AVATAR_DIR = path.join(__dirname, 'data', 'avatars');
 if (!fs.existsSync(AVATAR_DIR)) fs.mkdirSync(AVATAR_DIR, { recursive: true });
+const businessAssistant = createBusinessAssistant({ db, businessAnalytics, getAiConfig: getActiveAiConfig });
+wecomBot.setTextMessageHandler(async (content) => (await businessAssistant.answer(content)).reply);
 
 // ===== 中间件 =====
 app.use(express.json({ limit: '50mb' }));
@@ -80,6 +83,33 @@ function loadConfig() {
   catch { return { corpid: '', corpsecret: '', webhook: '', webhookName: '' }; }
 }
 function saveConfig(config) { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8'); }
+function getAiProfiles(cfg) {
+  const profiles = Array.isArray(cfg.aiProfiles) ? cfg.aiProfiles.filter(item => item && item.id && item.baseUrl && item.model && item.apiKey) : [];
+  if (!profiles.length && cfg.aiBaseUrl && cfg.aiModel && cfg.aiApiKey) {
+    return [{ id: 'legacy-default', name: '原有模型配置', baseUrl: cfg.aiBaseUrl, model: cfg.aiModel, apiKey: cfg.aiApiKey, createdAt: '' }];
+  }
+  return profiles;
+}
+function getActiveAiConfig() {
+  const cfg = loadConfig();
+  const activeId = cfg.activeAiProfileId || '';
+  if (activeId === 'local-simulation') return { aiEnabled: Boolean(cfg.aiEnabled), aiMode: 'local-simulation', aiProfileName: '本地模拟解读' };
+  const profiles = getAiProfiles(cfg);
+  const profile = profiles.find(item => item.id === activeId) || profiles[0];
+  return profile ? { aiEnabled: Boolean(cfg.aiEnabled), aiMode: 'api', aiProfileName: profile.name, aiBaseUrl: profile.baseUrl, aiModel: profile.model, aiApiKey: profile.apiKey } : { aiEnabled: false };
+}
+function getPublicAiConfig(cfg) {
+  const profiles = getAiProfiles(cfg);
+  const activeId = cfg.activeAiProfileId || (profiles[0]?.id || '');
+  const active = activeId === 'local-simulation' ? { id: activeId, name: '本地模拟解读', model: '本地模拟解读', local: true } : profiles.find(item => item.id === activeId);
+  return {
+    aiProfiles: profiles.map(item => ({ id: item.id, name: item.name || item.model, baseUrl: item.baseUrl, model: item.model, apiKeyMasked: item.apiKey ? item.apiKey.slice(0, 6) + '****' + item.apiKey.slice(-4) : '', createdAt: item.createdAt || '' })),
+    activeAiProfileId: activeId,
+    activeAiProfileName: active?.name || '',
+    aiConfigured: Boolean(active || activeId === 'local-simulation'),
+    aiEnabled: Boolean(cfg.aiEnabled),
+  };
+}
 async function httpPost(url, body, headers = {}) {
   const resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
   return resp.json();
@@ -108,17 +138,107 @@ const STORE_FIELDS = ['businessType','storeName','legalPerson','paymentType','st
 // ===== 配置 API =====
 app.get('/api/config', (_req, res) => {
   const cfg = loadConfig();
-  res.json({ corpid: cfg.corpid || '', corpsecret_masked: cfg.corpsecret ? cfg.corpsecret.slice(0, 6) + '****' + cfg.corpsecret.slice(-4) : '', webhook: cfg.webhook || '', webhookName: cfg.webhookName || '', configured: !!(cfg.corpid && cfg.corpsecret), webhookConfigured: !!cfg.webhook, botIdMasked: cfg.botId ? cfg.botId.slice(0, 6) + '****' + cfg.botId.slice(-4) : '', botConfigured: !!(cfg.botId && cfg.botSecret) });
+  res.json({
+    corpid: cfg.corpid || '',
+    corpsecret_masked: cfg.corpsecret ? cfg.corpsecret.slice(0, 6) + '****' + cfg.corpsecret.slice(-4) : '',
+    webhook: cfg.webhook || '',
+    webhookName: cfg.webhookName || '',
+    configured: !!(cfg.corpid && cfg.corpsecret),
+    webhookConfigured: !!cfg.webhook,
+    botIdMasked: cfg.botId ? cfg.botId.slice(0, 6) + '****' + cfg.botId.slice(-4) : '',
+    botConfigured: !!(cfg.botId && cfg.botSecret),
+    ...getPublicAiConfig(cfg),
+  });
 });
-app.post('/api/config', (req, res) => {
-  const { corpid, corpsecret, webhook, webhookName } = req.body;
+app.post('/api/config', async (req, res) => {
+  const { corpid, corpsecret, webhook, webhookName, botId, botSecret, activeAiProfileId, aiEnabled } = req.body;
   const cfg = loadConfig();
+  let botCredentialsChanged = false;
   if (corpid !== undefined) cfg.corpid = corpid.trim();
   if (corpsecret !== undefined) cfg.corpsecret = corpsecret.trim();
   if (webhook !== undefined) cfg.webhook = webhook.trim();
   if (webhookName !== undefined) cfg.webhookName = webhookName.trim();
+  if (botId !== undefined && botId.trim()) {
+    cfg.botId = botId.trim();
+    botCredentialsChanged = true;
+  }
+  if (botSecret !== undefined && botSecret.trim()) {
+    cfg.botSecret = botSecret.trim();
+    botCredentialsChanged = true;
+  }
+  if (activeAiProfileId !== undefined) cfg.activeAiProfileId = String(activeAiProfileId || '').trim();
+  if (aiEnabled !== undefined) cfg.aiEnabled = Boolean(aiEnabled);
   saveConfig(cfg);
-  res.json({ ok: true, configured: !!(cfg.corpid && cfg.corpsecret), webhookConfigured: !!cfg.webhook });
+  if (botCredentialsChanged) await wecomBot.restart();
+  res.json({
+    ok: true,
+    configured: !!(cfg.corpid && cfg.corpsecret),
+    webhookConfigured: !!cfg.webhook,
+    botConfigured: !!(cfg.botId && cfg.botSecret),
+    ...getPublicAiConfig(cfg),
+    reconnecting: botCredentialsChanged,
+  });
+});
+
+// AI 模型配置库：新增条目，不覆盖历史配置；密钥只写入后端 config.json。
+app.post('/api/enterprise-settings/ai-profiles', (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const baseUrl = String(req.body?.baseUrl || '').trim().replace(/\/$/, '');
+    const model = String(req.body?.model || '').trim();
+    const apiKey = String(req.body?.apiKey || '').trim();
+    if (!name || !baseUrl || !model || !apiKey) return res.status(400).json({ error: '请完整填写配置名称、Base URL、模型名称和 API Key' });
+    if (!/^https?:\/\//i.test(baseUrl)) return res.status(400).json({ error: 'Base URL 必须以 http:// 或 https:// 开头' });
+    const cfg = loadConfig();
+    const profiles = Array.isArray(cfg.aiProfiles) ? cfg.aiProfiles : [];
+    const profile = { id: crypto.randomUUID(), name, baseUrl, model, apiKey, createdAt: new Date().toISOString() };
+    profiles.push(profile);
+    cfg.aiProfiles = profiles;
+    if (!cfg.activeAiProfileId) cfg.activeAiProfileId = profile.id;
+    saveConfig(cfg);
+    res.status(201).json({ ok: true, profile: { id: profile.id, name: profile.name, baseUrl: profile.baseUrl, model: profile.model }, ...getPublicAiConfig(cfg) });
+  } catch (e) { res.status(500).json({ error: `新增模型配置失败：${e.message}` }); }
+});
+
+// 编辑已有模型档案。API Key 留空时保留已保存的密钥，避免因修改模型名而覆盖密钥。
+app.put('/api/enterprise-settings/ai-profiles/:profileId', (req, res) => {
+  try {
+    const profileId = String(req.params.profileId || '').trim();
+    const cfg = loadConfig();
+    const profiles = Array.isArray(cfg.aiProfiles) ? cfg.aiProfiles : [];
+    const index = profiles.findIndex(item => item?.id === profileId);
+    if (index < 0) return res.status(404).json({ error: '未找到该模型配置' });
+    const current = profiles[index];
+    const name = String(req.body?.name || current.name || '').trim();
+    const baseUrl = String(req.body?.baseUrl || current.baseUrl || '').trim().replace(/\/$/, '');
+    const model = String(req.body?.model || current.model || '').trim();
+    const apiKey = String(req.body?.apiKey || '').trim() || current.apiKey;
+    if (!name || !baseUrl || !model || !apiKey) return res.status(400).json({ error: '请完整填写配置名称、Base URL、模型名称和 API Key' });
+    if (!/^https?:\/\//i.test(baseUrl)) return res.status(400).json({ error: 'Base URL 必须以 http:// 或 https:// 开头' });
+    profiles[index] = { ...current, name, baseUrl, model, apiKey, updatedAt: new Date().toISOString() };
+    cfg.aiProfiles = profiles;
+    saveConfig(cfg);
+    res.json({ ok: true, profile: { id: profileId, name, baseUrl, model }, ...getPublicAiConfig(cfg) });
+  } catch (e) { res.status(500).json({ error: `更新模型配置失败：${e.message}` }); }
+});
+
+// ===== 企业设置 · 机器人设置 =====
+// 主动重连仅重启机器人 WebSocket，不影响当前的经营数据服务。
+app.post('/api/enterprise-settings/robot/reconnect', async (_req, res) => {
+  const result = await wecomBot.restart();
+  if (!result.ok) return res.status(400).json({ error: result.reason || '机器人凭据未配置' });
+  res.json({ ok: true, message: '正在重新建立机器人长连接', status: wecomBot.getStatus() });
+});
+
+// 在后台先验证机器人将如何理解和回复问题，不会向企业微信发送消息。
+app.post('/api/enterprise-settings/robot/preview-query', async (req, res) => {
+  try {
+    const content = String(req.body?.content || '').trim();
+    if (!content) return res.status(400).json({ error: '请输入要测试的问题' });
+    res.json({ ok: true, ...(await businessAssistant.answer(content)) });
+  } catch (e) {
+    res.status(500).json({ error: `经营问答测试失败：${e.message}` });
+  }
 });
 
 // ===== 企业微信 Token =====
@@ -1572,6 +1692,16 @@ app.get('/api/business-analytics/mappings/:scope', (req, res) => {
 
 app.put('/api/business-analytics/mappings', (req, res) => {
   try { res.json(businessAnalytics.saveProductMapping(db, req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/business-analytics/diagnoses', (req, res) => {
+  try { res.json({ ok: true, diagnosis: businessAnalytics.getDiagnosis(db, req.query || {}) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/business-analytics/diagnoses', (req, res) => {
+  try { res.status(201).json({ ok: true, diagnosis: businessAnalytics.generateDiagnosis(db, req.body || {}, req.user) }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
