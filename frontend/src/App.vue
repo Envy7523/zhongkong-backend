@@ -226,6 +226,7 @@ import StoreOperatingCost from '@/views/store/StoreOperatingCost.vue'
 import StoreBusinessCircle from '@/views/store/StoreBusinessCircle.vue'
 import StoreMap from '@/views/store/StoreMap.vue'
 import MenuOverview from '@/views/menu/MenuOverview.vue'
+import MenuCategory from '@/views/menu/MenuCategory.vue'
 import MenuCost from '@/views/menu/MenuCost.vue'
 import MenuExpiry from '@/views/menu/MenuExpiry.vue'
 import MenuTemplate from '@/views/menu/MenuTemplate.vue'
@@ -260,6 +261,7 @@ const COMPONENT_MAP = {
   'store-management-fixed': StoreFixedCost,
   'store-management-operating': StoreOperatingCost,
   'menu-management-overview': MenuOverview,
+  'menu-management-category': MenuCategory,
   'menu-management-template': MenuTemplate,
   'menu-management-cost': MenuCost,
   'menu-management-expiry': MenuExpiry,
@@ -284,6 +286,7 @@ const POPUP_CONFIG = {
           { index: 'analysis-total-brand', label: '全门店汇总' },
           { index: 'analysis-total-store', label: '单店数据' },
           { index: 'analysis-total-custom', label: '自选门店汇总' },
+          { index: 'analysis-total-binding', label: '堂食菜品绑定' },
         ],
       },
       {
@@ -294,6 +297,7 @@ const POPUP_CONFIG = {
           { index: 'analysis-group-free-trial', label: '美团免费试' },
           { index: 'analysis-group-brand', label: '品牌团购汇总' },
           { index: 'analysis-group-store', label: '门店团购汇总' },
+          { index: 'analysis-group-binding', label: '团购菜品绑定' },
         ],
       },
       {
@@ -304,6 +308,7 @@ const POPUP_CONFIG = {
           { index: 'analysis-delivery-jd', label: '京东外卖' },
           { index: 'analysis-delivery-brand', label: '品牌外卖汇总' },
           { index: 'analysis-delivery-store', label: '门店外卖汇总' },
+          { index: 'analysis-delivery-binding', label: '外卖菜品绑定' },
         ],
       },
     ],
@@ -340,6 +345,7 @@ const POPUP_CONFIG = {
         title: '菜品数据',
         items: [
           { index: 'menu-management-overview', label: '菜品总览' },
+          { index: 'menu-management-category', label: '菜品分类' },
           { index: 'menu-management-template', label: '菜品模板' },
           { index: 'menu-management-cost', label: '菜品成本' },
           { index: 'menu-management-expiry', label: '效期管理' },
@@ -493,16 +499,19 @@ async function selectPopupItem(index) {
       'analysis-total-brand': '/analysis/total/brand',
       'analysis-total-store': '/analysis/total/store',
       'analysis-total-custom': '/analysis/total/custom',
+      'analysis-total-binding': '/analysis/total/binding',
       'analysis-group-meituan': '/analysis/group-buy/platform/meituan',
       'analysis-group-douyin': '/analysis/group-buy/platform/douyin',
       'analysis-group-free-trial': '/analysis/group-buy/platform/free-trial',
       'analysis-group-brand': '/analysis/group-buy/brand',
       'analysis-group-store': '/analysis/group-buy/store',
+      'analysis-group-binding': '/analysis/group-buy/binding',
       'analysis-delivery-meituan': '/analysis/delivery/platform/meituan',
       'analysis-delivery-taobao': '/analysis/delivery/platform/taobao',
       'analysis-delivery-jd': '/analysis/delivery/platform/jd',
       'analysis-delivery-brand': '/analysis/delivery/brand',
       'analysis-delivery-store': '/analysis/delivery/store',
+      'analysis-delivery-binding': '/analysis/delivery/binding',
     }[index]
     await router.push(routePath || '/analysis/total/brand')
     popupMenu.visible = false
@@ -565,16 +574,19 @@ async function selectTab(id) {
       'analysis-total-brand': '/analysis/total/brand',
       'analysis-total-store': '/analysis/total/store',
       'analysis-total-custom': '/analysis/total/custom',
+      'analysis-total-binding': '/analysis/total/binding',
       'analysis-group-meituan': '/analysis/group-buy/platform/meituan',
       'analysis-group-douyin': '/analysis/group-buy/platform/douyin',
       'analysis-group-free-trial': '/analysis/group-buy/platform/free-trial',
       'analysis-group-brand': '/analysis/group-buy/brand',
       'analysis-group-store': '/analysis/group-buy/store',
+      'analysis-group-binding': '/analysis/group-buy/binding',
       'analysis-delivery-meituan': '/analysis/delivery/platform/meituan',
       'analysis-delivery-taobao': '/analysis/delivery/platform/taobao',
       'analysis-delivery-jd': '/analysis/delivery/platform/jd',
       'analysis-delivery-brand': '/analysis/delivery/brand',
       'analysis-delivery-store': '/analysis/delivery/store',
+      'analysis-delivery-binding': '/analysis/delivery/binding',
     }[id]
     await router.push(routePath || '/analysis/total/brand')
     return

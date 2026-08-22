@@ -62,6 +62,18 @@ const routes = [
     meta: { analysisKey: 'analysis-total-custom', analysisTitle: '总数据视角 · 自选门店汇总', analysisScope: 'total', analysisMode: 'custom' },
   },
   {
+    path: '/analysis/total/binding',
+    name: 'analysis-total-binding',
+    component: () => import('@/views/analysis/DishSalesBinding.vue'),
+    meta: { analysisKey: 'analysis-total-binding', analysisTitle: '堂食菜品绑定', analysisScope: 'total', analysisMode: 'binding' },
+  },
+  {
+    path: '/analysis/group-buy/binding',
+    name: 'analysis-group-binding',
+    component: () => import('@/views/analysis/ProductBinding.vue'),
+    meta: { analysisKey: 'analysis-group-binding', analysisTitle: '团购菜品绑定', analysisScope: 'group-buy', analysisMode: 'binding' },
+  },
+  {
     path: '/analysis/group-buy/platform/meituan', name: 'analysis-group-meituan', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
     meta: { analysisKey: 'analysis-group-meituan', analysisTitle: '团购视角 · 美团团购', analysisScope: 'group-buy', analysisMode: 'platform', analysisPlatform: '美团团购' },
   },
@@ -80,6 +92,12 @@ const routes = [
   {
     path: '/analysis/group-buy/store', name: 'analysis-group-store', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
     meta: { analysisKey: 'analysis-group-store', analysisTitle: '门店团购汇总', analysisScope: 'group-buy', analysisMode: 'store' },
+  },
+  {
+    path: '/analysis/delivery/binding',
+    name: 'analysis-delivery-binding',
+    component: () => import('@/views/analysis/ProductBinding.vue'),
+    meta: { analysisKey: 'analysis-delivery-binding', analysisTitle: '外卖菜品绑定', analysisScope: 'delivery', analysisMode: 'binding' },
   },
   {
     path: '/analysis/delivery/platform/meituan', name: 'analysis-delivery-meituan', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
@@ -136,6 +154,11 @@ const routes = [
   {
     path: '/menu-management',
     redirect: '/menu-management/overview',
+  },
+  {
+    path: '/menu-management/category',
+    name: 'menu-management-category',
+    component: () => import('@/views/menu/MenuCategory.vue'),
   },
   {
     path: '/cost-accounting',

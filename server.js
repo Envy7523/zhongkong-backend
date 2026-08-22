@@ -1100,12 +1100,375 @@ app.put('/api/menu/:id/cost-components', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// ===== 菜品模板 =====
-// 获取所有分类（从现有菜单中提取）
+// ===== 菜品分类 =====
+// 分类名列表（用于下拉筛选）：来自分类表 + 菜单中仍在使用的历史分类
 app.get('/api/menu-categories', (req, res) => {
-  try { const rows = db.queryAll("SELECT DISTINCT category FROM menu_items WHERE category IS NOT NULL AND category != '' ORDER BY category"); res.json({ ok: true, categories: rows.map(r => r.category) }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try {
+    const fromTable = db.queryAll('SELECT name FROM menu_categories ORDER BY sort_order, id').map(r => r.name);
+    const orphans = db.queryAll("SELECT DISTINCT category FROM menu_items WHERE category IS NOT NULL AND category != ''").map(r => r.category).filter(n => !fromTable.includes(n));
+    res.json({ ok: true, categories: [...fromTable, ...orphans] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// 分类管理列表（含菜品数量；附带"待收录"的历史分类）
+app.get('/api/menu-category/list', (req, res) => {
+  try {
+    const used = {};
+    db.queryAll("SELECT category AS name, COUNT(*) AS dish_count FROM menu_items WHERE category IS NOT NULL AND category != '' GROUP BY category").forEach(r => { used[r.name] = r.dish_count; });
+    const rows = db.queryAll('SELECT id, name, sort_order, remark, created_at FROM menu_categories ORDER BY sort_order, id');
+    const managed = rows.map(r => ({ ...r, dish_count: used[r.name] || 0 }));
+    const orphans = Object.keys(used).filter(n => !rows.some(r => r.name === n)).map(n => ({ id: null, name: n, sort_order: 0, remark: '', created_at: '', orphan: true, dish_count: used[n] }));
+    res.json({ ok: true, categories: [...managed, ...orphans], total: managed.length, dishTotal: Object.values(used).reduce((s, v) => s + v, 0) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 新增分类
+app.post('/api/menu-category', (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: '分类名称不能为空' });
+    if (db.queryOne('SELECT id FROM menu_categories WHERE name=?', [name])) return res.status(400).json({ error: `分类「${name}」已存在` });
+    const sort_order = Number(req.body?.sort_order) || 0;
+    const remark = String(req.body?.remark || '').trim();
+    const id = db.insert('INSERT INTO menu_categories (name, sort_order, remark) VALUES (?,?,?)', [name, sort_order, remark]);
+    db.save();
+    res.status(201).json({ ok: true, id, name });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 收录历史分类（菜单中已使用但分类表没有）
+app.post('/api/menu-category/adopt', (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: '分类名称不能为空' });
+    if (db.queryOne('SELECT id FROM menu_categories WHERE name=?', [name])) return res.status(400).json({ error: `分类「${name}」已存在` });
+    const id = db.insert('INSERT INTO menu_categories (name, sort_order) VALUES (?,?)', [name, 0]);
+    db.save();
+    res.status(201).json({ ok: true, id, name });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 编辑分类（改名会同步更新菜品与模板中的分类名）
+app.put('/api/menu-category/:id', (req, res) => {
+  try {
+    const category = db.queryOne('SELECT * FROM menu_categories WHERE id=?', [req.params.id]);
+    if (!category) return res.status(404).json({ error: '分类不存在' });
+    const name = req.body?.name !== undefined ? String(req.body.name).trim() : category.name;
+    if (!name) return res.status(400).json({ error: '分类名称不能为空' });
+    if (db.queryOne('SELECT id FROM menu_categories WHERE name=? AND id!=?', [name, req.params.id])) return res.status(400).json({ error: `分类「${name}」已存在` });
+    const sort_order = req.body?.sort_order !== undefined ? Number(req.body.sort_order) || 0 : category.sort_order;
+    const remark = req.body?.remark !== undefined ? String(req.body.remark).trim() : category.remark;
+    db.run("UPDATE menu_categories SET name=?, sort_order=?, remark=?, updated_at=datetime('now','localtime') WHERE id=?", [name, sort_order, remark, req.params.id]);
+    let syncedDishes = 0;
+    if (name !== category.name) {
+      syncedDishes = db.run('UPDATE menu_items SET category=? WHERE category=?', [name, category.name]);
+      db.run('UPDATE menu_template_items SET category=? WHERE category=?', [name, category.name]);
+    }
+    db.save();
+    res.json({ ok: true, syncedDishes });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 删除分类（关联菜品将变为"未分类"）
+app.delete('/api/menu-category/:id', (req, res) => {
+  try {
+    const category = db.queryOne('SELECT * FROM menu_categories WHERE id=?', [req.params.id]);
+    if (!category) return res.status(404).json({ error: '分类不存在' });
+    db.run('DELETE FROM menu_categories WHERE id=?', [req.params.id]);
+    const clearedDishes = db.run("UPDATE menu_items SET category='' WHERE category=?", [category.name]);
+    db.run("UPDATE menu_template_items SET category='' WHERE category=?", [category.name]);
+    db.save();
+    res.json({ ok: true, clearedDishes });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== 堂食菜品绑定 =====
+/** 规格归一化：'--'/空 统一为 ''（无规格），保证映射唯一键一致 */
+function normalizeDishSpec(value) {
+  const text = String(value || '').trim();
+  return (text === '' || text === '--') ? '' : text;
+}
+
+// 绑定时名称不是唯一标识：上庄、下庄、半只等规格售价不同，必须完整展示为 SKU。
+function withDishMenuSku(menu = {}) {
+  const name = String(menu.name || '').trim();
+  const spec = normalizeDishSpec(menu.spec);
+  const method = String(menu.method || '').trim();
+  const unit = String(menu.spec_unit || '').trim();
+  const weight = String(menu.spec_weight || '').trim();
+  const parts = [];
+  [spec, method && method !== '/' ? method : '', weight || unit].filter(Boolean).forEach(part => {
+    if (!parts.includes(part)) parts.push(part);
+  });
+  const dineInPrice = Number(menu.dine_in_price || menu.price) || 0;
+  const memberPrice = Number(menu.member_price) || 0;
+  const takeoutPrice = Number(menu.takeout_price) || 0;
+  const priceSummary = [
+    dineInPrice ? `堂食 ¥${dineInPrice.toFixed(2)}` : '',
+    memberPrice ? `会员 ¥${memberPrice.toFixed(2)}` : '',
+    takeoutPrice ? `外卖 ¥${takeoutPrice.toFixed(2)}` : '',
+  ].filter(Boolean).join(' / ');
+  return {
+    ...menu,
+    sku_label: `${name}${parts.length ? ` · ${parts.join(' · ')}` : ''}`,
+    sku_variant: parts.join(' · ') || '标准规格',
+    sku_price_summary: priceSummary || '价格未设置',
+  };
+}
+// 绑定列表：dish_sales 按菜品聚合 + 关联本地菜品（含成本/毛利估算），支持搜索与分页
+app.get('/api/dish-sales/mappings', (req, res) => {
+  try {
+    const { keyword, mapped, page = 1, page_size = 20, sort = 'income' } = req.query;
+    let where = 'WHERE 1=1';
+    const params = [];
+    if (keyword) { where += ' AND (d.product_name LIKE ? OR d.product_code LIKE ?)'; params.push(`%${keyword}%`, `%${keyword}%`); }
+    if (mapped === 'bound') { where += ' AND m.id IS NOT NULL'; }
+    if (mapped === 'unbound') { where += ' AND m.id IS NULL'; }
+    const sortCol = { income: 'income_amount', quantity: 'quantity', amount: 'amount_total' }[sort] || 'income_amount';
+    const total = db.queryOne(`SELECT COUNT(*) as cnt FROM (
+        SELECT d.product_code, d.product_name, d.spec
+        FROM dish_sales d
+        LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
+          AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
+        ${where}
+        GROUP BY d.product_code, d.product_name, d.spec
+      )`, params).cnt;
+    const psize = Math.min(100, Math.max(1, parseInt(page_size) || 20));
+    const pg = Math.max(1, parseInt(page) || 1);
+    const rows = db.queryAll(`
+      SELECT d.product_code, d.product_name, d.spec,
+        SUM(d.quantity) as quantity,
+        SUM(d.amount_total) as amount_total,
+        SUM(d.income_amount) as income_amount,
+        SUM(d.refund_amount) as refund_amount,
+        m.id as mapping_id, m.menu_item_id as menu_item_id,
+        mi.name as menu_name, mi.category as menu_category, mi.cost as unit_cost,
+        mi.spec as menu_spec, mi.method as menu_method, mi.spec_unit as menu_spec_unit, mi.spec_weight as menu_spec_weight,
+        mi.price as menu_price, mi.dine_in_price as menu_dine_in_price, mi.member_price as menu_member_price, mi.takeout_price as menu_takeout_price
+      FROM dish_sales d
+      LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
+        AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
+      LEFT JOIN menu_items mi ON mi.id = m.menu_item_id
+      ${where}
+      GROUP BY d.product_code, d.product_name, d.spec
+      ORDER BY ${sortCol} DESC
+      LIMIT ? OFFSET ?`, [...params, psize, (pg - 1) * psize]);
+    const items = rows.map(r => {
+      const sku = withDishMenuSku({
+        name: r.menu_name, spec: r.menu_spec, method: r.menu_method, spec_unit: r.menu_spec_unit, spec_weight: r.menu_spec_weight,
+        price: r.menu_price, dine_in_price: r.menu_dine_in_price, member_price: r.menu_member_price, takeout_price: r.menu_takeout_price,
+      });
+      return {
+        ...r,
+        mapped: !!r.mapping_id,
+        menu_sku_label: r.mapping_id ? sku.sku_label : '',
+        menu_sku_variant: r.mapping_id ? sku.sku_variant : '',
+        menu_sku_price_summary: r.mapping_id ? sku.sku_price_summary : '',
+        unit_cost: Number(r.unit_cost) || 0,
+        total_cost: r.mapping_id ? Math.round(Number(r.quantity) * (Number(r.unit_cost) || 0) * 100) / 100 : null,
+        gross_profit: r.mapping_id ? Math.round((Number(r.income_amount) - Number(r.quantity) * (Number(r.unit_cost) || 0)) * 100) / 100 : null,
+      };
+    });
+    const menu_items = db.queryAll(`SELECT id,name,category,method,spec,price,dine_in_price,member_price,takeout_price,spec_unit,spec_weight,cost
+      FROM menu_items WHERE status='在售' ORDER BY category,name,spec,id`).map(withDishMenuSku);
+    res.json({ ok: true, items, total, page: pg, page_size: psize, menu_items });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 一键绑定：未绑定的堂食菜品按名称自动匹配本地菜品；同名多规格时用规格（上庄/下庄/半只等）区分
+app.post('/api/dish-sales/mappings/auto-bind', (req, res) => {
+  try {
+    const rows = db.queryAll(`
+      SELECT d.product_code, d.product_name, d.spec,
+        SUM(d.quantity) as quantity, SUM(d.income_amount) as income_amount
+      FROM dish_sales d
+      LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
+        AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
+      WHERE m.id IS NULL
+      GROUP BY d.product_code, d.product_name, d.spec
+    `);
+    const menus = db.queryAll("SELECT id,name,spec,method,spec_unit,spec_weight,cost FROM menu_items WHERE status='在售'");
+    const byName = new Map();
+    menus.forEach(m => {
+      const list = byName.get(m.name);
+      if (list) list.push(m); else byName.set(m.name, [m]);
+    });
+    let bound = 0, skipped = 0;
+    const reasons = { no_name_match: 0, ambiguous_spec: 0, no_spec_among_multi: 0 };
+    db.run('BEGIN');
+    for (const r of rows) {
+      const candidates = byName.get(String(r.product_name || '').trim()) || [];
+      if (!candidates.length) { reasons.no_name_match++; skipped++; continue; }
+      let target;
+      if (candidates.length === 1) {
+        target = candidates[0];
+      } else {
+        const spec = String(r.spec || '').trim();
+        if (spec && spec !== '--') {
+          const normalizedSpec = normalizeDishSpec(spec);
+          const match = candidates.filter(c => {
+            const menuSpec = normalizeDishSpec(c.spec);
+            // 优先匹配新字段 spec；历史菜品尚未迁移规格时，才回退到单位/重量字段。
+            return menuSpec === normalizedSpec || (!menuSpec && [c.spec_unit, c.spec_weight].some(value => normalizeDishSpec(value) === normalizedSpec));
+          });
+          if (match.length === 1) target = match[0];
+          else { if (match.length === 0) reasons.no_spec_among_multi++; else reasons.ambiguous_spec++; skipped++; continue; }
+        } else {
+          reasons.no_spec_among_multi++; skipped++; continue;
+        }
+      }
+      db.run(`INSERT INTO dish_sales_mappings (product_code, product_name, spec, menu_item_id) VALUES (?,?,?,?)
+        ON CONFLICT(product_code, product_name, spec) DO UPDATE SET menu_item_id=excluded.menu_item_id, updated_at=datetime('now','localtime')`,
+        [r.product_code, String(r.product_name || '').trim(), normalizeDishSpec(r.spec), target.id]);
+      bound++;
+    }
+    db.run('COMMIT');
+    db.save();
+    res.json({ ok: true, bound, skipped, reasons });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 批量绑定：把多个堂食菜品（编码+名称+规格）一次性关联到同一个本地菜品
+app.post('/api/dish-sales/mappings/batch', (req, res) => {
+  try {
+    const { items, menu_item_id } = req.body;
+    const menuId = Number(menu_item_id);
+    const menu = db.queryOne('SELECT id FROM menu_items WHERE id=?', [menuId]);
+    if (!menu) return res.status(400).json({ error: '本地菜品不存在' });
+    if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: '请选择要绑定的菜品' });
+    db.run('BEGIN');
+    let bound = 0;
+    for (const it of items) {
+      const code = String(it?.product_code || '').trim();
+      const name = String(it?.product_name || '').trim();
+      if (!code || !name) continue;
+      db.run(`INSERT INTO dish_sales_mappings (product_code, product_name, spec, menu_item_id) VALUES (?,?,?,?)
+        ON CONFLICT(product_code, product_name, spec) DO UPDATE SET menu_item_id=excluded.menu_item_id, updated_at=datetime('now','localtime')`,
+        [code, name, normalizeDishSpec(it?.spec), menuId]);
+      bound++;
+    }
+    db.run('COMMIT');
+    db.save();
+    res.json({ ok: true, bound });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 绑定/更换：按菜品编码 upsert
+app.post('/api/dish-sales/mappings', (req, res) => {
+  try {
+    const { product_code, product_name, spec, menu_item_id } = req.body;
+    const code = String(product_code || '').trim();
+    const menuId = Number(menu_item_id);
+    if (!code) return res.status(400).json({ error: '菜品编码不能为空' });
+    const menu = db.queryOne('SELECT id FROM menu_items WHERE id=?', [menuId]);
+    if (!menu) return res.status(400).json({ error: '本地菜品不存在' });
+    db.run(`INSERT INTO dish_sales_mappings (product_code, product_name, spec, menu_item_id) VALUES (?,?,?,?)
+      ON CONFLICT(product_code, product_name, spec) DO UPDATE SET menu_item_id=excluded.menu_item_id, updated_at=datetime('now','localtime')`,
+      [code, String(product_name || '').trim(), normalizeDishSpec(spec), menuId]);
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 解绑
+app.delete('/api/dish-sales/mappings/:id', (req, res) => {
+  try {
+    const affected = db.run('DELETE FROM dish_sales_mappings WHERE id=?', [req.params.id]);
+    if (!affected) return res.status(404).json({ error: '绑定记录不存在' });
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ===== 菜品销售明细 =====
+// 菜品分析聚合：按菜品汇总销量/金额/收入/优惠/退款（总视角使用，支持门店筛选与分页）
+app.get('/api/dish-sales/analytics', (req, res) => {
+  try {
+    const { date_from, date_to, store_id, store_ids, keyword, limit = 20, sort = 'income', page = 1, page_size = 20 } = req.query;
+    let where = 'WHERE 1=1';
+    const params = [];
+    if (date_from) { where += ' AND order_time>=?'; params.push(date_from); }
+    if (date_to) { where += ' AND order_time<=?'; params.push(`${date_to} 23:59:59`); }
+    if (store_id) {
+      const name = db.queryOne('SELECT store_name FROM stores WHERE id=?', [Number(store_id)])?.store_name;
+      if (name) { where += ' AND store_name=?'; params.push(name); }
+    }
+    if (store_ids) {
+      const ids = String(store_ids).split(',').map(Number).filter(id => Number.isInteger(id) && id > 0);
+      if (ids.length) {
+        const names = db.queryAll(`SELECT store_name FROM stores WHERE id IN (${ids.map(() => '?').join(',')})`, ids).map(r => r.store_name);
+        if (names.length) { where += ` AND store_name IN (${names.map(() => '?').join(',')})`; params.push(...names); }
+      }
+    }
+    if (keyword) { where += ' AND (product_name LIKE ? OR product_code LIKE ?)'; params.push(`%${keyword}%`, `%${keyword}%`); }
+    const sortCol = { income: 'income_amount', quantity: 'quantity', amount: 'amount_total' }[sort] || 'income_amount';
+    const total = db.queryOne(`SELECT COUNT(*) as cnt FROM (SELECT product_code, product_name, spec FROM dish_sales ${where} GROUP BY product_code, product_name, spec)`, params).cnt;
+    const psize = Math.min(100, Math.max(1, parseInt(page_size) || 20));
+    const pg = Math.max(1, parseInt(page) || 1);
+    const rows = db.queryAll(`
+      SELECT product_code, product_name, spec,
+        SUM(quantity) as quantity,
+        SUM(amount_total) as amount_total,
+        SUM(discount_amount) as discount_amount,
+        SUM(income_amount) as income_amount,
+        SUM(refund_amount) as refund_amount,
+        COUNT(DISTINCT order_no) as order_count,
+        SUM(CASE WHEN refunded='部分退' THEN 1 ELSE 0 END) as refunded_count
+      FROM dish_sales ${where}
+      GROUP BY product_code, product_name, spec
+      ORDER BY ${sortCol} DESC
+      LIMIT ? OFFSET ?`, [...params, psize, (pg - 1) * psize]);
+    const summary = db.queryOne(`
+      SELECT COUNT(DISTINCT product_code) as product_count,
+        SUM(quantity) as quantity,
+        SUM(amount_total) as amount_total,
+        SUM(discount_amount) as discount_amount,
+        SUM(income_amount) as income_amount,
+        SUM(refund_amount) as refund_amount,
+        COUNT(DISTINCT order_no) as order_count
+      FROM dish_sales ${where}`, params);
+    res.json({ ok: true, summary, top: rows, total, page: pg, page_size: psize });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 分页查询：支持关键字（门店/菜品名/编码）、退款状态、下单时间范围筛选
+app.get('/api/dish-sales', (req, res) => {
+  try {
+    const { keyword, refunded, date_from, date_to, page = 1, page_size = 20 } = req.query;
+    let where = 'WHERE 1=1';
+    const params = [];
+    if (keyword) {
+      where += ' AND (store_name LIKE ? OR product_name LIKE ? OR product_code LIKE ?)';
+      params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+    }
+    if (refunded !== undefined && refunded !== '') { where += ' AND refunded=?'; params.push(refunded); }
+    if (date_from) { where += ' AND order_time>=?'; params.push(date_from); }
+    if (date_to) { where += ' AND order_time<=?'; params.push(date_to); }
+    const total = db.queryOne(`SELECT COUNT(*) as cnt FROM dish_sales ${where}`, params).cnt;
+    const psize = Math.min(200, Math.max(1, parseInt(page_size) || 20));
+    const pg = Math.max(1, parseInt(page) || 1);
+    const rows = db.queryAll(`SELECT * FROM dish_sales ${where} ORDER BY order_time DESC, id DESC LIMIT ? OFFSET ?`, [...params, psize, (pg - 1) * psize]);
+    res.json({ ok: true, items: rows, total, page: pg, page_size: psize });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 销售汇总：总记录数、金额合计、优惠合计、收入合计、退款笔数
+app.get('/api/dish-sales/stats', (req, res) => {
+  try {
+    const row = db.queryOne(`
+      SELECT
+        COUNT(*) as count,
+        COALESCE(SUM(amount_total),0) as amount_total,
+        COALESCE(SUM(discount_amount),0) as discount_amount,
+        COALESCE(SUM(income_amount),0) as income_amount,
+        COALESCE(SUM(CASE WHEN refunded IN ('是','1','部分退') THEN 1 ELSE 0 END),0) as refund_count,
+        COALESCE(SUM(refund_amount),0) as refund_amount
+      FROM dish_sales
+    `);
+    res.json({ ok: true, stats: row });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // 模板列表
 app.get('/api/menu-templates', (req, res) => {
   try { const rows = db.queryAll("SELECT * FROM menu_templates ORDER BY updated_at DESC"); res.json({ ok: true, templates: rows }); }
@@ -1693,6 +2056,81 @@ app.get('/api/business-analytics/mappings/:scope', (req, res) => {
 app.put('/api/business-analytics/mappings', (req, res) => {
   try { res.json(businessAnalytics.saveProductMapping(db, req.body || {})); }
   catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 解绑：删除平台商品与本地菜品的映射
+app.delete('/api/business-analytics/mappings/:id', (req, res) => {
+  try { res.json(businessAnalytics.deleteProductMapping(db, req.params.id)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 批量绑定：把多个平台商品（平台+商品名）一次性关联到同一个本地菜品
+app.post('/api/business-analytics/mappings/batch', (req, res) => {
+  try {
+    const { items, menu_item_id } = req.body;
+    const menuId = Number(menu_item_id);
+    const menu = db.queryOne('SELECT id FROM menu_items WHERE id=?', [menuId]);
+    if (!menu) return res.status(400).json({ error: '本地菜品不存在' });
+    if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: '请选择要绑定的商品' });
+    const scope = String(req.body?.scope || '').trim();
+    const group = scope === 'delivery' ? 'delivery' : 'group_buy';
+    db.run('BEGIN');
+    let bound = 0;
+    for (const it of items) {
+      const platform = String(it?.platform || '').trim();
+      const name = String(it?.external_product_name || it?.product_name || '').trim();
+      if (!platform || !name) continue;
+      db.run(`INSERT INTO business_product_mappings (platform, channel_group, external_product_name, menu_item_id)
+        VALUES (?,?,?,?) ON CONFLICT(platform, external_product_name)
+        DO UPDATE SET channel_group=excluded.channel_group, menu_item_id=excluded.menu_item_id, updated_at=datetime('now','localtime')`,
+        [platform, group, name, menuId]);
+      bound++;
+    }
+    db.run('COMMIT');
+    db.save();
+    res.json({ ok: true, bound });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 一键绑定：未绑定的平台商品按名称自动匹配本地菜品；同名多规格（平台无规格信息）时跳过避免误绑
+app.post('/api/business-analytics/mappings/auto-bind', (req, res) => {
+  try {
+    const scope = String(req.body?.scope || '').trim();
+    const channels = scope === 'delivery'
+      ? ['meituan_delivery', 'taobao_flash', 'jd_delivery']
+      : ['meituan_group', 'douyin_group', 'free_trial'];
+    const rows = db.queryAll(`
+      SELECT p.platform, p.product_name,
+        SUM(p.quantity) as quantity, SUM(p.sales_amount) as sales_amount
+      FROM business_product_sales p
+      LEFT JOIN business_product_mappings m ON m.platform = p.platform AND m.external_product_name = p.product_name
+      WHERE p.channel IN (${channels.map(() => '?').join(',')}) AND m.id IS NULL
+      GROUP BY p.platform, p.product_name
+    `, channels);
+    const menus = db.queryAll("SELECT id,name,category FROM menu_items WHERE status='在售'");
+    const byName = new Map();
+    menus.forEach(m => {
+      const list = byName.get(m.name);
+      if (list) list.push(m); else byName.set(m.name, [m]);
+    });
+    const group = scope === 'delivery' ? 'delivery' : 'group_buy';
+    let bound = 0, skipped = 0;
+    const reasons = { no_name_match: 0, ambiguous_name: 0 };
+    db.run('BEGIN');
+    for (const r of rows) {
+      const candidates = byName.get(String(r.product_name || '').trim()) || [];
+      if (!candidates.length) { reasons.no_name_match++; skipped++; continue; }
+      if (candidates.length > 1) { reasons.ambiguous_name++; skipped++; continue; }
+      db.run(`INSERT INTO business_product_mappings (platform, channel_group, external_product_name, menu_item_id)
+        VALUES (?,?,?,?) ON CONFLICT(platform, external_product_name)
+        DO UPDATE SET channel_group=excluded.channel_group, menu_item_id=excluded.menu_item_id, updated_at=datetime('now','localtime')`,
+        [r.platform, group, String(r.product_name || '').trim(), candidates[0].id]);
+      bound++;
+    }
+    db.run('COMMIT');
+    db.save();
+    res.json({ ok: true, bound, skipped, reasons });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/business-analytics/diagnoses', (req, res) => {

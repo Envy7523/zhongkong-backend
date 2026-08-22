@@ -31,6 +31,45 @@
       <template v-if="analysisScope === 'total'">
         <section class="panel composition-panel"><header><div><h3>渠道营业构成</h3><p>{{ rangeLabel }} · 店内销售、自提销售及三方外卖渠道</p></div><span class="panel-badge">{{ channelTableRows.length }} 个渠道</span></header><div v-if="channelTableRows.length" class="composition-layout"><el-table :data="channelTableRows" class="composition-table" stripe><el-table-column prop="name" label="渠道字段" min-width="150" /><el-table-column label="营业额" min-width="135" align="right"><template #default="{ row }">{{ money(row.gross) }}</template></el-table-column><el-table-column v-if="compareMode" label="营业额环比" min-width="130" align="right"><template #default="{ row }"><span :class="compareValueClass(row.grossCompareRate)">{{ comparePercent(row.grossCompareRate) }}</span></template></el-table-column><el-table-column label="营业额占比" min-width="108" align="right"><template #default="{ row }">{{ percent(row.grossRatio) }}</template></el-table-column><el-table-column label="实收" min-width="135" align="right"><template #default="{ row }">{{ money(row.actual) }}</template></el-table-column><el-table-column v-if="compareMode" label="实收环比" min-width="130" align="right"><template #default="{ row }"><span :class="compareValueClass(row.actualCompareRate)">{{ comparePercent(row.actualCompareRate) }}</span></template></el-table-column><el-table-column label="实收占比" min-width="108" align="right"><template #default="{ row }">{{ percent(row.actualRatio) }}</template></el-table-column></el-table><aside class="ring-column"><div ref="channelCompositionChartRef" class="ring-chart"></div><span>按实收占比</span></aside></div><el-empty v-else :description="emptyDescription" /></section>
         <section class="panel composition-panel income-panel"><header><div><h3>营业收入构成</h3><p>{{ rangeLabel }} · 按经营日报“营业收入构成”上级字段汇总</p></div><span class="panel-badge">{{ incomeTableRows.length }} 项构成</span></header><div v-if="incomeTableRows.length" class="composition-layout"><el-table :data="incomeTableRows" class="composition-table" stripe><el-table-column prop="name" label="收入字段" min-width="200" /><el-table-column label="实收" min-width="155" align="right"><template #default="{ row }">{{ money(row.actual) }}</template></el-table-column><el-table-column v-if="compareMode" label="实收环比" min-width="135" align="right"><template #default="{ row }"><span :class="compareValueClass(row.actualCompareRate)">{{ comparePercent(row.actualCompareRate) }}</span></template></el-table-column><el-table-column label="实收占比" min-width="130" align="right"><template #default="{ row }">{{ percent(row.actualRatio) }}</template></el-table-column></el-table><aside class="ring-column"><div ref="compositionChartRef" class="ring-chart"></div><span>按实收占比</span></aside></div><el-empty v-else description="暂无营业收入构成数据" /></section>
+        <section class="panel dish-panel">
+          <header><div><h3>菜品销售分析</h3><p>{{ rangeLabel }} · 按菜品汇总销量 / 销售额 / 收入 / 优惠 / 退款</p></div>
+            <div class="panel-actions"><el-radio-group v-model="dishSort" size="small" @change="changeDishSort"><el-radio-button value="income">按收入</el-radio-button><el-radio-button value="quantity">按销量</el-radio-button><el-radio-button value="amount">按金额</el-radio-button></el-radio-group></div>
+          </header>
+          <div class="dish-metrics">
+            <div><span>菜品数</span><strong>{{ dishAnalytics.summary.product_count ?? 0 }}</strong></div>
+            <div><span>总销量</span><strong>{{ numberText(dishAnalytics.summary.quantity) }}</strong></div>
+            <div><span>销售额</span><strong>{{ money(dishAnalytics.summary.amount_total) }}</strong></div>
+            <div><span>菜品收入</span><strong>{{ money(dishAnalytics.summary.income_amount) }}</strong></div>
+            <div><span>优惠金额</span><strong>{{ money(dishAnalytics.summary.discount_amount) }}</strong></div>
+            <div><span>退款金额</span><strong class="dish-refund-text">{{ money(dishAnalytics.summary.refund_amount) }}</strong></div>
+          </div>
+          <el-table v-loading="dishLoading" :data="dishAnalytics.top" class="dish-table" stripe>
+            <el-table-column type="index" label="排名" width="62" />
+            <el-table-column prop="product_name" label="菜品" min-width="200" show-overflow-tooltip />
+            <el-table-column label="规格" min-width="90"><template #default="{ row }">{{ row.spec && row.spec !== '--' ? row.spec : '—' }}</template></el-table-column>
+            <el-table-column label="销量" width="84" align="right"><template #default="{ row }">{{ numberText(row.quantity) }}</template></el-table-column>
+            <el-table-column label="销售额" width="108" align="right"><template #default="{ row }">{{ money(row.amount_total) }}</template></el-table-column>
+            <el-table-column label="优惠" width="96" align="right"><template #default="{ row }">{{ money(row.discount_amount) }}</template></el-table-column>
+            <el-table-column label="收入" width="106" align="right"><template #default="{ row }"><b class="dish-income">{{ money(row.income_amount) }}</b></template></el-table-column>
+            <el-table-column label="退款金额" width="100" align="right"><template #default="{ row }"><span :class="Number(row.refund_amount) > 0 ? 'dish-refund-text' : ''">{{ money(row.refund_amount) }}</span></template></el-table-column>
+            <el-table-column label="订单数" width="84" align="right"><template #default="{ row }">{{ numberText(row.order_count) }}</template></el-table-column>
+            <el-table-column label="退款笔数" width="84" align="right"><template #default="{ row }">{{ row.refunded_count || 0 }}</template></el-table-column>
+          </el-table>
+          <el-empty v-if="!dishLoading && !dishAnalytics.top?.length" description="暂无菜品销售数据，请确认时间范围或先导入菜品销售明细" />
+          <footer v-if="dishTotal > 0" class="dish-footer">
+            <span>共 {{ dishTotal }} 个菜品 · 按{{ { income: '收入', quantity: '销量', amount: '金额' }[dishSort] }}排序</span>
+            <el-pagination
+              v-model:current-page="dishPage"
+              v-model:page-size="dishPageSize"
+              :page-sizes="[10, 20, 50]"
+              :total="dishTotal"
+              layout="total, sizes, prev, pager, next"
+              background
+              @current-change="loadDishAnalytics"
+              @size-change="dishPage = 1; loadDishAnalytics()"
+            />
+          </footer>
+        </section>
       </template>
       <template v-else>
         <section class="chart-grid"><article class="panel"><header><div><h3>{{ analysisMode === 'store' ? '门店实收走势图' : '实收趋势' }}</h3><p>按{{ trendTimeModeLabel }}口径聚合</p></div><span class="panel-badge">{{ data.trend.length }} 个周期</span></header><div v-if="data.trend.length" ref="trendChartRef" class="chart"></div><el-empty v-else :description="emptyDescription" /></article><article class="panel"><header><div><h3>渠道营业构成</h3><p>{{ scopeChip }}渠道构成</p></div></header><div v-if="channelCompositionItems.length" ref="compositionChartRef" class="chart"></div><el-empty v-else description="暂无构成数据" /></article></section>
@@ -65,7 +104,7 @@ import { useRoute } from 'vue-router'
 import * as echarts from 'echarts'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { generateBusinessDiagnosis, getBusinessAnalytics, getBusinessDiagnosis, getStores } from '@/api'
+import { generateBusinessDiagnosis, getBusinessAnalytics, getBusinessDiagnosis, getDishSalesAnalytics, getStores } from '@/api'
 
 const route = useRoute()
 const timeModes = [{ label: '日数据', value: 'day' }, { label: '周数据', value: 'week' }, { label: '月数据', value: 'month' }, { label: '自定义时间', value: 'custom' }]
@@ -86,6 +125,12 @@ function thisMonth() { return toDateText(new Date()).slice(0, 7) }
 function monthRange(month) { const [year, value] = String(month || '').split('-').map(Number); if (!year || !value) return []; const text = `${year}-${String(value).padStart(2, '0')}`; return [`${text}-01`, `${text}-${new Date(year, value, 0).getDate()}`] }
 const filters = reactive({ timeMode: 'day', day: yesterday(), week: thisWeek()[0], month: thisMonth(), customRange: [], storeId: null, storeIds: [], platform: '' })
 const data = reactive({ totals: {}, trend: [], reconciliation: [], reconciliation_total: 0, reconciliation_page: 1, reconciliation_page_size: 20, stores: [], revenue_composition: [], channel_breakdown: [] })
+const dishAnalytics = reactive({ summary: {}, top: [] })
+const dishLoading = ref(false)
+const dishSort = ref('income')
+const dishPage = ref(1)
+const dishPageSize = ref(20)
+const dishTotal = ref(0)
 const compareData = reactive({ totals: {}, stores: [], revenue_composition: [], channel_breakdown: [] })
 const storeDetail = reactive({ totals: {}, revenue_composition: [], channel_breakdown: [] })
 const analysisScope = computed(() => route.meta.analysisScope || 'total')
@@ -166,7 +211,7 @@ function ratio(value, total) { return total ? `${(Number(value || 0) / total * 1
 function differenceClass(value) { return Math.abs(value) <= 0.01 ? 'difference-ok' : 'difference-warn' }
 function compareValueClass(value) { if (!compareMode.value || value == null) return 'compare-flat'; return value > 0 ? 'compare-up' : value < 0 ? 'compare-down' : 'compare-flat' }
 function changeTimeMode(mode) { filters.timeMode = mode }
-function clearData() { Object.assign(data, { totals: {}, trend: [], reconciliation: [], reconciliation_total: 0, reconciliation_page: 1, reconciliation_page_size: reconciliationPageSize.value, stores: [], revenue_composition: [], channel_breakdown: [] }); diagnosisVisible.value = false; diagnosisAvailable.value = false; diagnosis.value = null; diagnosisSignatureAtQuery.value = '' }
+function clearData() { Object.assign(data, { totals: {}, trend: [], reconciliation: [], reconciliation_total: 0, reconciliation_page: 1, reconciliation_page_size: reconciliationPageSize.value, stores: [], revenue_composition: [], channel_breakdown: [] }); Object.assign(dishAnalytics, { summary: {}, top: [] }); dishTotal.value = 0; dishPage.value = 1; diagnosisVisible.value = false; diagnosisAvailable.value = false; diagnosis.value = null; diagnosisSignatureAtQuery.value = '' }
 function resetScopeFilters() { filters.storeId = analysisMode.value === 'store' ? storeOptions.value[0]?.id || null : null; filters.storeIds = []; filters.platform = '' }
 function selectionToRange(value) { if (!value) return []; if (filters.timeMode === 'day') return [value, value]; if (filters.timeMode === 'week') return fullWeekRange(value); if (filters.timeMode === 'month') return monthRange(value); return Array.isArray(value) ? value : [] }
 function rangeToSelection(range) { if (!range?.length) return null; if (filters.timeMode === 'day' || filters.timeMode === 'week') return range[0]; if (filters.timeMode === 'month') return String(range[0]).slice(0, 7); return [...range] }
@@ -205,7 +250,42 @@ async function runDiagnosis() {
     ElMessage.success(isUpdating ? '诊断结果已更新' : '诊断结果已生成')
   } catch (error) { ElMessage.error(error.message || '诊断生成失败') } finally { diagnosisLoading.value = false }
 }
-async function loadData() { const range = reportRange.value; if ((!compareMode.value && filters.timeMode === 'custom' && range?.length !== 2) || (analysisMode.value === 'custom' && !filters.storeIds.length) || (compareMode.value && !compareRangesReady.value)) { clearData(); return } loading.value = true; try { if (compareMode.value) { const [result, previous] = await Promise.all([getBusinessAnalytics('overview', analyticsParams(range)), getBusinessAnalytics('overview', analyticsParams(comparePreviousRange.value))]); Object.assign(data, result); Object.assign(compareData, previous) } else { const result = await getBusinessAnalytics('overview', analyticsParams(range)); Object.assign(data, result); Object.assign(compareData, { totals: {}, stores: [], revenue_composition: [], channel_breakdown: [] }) } reconciliationPage.value = Number(data.reconciliation_page) || reconciliationPage.value; hasQueried.value = true; diagnosisSignatureAtQuery.value = diagnosisSignature.value; await refreshDiagnosis(); await nextTick(); queueChartRender() } catch (error) { ElMessage.error(error.message) } finally { loading.value = false } }
+async function loadData() { const range = reportRange.value; if ((!compareMode.value && filters.timeMode === 'custom' && range?.length !== 2) || (analysisMode.value === 'custom' && !filters.storeIds.length) || (compareMode.value && !compareRangesReady.value)) { clearData(); return } loading.value = true; try { if (compareMode.value) { const [result, previous] = await Promise.all([getBusinessAnalytics('overview', analyticsParams(range)), getBusinessAnalytics('overview', analyticsParams(comparePreviousRange.value))]); Object.assign(data, result); Object.assign(compareData, previous) } else { const result = await getBusinessAnalytics('overview', analyticsParams(range)); Object.assign(data, result); Object.assign(compareData, { totals: {}, stores: [], revenue_composition: [], channel_breakdown: [] }) } reconciliationPage.value = Number(data.reconciliation_page) || reconciliationPage.value; hasQueried.value = true; diagnosisSignatureAtQuery.value = diagnosisSignature.value; if (analysisScope.value === 'total') await loadDishAnalytics(); await refreshDiagnosis(); await nextTick(); queueChartRender() } catch (error) { ElMessage.error(error.message) } finally { loading.value = false } }
+async function loadDishAnalytics() {
+  const range = reportRange.value
+  if (analysisScope.value !== 'total' || range?.length !== 2 || !range[0] || !range[1]) {
+    Object.assign(dishAnalytics, { summary: {}, top: [] })
+    dishTotal.value = 0
+    return
+  }
+  dishLoading.value = true
+  try {
+    const params = {
+      date_from: range[0],
+      date_to: range[1],
+      sort: dishSort.value,
+      page: dishPage.value,
+      page_size: dishPageSize.value,
+    }
+    // 跟随视角与门店筛选：全门店汇总不带门店；单店数据带 store_id；自选门店汇总带 store_ids
+    if (analysisMode.value === 'store' && filters.storeId) params.store_id = filters.storeId
+    if (analysisMode.value === 'custom' && filters.storeIds.length) params.store_ids = filters.storeIds.join(',')
+    const result = await getDishSalesAnalytics(params)
+    Object.assign(dishAnalytics, { summary: result.summary || {}, top: result.top || [] })
+    dishTotal.value = Number(result.total) || 0
+  } catch (error) {
+    Object.assign(dishAnalytics, { summary: {}, top: [] })
+    dishTotal.value = 0
+  } finally {
+    dishLoading.value = false
+  }
+}
+function changeDishSort(sort) {
+  if (dishSort.value === sort) return
+  dishSort.value = sort
+  dishPage.value = 1
+  loadDishAnalytics()
+}
 async function openStoreDetail(store) {
   const range = reportRange.value
   if (!range?.[0] || !range?.[1]) return ElMessage.warning('请先选择完整的时间范围')
@@ -275,4 +355,5 @@ onBeforeUnmount(() => { if (chartFrame) cancelAnimationFrame(chartFrame); trendC
 .reconciliation-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-top:1px solid #edf0f4;color:#8793a6;font-size:12px}.compare-mode .reconciliation-pagination{border-top-color:rgba(128,163,216,.18);color:#b8c9e1}.compare-mode :deep(.el-pagination button),.compare-mode :deep(.el-pagination .number){background:transparent;color:#c7d8f2}.compare-mode :deep(.el-pagination .number.is-active){color:#75b2ff}
 .hero-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px}.analytics-hero :deep(.el-button--primary){border-color:rgba(255,255,255,.52);background:rgba(255,255,255,.22);font-weight:700}.analytics-hero :deep(.el-button.is-disabled){opacity:.5}.diagnosis-content{color:#253247}.diagnosis-meta{display:flex;flex-wrap:wrap;align-items:center;gap:10px;color:#7e8b9c;font-size:12px}.diagnosis-summary{margin:18px 0;padding:15px 17px;border-left:4px solid #4d87e8;border-radius:0 10px 10px 0;background:#f4f8ff;color:#45607f;line-height:1.7}.diagnosis-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:22px}.diagnosis-metrics>div{padding:13px;border:1px solid #e3eaf5;border-radius:11px;background:linear-gradient(145deg,#fbfdff,#f3f7fd)}.diagnosis-metrics span,.diagnosis-metrics b{display:block}.diagnosis-metrics span{color:#7e8da1;font-size:11px}.diagnosis-metrics b{margin-top:8px;color:#245fae;font-size:17px}.diagnosis-section{margin-top:18px}.diagnosis-section h4{margin:0 0 10px;font-size:14px}.diagnosis-section article{margin:8px 0;padding:12px 14px;border:1px solid #e8edf5;border-radius:10px;background:#fff}.diagnosis-section article b{font-size:13px}.diagnosis-section article p{margin:6px 0 0;color:#718095;font-size:12px;line-height:1.65}.diagnosis-section article.warning{border-left:3px solid #e6a23c}.diagnosis-section article.success{border-left:3px solid #35ad7c}.diagnosis-section article.info{border-left:3px solid #4d87e8}.diagnosis-section ol{margin:0;padding:2px 0 2px 20px;color:#4d5f75}.diagnosis-section li{padding:5px 0;line-height:1.6}@media(max-width:900px){.hero-actions{justify-content:flex-start}.diagnosis-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.hero-actions{width:100%}.hero-actions :deep(.el-button){flex:1}.diagnosis-metrics{grid-template-columns:1fr}.diagnosis-meta{align-items:flex-start;flex-direction:column;gap:6px}}
 .store-trend-panel,.custom-store-panel{margin-top:14px}.custom-store-panel :deep(.el-table__inner-wrapper:before){display:none}.compare-mode .custom-store-panel :deep(.el-table__inner-wrapper:before){background-color:rgba(128,163,216,.18)}
+.dish-panel{margin-top:14px}.dish-panel header{display:flex;align-items:center;justify-content:space-between;gap:14px}.dish-panel .panel-actions{flex:none}.dish-panel .panel-actions :deep(.el-radio-button__inner){font-size:12px;padding:6px 11px}.dish-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;padding:14px 18px}.dish-metrics>div{padding:12px 14px;border:1px solid #e6ebf2;border-radius:10px;background:#f8fbff}.dish-metrics span,.dish-metrics strong{display:block}.dish-metrics span{color:#718096;font-size:11px}.dish-metrics strong{margin-top:6px;color:#1f5fb9;font-size:18px;font-variant-numeric:tabular-nums}.dish-refund-text{color:#d65262!important}.dish-income{color:#16865a}.dish-table{border:0}.dish-panel :deep(.el-table__inner-wrapper:before){display:none}.compare-mode .dish-metrics>div{background:rgba(13,30,53,.9);border-color:rgba(118,157,213,.22)}.compare-mode .dish-metrics strong{color:#f3f7ff}.compare-mode .dish-metrics span{color:#a9bbd6}.compare-mode .dish-refund-text{color:#ff7583!important}.dish-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 18px;border-top:1px solid #edf0f4;background:#fafbfc;color:#7f8999;font-size:12px}.dish-footer :deep(.el-pagination){--el-pagination-font-size:12px}.dish-footer :deep(.el-pagination.is-background .btn-prev),.dish-footer :deep(.el-pagination.is-background .btn-next),.dish-footer :deep(.el-pagination.is-background .el-pager li){border-radius:7px}.compare-mode .dish-footer{border-top-color:rgba(128,163,216,.18);background:rgba(13,30,53,.85);color:#b8c9e1}@media(max-width:900px){.dish-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:560px){.dish-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.dish-panel header{align-items:flex-start;flex-direction:column}.dish-footer{align-items:flex-start;flex-direction:column}}
 </style>
