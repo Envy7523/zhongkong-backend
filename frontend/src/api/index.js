@@ -146,6 +146,7 @@ export const getMonthlyCost = () => http.get('/api/cost-accounting/monthly')
 export const getRevenueAnalysis = (params) => http.get('/api/analysis/revenue', { params })
 export const getCostAnalysis = (params) => http.get('/api/analysis/cost', { params })
 export const getSalesAnalysis = () => http.get('/api/analysis/sales')
+export const getMonthlyOperatingDashboard = (params) => http.get('/api/analysis/monthly-operating-dashboard', { params })
 export const getBusinessAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/views/${scope}`, { params })
 export const getBusinessProductAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/products/${scope}`, { params })
 export const getBusinessProductMappings = (scope = 'overview', params) => http.get(`/api/business-analytics/mappings/${scope}`, { params })
@@ -181,8 +182,14 @@ export const getPushLogs = (params) => http.get('/api/push-logs', { params })
 // ===== 数据导出 =====
 export const exportData = (params) => http.get('/api/data/export', { params })
 
-// ===== 门店运营成本 =====
+// ===== 门店成本 =====
+export const getFixedCosts = (storeId) => http.get(`/api/stores/${storeId}/fixed-costs`)
+export const createFixedCost = (storeId, data) => http.post(`/api/stores/${storeId}/fixed-costs`, data)
+export const updateFixedCost = (id, data) => http.put(`/api/fixed-costs/${id}`, data)
+export const deleteFixedCost = (id) => http.delete(`/api/fixed-costs/${id}`)
 export const getOperatingCosts = (storeId) => http.get(`/api/stores/${storeId}/operating-costs`)
+export const saveMonthlyWage = (storeId, data) => http.put(`/api/stores/${storeId}/monthly-wage`, data)
+export const deleteOperatingCost = (id) => http.delete(`/api/operating-costs/${id}`)
 
 // ===== 协同事项管理 =====
 export const getCollabIssues = (params) => http.get('/api/collab/issues', { params })
@@ -218,6 +225,8 @@ export const deleteBookkeepingSubcategory = (id) => http.delete(`/api/bookkeepin
 export const getBookkeepingEntries = (params) => http.get('/api/bookkeeping/entries', { params })
 export const createBookkeepingEntry = (data) => http.post('/api/bookkeeping/entries', data)
 export const deleteBookkeepingEntry = (id) => http.delete(`/api/bookkeeping/entries/${id}`)
+export const previewBookkeepingQuickEntry = (data) => http.post('/api/bookkeeping/quick-entry/preview', data)
+export const commitBookkeepingQuickEntry = (data) => http.post('/api/bookkeeping/quick-entry/commit', data)
 
 // ===== 员工管理（店长 + 店员）=====
 export const getStaffList = (params) => http.get('/api/staff', { params })

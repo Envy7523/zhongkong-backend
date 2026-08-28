@@ -23,7 +23,7 @@ const PAGE_TITLES = {
 
 const SUB_LABELS = {
   analysis: {
-    'total-brand': '总数据 · 全门店汇总', 'total-store': '总数据 · 单店数据', 'total-custom': '总数据 · 自选门店汇总', 'total-binding': '堂食菜品绑定',
+    'total-brand': '总数据 · 全门店汇总', 'total-store': '总数据 · 单店数据', 'total-custom': '总数据 · 自选门店汇总', 'total-monthly-dashboard': '总数据 · 月经营数据看板', 'total-binding': '堂食菜品绑定',
     'group-meituan': '团购 · 美团团购', 'group-douyin': '团购 · 抖音团购', 'group-free-trial': '团购 · 美团免费试', 'group-brand': '品牌团购汇总', 'group-store': '门店团购汇总', 'group-binding': '团购菜品绑定',
     'delivery-meituan': '外卖 · 美团外卖', 'delivery-taobao': '外卖 · 淘宝闪购', 'delivery-jd': '外卖 · 京东外卖', 'delivery-brand': '品牌外卖汇总', 'delivery-store': '门店外卖汇总', 'delivery-binding': '外卖菜品绑定',
   },

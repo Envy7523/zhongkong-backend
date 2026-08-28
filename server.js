@@ -985,11 +985,14 @@ app.get('/api/staff/sync-pull', async (req, res) => {
 
 // ===== 固定成本 =====
 app.get('/api/stores/:id/fixed-costs', (req, res) => { try { res.json({ ok: true, costs: db.queryAll('SELECT * FROM store_fixed_costs WHERE store_id=?', [req.params.id]) }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post('/api/stores/:id/fixed-costs', (req, res) => { try { const { cost_type, amount, period } = req.body; if (!cost_type) return res.status(400).json({ error: '成本项目不能为空' }); const value = Number(amount); if (!Number.isFinite(value)) return res.status(400).json({ error: '请输入有效金额' }); const id = db.insert('INSERT INTO store_fixed_costs (store_id,cost_type,amount,period) VALUES (?,?,?,?)', [req.params.id, cost_type.trim(), value, period || '月度']); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put('/api/fixed-costs/:id', (req, res) => { try { const { amount, cost_type } = req.body; const sets = [], params = []; if (amount !== undefined) { sets.push('amount=?'); params.push(amount); } if (cost_type !== undefined) { sets.push('cost_type=?'); params.push(cost_type); } if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE store_fixed_costs SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.delete('/api/fixed-costs/:id', (req, res) => { try { db.run('DELETE FROM store_fixed_costs WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 运营成本 =====
 app.get('/api/stores/:id/operating-costs', (req, res) => { try { res.json({ ok: true, costs: db.queryAll('SELECT * FROM store_operating_costs WHERE store_id=? ORDER BY date DESC, id DESC', [req.params.id]) }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/stores/:id/operating-costs', (req, res) => { try { const { store_name, date, item, amount } = req.body; if (!item) return res.status(400).json({ error: '事项不能为空' }); const id = db.insert('INSERT INTO store_operating_costs (store_id,store_name,date,item,amount) VALUES (?,?,?,?,?)', [req.params.id, store_name||'', date||new Date().toISOString().slice(0,10), item, amount||0]); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.put('/api/stores/:id/monthly-wage', (req, res) => { try { const month = String(req.body.month || ''); const amount = Number(req.body.amount); if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: '请选择工资月份' }); if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: '请输入有效工资金额' }); const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const date = `${month}-01`; const current = db.queryOne("SELECT id FROM store_operating_costs WHERE store_id=? AND item='月度工资' AND substr(date,1,7)=? ORDER BY id DESC LIMIT 1", [req.params.id, month]); if (current) db.run('UPDATE store_operating_costs SET store_name=?, date=?, amount=? WHERE id=?', [store.store_name, date, amount, current.id]); else db.insert("INSERT INTO store_operating_costs (store_id,store_name,date,item,amount) VALUES (?,?,?,?,?)", [req.params.id, store.store_name, date, '月度工资', amount]); db.save(); res.json({ ok: true, message: '月度工资已保存' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.delete('/api/operating-costs/:id', (req, res) => { try { db.run('DELETE FROM store_operating_costs WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 菜品管理 =====
@@ -1406,28 +1409,58 @@ app.get('/api/dish-sales/analytics', (req, res) => {
     const psize = Math.min(100, Math.max(1, parseInt(page_size) || 20));
     const pg = Math.max(1, parseInt(page) || 1);
     const rows = db.queryAll(`
-      SELECT product_code, product_name, spec,
-        SUM(quantity) as quantity,
-        SUM(amount_total) as amount_total,
-        SUM(discount_amount) as discount_amount,
-        SUM(income_amount) as income_amount,
-        SUM(refund_amount) as refund_amount,
-        COUNT(DISTINCT order_no) as order_count,
-        SUM(CASE WHEN refunded='部分退' THEN 1 ELSE 0 END) as refunded_count
-      FROM dish_sales ${where}
-      GROUP BY product_code, product_name, spec
+      SELECT d.product_code, d.product_name, d.spec,
+        SUM(d.quantity) as quantity,
+        SUM(d.amount_total) as amount_total,
+        SUM(d.discount_amount) as discount_amount,
+        SUM(d.income_amount) as income_amount,
+        SUM(d.refund_amount) as refund_amount,
+        COUNT(DISTINCT d.order_no) as order_count,
+        SUM(CASE WHEN d.refunded='部分退' THEN 1 ELSE 0 END) as refunded_count,
+        MAX(CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END) as cost_available,
+        SUM(CASE WHEN m.id IS NOT NULL THEN d.quantity * COALESCE(mi.cost, 0) ELSE 0 END) as estimated_cost,
+        CASE WHEN MAX(CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END) = 1
+          THEN SUM(d.income_amount) - SUM(d.quantity * COALESCE(mi.cost, 0))
+          ELSE NULL END as net_income
+      FROM dish_sales d
+      LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
+        AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
+      LEFT JOIN menu_items mi ON mi.id = m.menu_item_id
+      ${where}
+      GROUP BY d.product_code, d.product_name, d.spec
       ORDER BY ${sortCol} DESC
       LIMIT ? OFFSET ?`, [...params, psize, (pg - 1) * psize]);
     const summary = db.queryOne(`
-      SELECT COUNT(DISTINCT product_code) as product_count,
-        SUM(quantity) as quantity,
-        SUM(amount_total) as amount_total,
-        SUM(discount_amount) as discount_amount,
-        SUM(income_amount) as income_amount,
-        SUM(refund_amount) as refund_amount,
-        COUNT(DISTINCT order_no) as order_count
-      FROM dish_sales ${where}`, params);
-    res.json({ ok: true, summary, top: rows, total, page: pg, page_size: psize });
+      SELECT COUNT(DISTINCT d.product_code) as product_count,
+        SUM(d.quantity) as quantity,
+        SUM(d.amount_total) as amount_total,
+        SUM(d.discount_amount) as discount_amount,
+        SUM(d.income_amount) as income_amount,
+        SUM(d.refund_amount) as refund_amount,
+        COUNT(DISTINCT d.order_no) as order_count,
+        COUNT(DISTINCT CASE WHEN m.id IS NOT NULL THEN d.product_code || '|' || d.product_name || '|' || d.spec END) as cost_covered_product_count,
+        SUM(CASE WHEN m.id IS NOT NULL THEN d.quantity * COALESCE(mi.cost, 0) ELSE 0 END) as estimated_cost,
+        SUM(CASE WHEN m.id IS NOT NULL THEN d.income_amount - d.quantity * COALESCE(mi.cost, 0) ELSE 0 END) as net_income
+      FROM dish_sales d
+      LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
+        AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
+      LEFT JOIN menu_items mi ON mi.id = m.menu_item_id
+      ${where}`, params);
+    // 按下单时刻聚合，固定补齐 00:00–23:00，便于跨日、周、月观察高峰时段。
+    const hourlyRows = db.queryAll(`
+      SELECT substr(order_time, 12, 2) as hour,
+        COUNT(DISTINCT CASE
+          WHEN TRIM(COALESCE(order_no, '')) <> '' THEN COALESCE(NULLIF(TRIM(store_name), ''), '未知门店') || '|' || TRIM(order_no)
+          ELSE '__row__' || id
+        END) as order_count
+      FROM dish_sales ${where} AND length(order_time) >= 13
+      GROUP BY substr(order_time, 12, 2)`, params);
+    const hourlyMap = new Map(hourlyRows.map(row => [String(row.hour || '').padStart(2, '0'), Number(row.order_count) || 0]));
+    const hourly_trend = Array.from({ length: 24 }, (_, hour) => {
+      const key = String(hour).padStart(2, '0');
+      return { hour, period: `${key}:00`, order_count: hourlyMap.get(key) || 0 };
+    });
+    res.json({ ok: true, summary, top: rows, total, page: pg, page_size: psize, hourly_trend });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1638,7 +1671,16 @@ function getBookkeepingStore(req) {
 
 // 大类 CRUD
 app.get('/api/bookkeeping/categories', (req, res) => {
-  try { const rows = db.queryAll('SELECT * FROM bookkeeping_categories ORDER BY sort_order, id'); res.json({ ok: true, categories: rows }); }
+  try {
+    const rows = db.queryAll(`
+      SELECT c.*, COUNT(s.id) AS subcategory_count
+      FROM bookkeeping_categories c
+      LEFT JOIN bookkeeping_subcategories s ON s.category_id = c.id
+      GROUP BY c.id
+      ORDER BY c.sort_order, c.id
+    `);
+    res.json({ ok: true, categories: rows });
+  }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/bookkeeping/categories', (req, res) => {
@@ -1676,7 +1718,7 @@ app.delete('/api/bookkeeping/subcategories/:id', (req, res) => {
 app.get('/api/bookkeeping/entries', (req, res) => {
   try {
     const { store_id } = getBookkeepingStore(req);
-    const { date_from, date_to, category_id, subcategory_id, aggregate } = req.query;
+    const { date_from, date_to, category_id, subcategory_id, aggregate, page = 1, page_size = 50 } = req.query;
     let sql = 'SELECT * FROM bookkeeping_entries WHERE 1=1';
     const params = [];
     if (store_id) { sql += ' AND store_id=?'; params.push(store_id); }
@@ -1685,16 +1727,136 @@ app.get('/api/bookkeeping/entries', (req, res) => {
     if (date_to) { sql += ' AND date<=?'; params.push(date_to); }
     if (category_id) { sql += ' AND category_id=?'; params.push(category_id); }
     if (subcategory_id) { sql += ' AND subcategory_id=?'; params.push(subcategory_id); }
-    if (aggregate === 'daily') {
-      sql = sql.replace('SELECT *', 'SELECT date, SUM(amount) as total_amount, COUNT(*) as entry_count');
-      sql += ' GROUP BY date ORDER BY date DESC';
+    if (aggregate === 'summary') {
+      sql = sql.replace('SELECT *', 'SELECT category_id, category_name, subcategory_id, subcategory_name, SUM(amount) as total_amount, COUNT(*) as entry_count');
+      sql += ' GROUP BY category_id, category_name, subcategory_id, subcategory_name ORDER BY category_name ASC, subcategory_name ASC';
       const rows = db.queryAll(sql, params);
-      return res.json({ ok: true, rows, aggregate: 'daily' });
+      return res.json({ ok: true, rows, aggregate: 'summary' });
     }
-    sql += ' ORDER BY date DESC, id DESC LIMIT 500';
-    res.json({ ok: true, entries: db.queryAll(sql, params) });
+    const total = db.queryOne(`SELECT COUNT(*) AS count FROM bookkeeping_entries ${sql.slice(sql.indexOf('WHERE'))}`, params)?.count || 0;
+    const psize = Math.min(200, Math.max(10, Number(page_size) || 50));
+    const pg = Math.max(1, Number(page) || 1);
+    sql += ' ORDER BY date DESC, id DESC LIMIT ? OFFSET ?';
+    res.json({ ok: true, entries: db.queryAll(sql, [...params, psize, (pg - 1) * psize]), total, page: pg, page_size: psize });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+function cleanQuickBookkeepingCell(value) {
+  return String(value ?? '').replace(/\*\*/g, '').replace(/`/g, '').trim();
+}
+
+function normalizeQuickBookkeepingName(value) {
+  return cleanQuickBookkeepingCell(value)
+    .replace(/\s+/g, '')
+    .replace(/[（]/g, '(')
+    .replace(/[）]/g, ')');
+}
+
+function parseQuickBookkeepingText(text) {
+  const rows = [];
+  const errors = [];
+  String(text || '').split(/\r?\n/).forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) return;
+    let cells;
+    if (line.includes('|')) {
+      cells = line.split('|').map(cleanQuickBookkeepingCell);
+      if (!cells[0]) cells.shift();
+      if (!cells[cells.length - 1]) cells.pop();
+    } else {
+      cells = line.split(/\t+/).map(cleanQuickBookkeepingCell);
+    }
+    const compact = cells.filter(Boolean);
+    if (!compact.length || compact.some(cell => /^(序号|门店名称|大类|小类|金额)$/.test(cell))) return;
+    if (compact.every(cell => /^[-—:：]+$/.test(cell))) return;
+    if (/^\d+$/.test(cells[0] || '')) cells.shift();
+    if (cells.length < 4) {
+      errors.push({ line: index + 1, message: '字段不足，请按「门店名称、大类、小类、金额」粘贴' });
+      return;
+    }
+    const [store_name, category_name, subcategory_name, amount_text] = cells;
+    const amount = Number(String(amount_text || '').replace(/[¥￥,，\s]/g, ''));
+    if (!store_name || !category_name || !subcategory_name || !Number.isFinite(amount)) {
+      errors.push({ line: index + 1, message: '门店、大类、小类或金额格式不正确' });
+      return;
+    }
+    rows.push({ line: index + 1, store_name, category_name, subcategory_name, amount });
+  });
+  return { rows, errors };
+}
+
+function resolveQuickBookkeepingRows(req, text) {
+  const parsed = parseQuickBookkeepingText(text);
+  const stores = db.queryAll('SELECT id, store_name FROM stores');
+  const storeMap = new Map(stores.map(store => [normalizeQuickBookkeepingName(store.store_name), store]));
+  const scopedStoreId = req.user.store_id || null;
+  const rows = [];
+  const errors = [...parsed.errors];
+  parsed.rows.forEach(row => {
+    const store = storeMap.get(normalizeQuickBookkeepingName(row.store_name));
+    if (!store) {
+      errors.push({ line: row.line, message: `未找到门店「${row.store_name}」` });
+      return;
+    }
+    if (scopedStoreId && Number(store.id) !== Number(scopedStoreId)) {
+      errors.push({ line: row.line, message: '当前账号只能录入所属门店的数据' });
+      return;
+    }
+    rows.push({ ...row, store_id: store.id, store_name: store.store_name });
+  });
+  if (!rows.length && !errors.length) errors.push({ line: 0, message: '未识别到可录入的数据行' });
+  return { rows, errors };
+}
+
+app.post('/api/bookkeeping/quick-entry/preview', (req, res) => {
+  try {
+    const { rows, errors } = resolveQuickBookkeepingRows(req, req.body.text);
+    res.json({ ok: true, rows, errors, valid_count: rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/bookkeeping/quick-entry/commit', (req, res) => {
+  try {
+    const date = String(req.body.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: '请选择归属日期' });
+    const { rows, errors } = resolveQuickBookkeepingRows(req, req.body.text);
+    if (errors.length) return res.status(400).json({ error: '数据校验未通过，请先修正后重新解析', errors });
+    const categories = db.queryAll('SELECT * FROM bookkeeping_categories');
+    const categoryMap = new Map(categories.map(item => [normalizeQuickBookkeepingName(item.name), item]));
+    const subcategoryMap = new Map();
+    db.queryAll('SELECT * FROM bookkeeping_subcategories').forEach(item => {
+      subcategoryMap.set(`${item.category_id}:${normalizeQuickBookkeepingName(item.name)}`, item);
+    });
+    let createdCategories = 0;
+    let createdSubcategories = 0;
+    rows.forEach(row => {
+      const categoryKey = normalizeQuickBookkeepingName(row.category_name);
+      let category = categoryMap.get(categoryKey);
+      if (!category) {
+        const id = db.insert('INSERT INTO bookkeeping_categories (name,sort_order) VALUES (?,?)', [row.category_name, 999]);
+        category = { id, name: row.category_name };
+        categoryMap.set(categoryKey, category);
+        createdCategories++;
+      }
+      const subcategoryKey = `${category.id}:${normalizeQuickBookkeepingName(row.subcategory_name)}`;
+      let subcategory = subcategoryMap.get(subcategoryKey);
+      if (!subcategory) {
+        const id = db.insert('INSERT INTO bookkeeping_subcategories (category_id,name,sort_order) VALUES (?,?,?)', [category.id, row.subcategory_name, 999]);
+        subcategory = { id, name: row.subcategory_name };
+        subcategoryMap.set(subcategoryKey, subcategory);
+        createdSubcategories++;
+      }
+      db.insert(
+        'INSERT INTO bookkeeping_entries (store_id,store_name,user_id,user_name,date,category_id,category_name,subcategory_id,subcategory_name,amount,images,remark) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        [row.store_id, row.store_name, req.user.id, req.user.display_name || req.user.username, date,
+          category.id, category.name, subcategory.id, subcategory.name, row.amount, '[]', '快捷录入']
+      );
+    });
+    db.save();
+    res.json({ ok: true, inserted: rows.length, created_categories: createdCategories, created_subcategories: createdSubcategories });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/bookkeeping/entries', (req, res) => {
   try {
     const { store_id, store_name } = getBookkeepingStore(req);
@@ -2013,6 +2175,264 @@ app.get('/api/collab/users', (req, res) => {
 });
 
 // ===== 数据分析 =====
+function monthlyDashboardRange(month, asOf) {
+  const matched = /^(\d{4})-(\d{2})$/.exec(String(month || ''));
+  if (!matched) throw new Error('请选择统计月份');
+  const year = Number(matched[1]);
+  const monthNumber = Number(matched[2]);
+  if (monthNumber < 1 || monthNumber > 12) throw new Error('统计月份格式不正确');
+  const daysInMonth = new Date(year, monthNumber, 0).getDate();
+  const start = `${matched[1]}-${matched[2]}-01`;
+  const end = `${matched[1]}-${matched[2]}-${String(daysInMonth).padStart(2, '0')}`;
+  const cutoff = String(asOf || end);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoff) || cutoff < start || cutoff > end) throw new Error('截止日期必须在所选月份内');
+  return { month: `${matched[1]}-${matched[2]}`, start, end, cutoff, days_in_month: daysInMonth, elapsed_days: Number(cutoff.slice(-2)) };
+}
+
+function previousMonthRange(month) {
+  const [year, monthNumber] = String(month).split('-').map(Number);
+  const date = new Date(year, monthNumber - 2, 1);
+  const text = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  return { month: text, start: `${text}-01`, end: `${text}-${String(new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()).padStart(2, '0')}` };
+}
+
+function buildMonthlyDashboardGroups(monthRows, dayRows, type, options = {}) {
+  const isExpense = type === 'expense';
+  const isStored = type === 'stored';
+  const groups = new Map();
+  const addRows = (rows, field) => rows.forEach(row => {
+    const raw = Number(row.amount || 0);
+    if ((isExpense && raw >= 0) || (!isExpense && raw <= 0)) return;
+    if (!isExpense && isStored && !isStoredValue(row)) return;
+    if (!isExpense && !isStored && isStoredValue(row)) return;
+    if (isExpense && options.excludeRow?.(row)) return;
+    const category = row.category_name || '未分类';
+    const subcategory = row.subcategory_name || '未分类';
+    const key = `${category}\u0000${subcategory}`;
+    if (!groups.has(key)) groups.set(key, { category, subcategory, daily_amount: 0, cumulative_amount: 0 });
+    groups.get(key)[field] += isExpense ? -raw : raw;
+  });
+  addRows(monthRows, 'cumulative_amount');
+  addRows(dayRows, 'daily_amount');
+  if (isExpense) (options.accrualItems || []).forEach(item => {
+    const category = item.category;
+    const subcategory = item.subcategory;
+    const key = `${category}\u0000${subcategory}`;
+    if (!groups.has(key)) groups.set(key, { category, subcategory, daily_amount: 0, cumulative_amount: 0 });
+    const row = groups.get(key);
+    row.daily_amount += Number(item.daily_amount || 0);
+    row.cumulative_amount += Number(item.cumulative_amount || 0);
+  });
+  const categoryMap = new Map();
+  groups.forEach(row => {
+    if (!categoryMap.has(row.category)) categoryMap.set(row.category, { category: row.category, daily_amount: 0, cumulative_amount: 0, children: [] });
+    const group = categoryMap.get(row.category);
+    group.daily_amount += row.daily_amount;
+    group.cumulative_amount += row.cumulative_amount;
+    group.children.push(row);
+  });
+  const result = [];
+  [...categoryMap.values()].sort((a, b) => b.cumulative_amount - a.cumulative_amount).forEach(group => {
+    result.push({ category: group.category, subcategory: '', daily_amount: group.daily_amount, cumulative_amount: group.cumulative_amount, is_group: true });
+    group.children.sort((a, b) => b.cumulative_amount - a.cumulative_amount).forEach(item => result.push({ ...item, is_group: false }));
+  });
+  return result;
+}
+
+function isStoredValue(row) {
+  return String(row.category_name || '') === '会员' || /充值|储值/.test(String(row.subcategory_name || ''));
+}
+
+function isBookkeepingWage(row) {
+  return /工资|薪资|薪酬/.test(`${row.category_name || ''} ${row.subcategory_name || ''}`);
+}
+
+function isRentOrProperty(row) {
+  const category = String(row.category_name || '');
+  const subcategory = String(row.subcategory_name || '');
+  // “店租物水电费”是混合大类，必须以小类判断，避免把“电费”误归为房租。
+  if (/水电|水费|电费/.test(subcategory)) return false;
+  return /房租|租金|物业|店租/.test(subcategory) || (!subcategory && /房租|租金|物业|店租/.test(category));
+}
+
+function isUtilities(row) {
+  const category = String(row.category_name || '');
+  const subcategory = String(row.subcategory_name || '');
+  // “店租物水电费”是混合大类，必须以小类判断，不能把“店租”误归为水电。
+  if (/房租|租金|物业|店租/.test(subcategory)) return false;
+  const isPropertyCostCategory = /店租|房租|租金|物业|水电/.test(category);
+  return isPropertyCostCategory && (/水电|水费|电费/.test(subcategory) || (!subcategory && /水电|水费|电费/.test(category)));
+}
+
+function fixedCostTotals(storeId) {
+  const where = [];
+  const params = [];
+  if (storeId) { where.push('store_id=?'); params.push(storeId); }
+  const sql = `SELECT cost_type, SUM(amount) AS amount FROM store_fixed_costs${where.length ? ` WHERE ${where.join(' AND ')}` : ''} GROUP BY cost_type`;
+  return db.queryAll(sql, params).reduce((totals, row) => {
+    const amount = Math.abs(Number(row.amount || 0));
+    const text = String(row.cost_type || '');
+    if (/房租|租金|物业/.test(text)) totals.rent += amount;
+    if (/水电|水费|电费/.test(text)) totals.utilities += amount;
+    return totals;
+  }, { rent: 0, utilities: 0 });
+}
+
+app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
+  try {
+    const { month, as_of, store_id } = req.query;
+    const view = req.query.view === 'accrual' ? 'accrual' : 'cash';
+    const validCostSources = ['operating_previous', 'operating_current', 'bookkeeping'];
+    const legacyCostSource = validCostSources.includes(req.query.cost_source) ? req.query.cost_source : null;
+    const sourceFor = (key, fallback) => validCostSources.includes(req.query[`${key}_source`])
+      ? req.query[`${key}_source`]
+      : (legacyCostSource || fallback);
+    const costSources = {
+      wage: sourceFor('wage', 'operating_previous'),
+      rent: sourceFor('rent', 'bookkeeping'),
+      utilities: sourceFor('utilities', 'bookkeeping'),
+    };
+    const period = monthlyDashboardRange(month, as_of);
+    const scopedStoreId = req.user.store_id || store_id || null;
+    const where = ['date>=?', 'date<=?'];
+    const params = [period.start, period.cutoff];
+    if (scopedStoreId) { where.push('store_id=?'); params.push(scopedStoreId); }
+    const monthRows = db.queryAll(
+      `SELECT category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${where.join(' AND ')} GROUP BY category_name, subcategory_name`,
+      params
+    );
+    const dayWhere = ['date=?'];
+    const dayParams = [period.cutoff];
+    if (scopedStoreId) { dayWhere.push('store_id=?'); dayParams.push(scopedStoreId); }
+    const dayRows = db.queryAll(`SELECT category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${dayWhere.join(' AND ')} GROUP BY category_name, subcategory_name`, dayParams);
+    const profitRows = db.queryAll(
+      `SELECT date, category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${where.join(' AND ')} GROUP BY date, category_name, subcategory_name ORDER BY date`,
+      params
+    );
+    const recordedAmount = (matcher) => monthRows.reduce((sum, row) => {
+      const amount = Number(row.amount || 0);
+      return matcher(row) && amount < 0 ? sum - amount : sum;
+    }, 0);
+    const ledgerWageAmount = recordedAmount(isBookkeepingWage);
+    const ledgerRentAmount = recordedAmount(isRentOrProperty);
+    const ledgerUtilitiesAmount = recordedAmount(isUtilities);
+    const previousPeriod = previousMonthRange(month);
+    const sourceMetaByKey = {
+      operating_previous: { label: '门店管理 · 运营成本上月数据', detail: `${previousPeriod.month} 月度工资；房租/水电暂未配置，因此按 ¥0.00 计算` },
+      operating_current: { label: '门店管理 · 运营成本本月数据', detail: `${month} 月度工资；房租/水电暂未配置，因此按 ¥0.00 计算` },
+      bookkeeping: { label: '记账本记录数据', detail: `按 ${period.start} 至 ${period.cutoff} 的工资、房租/物业、水电记账汇总` },
+    };
+    const operatingWageTotal = (source) => {
+      if (source === 'bookkeeping') return 0;
+      const targetPeriod = source === 'operating_previous' ? previousPeriod : { start: period.start, end: period.end };
+      const wageWhere = ["item='月度工资'", 'date>=?', 'date<=?'];
+      const wageParams = [targetPeriod.start, targetPeriod.end];
+      if (scopedStoreId) { wageWhere.push('store_id=?'); wageParams.push(scopedStoreId); }
+      return Number(db.queryOne(`SELECT SUM(amount) AS total FROM store_operating_costs WHERE ${wageWhere.join(' AND ')}`, wageParams)?.total || 0);
+    };
+    const monthlyWageBasis = costSources.wage === 'bookkeeping' ? ledgerWageAmount : operatingWageTotal(costSources.wage);
+    const wage = {
+      mode: costSources.wage,
+      source_month: costSources.wage === 'operating_previous' ? previousPeriod.month : String(month),
+      reference_amount: monthlyWageBasis,
+      ledger_amount: ledgerWageAmount,
+      source: sourceMetaByKey[costSources.wage].label,
+      daily_amount: monthlyWageBasis / period.days_in_month,
+      cumulative_amount: monthlyWageBasis / period.days_in_month * period.elapsed_days,
+      expense_amount: monthlyWageBasis / period.days_in_month * period.elapsed_days,
+    };
+    const recurringCosts = [
+      {
+        key: 'wage', category: '人工及福利费', subcategory: '日应计工资', matcher: isBookkeepingWage,
+        basis: monthlyWageBasis, ledger_amount: ledgerWageAmount, source_key: costSources.wage, source: sourceMetaByKey[costSources.wage].label,
+      },
+      {
+        key: 'rent', category: '房租及物业费', subcategory: '日应计房租及物业', matcher: isRentOrProperty,
+        basis: costSources.rent === 'bookkeeping' ? ledgerRentAmount : 0, ledger_amount: ledgerRentAmount, source_key: costSources.rent,
+        source: costSources.rent === 'bookkeeping' ? sourceMetaByKey[costSources.rent].label : `${sourceMetaByKey[costSources.rent].label}（暂未配置房租/物业）`,
+      },
+      {
+        key: 'utilities', category: '店租物水电费', subcategory: '日应计水电', matcher: isUtilities,
+        basis: costSources.utilities === 'bookkeeping' ? ledgerUtilitiesAmount : 0, ledger_amount: ledgerUtilitiesAmount, source_key: costSources.utilities,
+        source: costSources.utilities === 'bookkeeping' ? sourceMetaByKey[costSources.utilities].label : `${sourceMetaByKey[costSources.utilities].label}（暂未配置水电）`,
+      },
+    ].map(item => ({
+      ...item,
+      daily_amount: Number(item.basis || 0) / period.days_in_month,
+      cumulative_amount: Number(item.basis || 0) / period.days_in_month * period.elapsed_days,
+    }));
+    // 在经营盈亏口径中，这三类成本始终只由当前选择的数据来源形成日应计，
+    // 账本中的同类一次性记录不再额外计入，避免重复计算。
+    const recurringMatcher = row => view === 'accrual' && (isBookkeepingWage(row) || isRentOrProperty(row) || isUtilities(row));
+    const accrualItems = view === 'accrual'
+      ? recurringCosts.map(item => ({
+          category: item.category, subcategory: item.subcategory,
+          daily_amount: item.daily_amount, cumulative_amount: item.cumulative_amount,
+        }))
+      : [];
+    const profitByDate = new Map();
+    profitRows.forEach(row => {
+      if (!profitByDate.has(row.date)) profitByDate.set(row.date, { income: 0, expense: 0 });
+      const target = profitByDate.get(row.date);
+      const amount = Number(row.amount || 0);
+      if (amount > 0 && !isStoredValue(row)) target.income += amount;
+      if (amount < 0 && !recurringMatcher(row)) target.expense -= amount;
+    });
+    const dailyProfitSeries = [];
+    let cumulativeProfit = 0;
+    for (let day = 1; day <= period.elapsed_days; day++) {
+      const date = `${String(month)}-${String(day).padStart(2, '0')}`;
+      const row = profitByDate.get(date) || {};
+      const income = Number(row.income || 0);
+      const expense = Number(row.expense || 0) + (view === 'accrual' ? recurringCosts.reduce((sum, item) => sum + Number(item.daily_amount || 0), 0) : 0);
+      const dailyNet = income - expense;
+      cumulativeProfit += dailyNet;
+      dailyProfitSeries.push({ date, day, income, expense, daily_net: dailyNet, cumulative_net: cumulativeProfit });
+    }
+    const incomeRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'income');
+    const expenseRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'expense', { excludeRow: recurringMatcher, accrualItems });
+    const storedValueRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'stored');
+    const totals = (rows, key) => rows.filter(row => row.is_group).reduce((sum, row) => sum + Number(row[key] || 0), 0);
+    const dailyIncome = totals(incomeRows, 'daily_amount');
+    const cumulativeIncome = totals(incomeRows, 'cumulative_amount');
+    const dailyExpense = totals(expenseRows, 'daily_amount');
+    const cumulativeExpense = totals(expenseRows, 'cumulative_amount');
+    const storedValue = rows => rows.reduce((sum, row) => isStoredValue(row) && Number(row.amount || 0) > 0 ? sum + Number(row.amount) : sum, 0);
+    let storeName = '全门店汇总';
+    if (scopedStoreId) {
+      const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [scopedStoreId]);
+      if (!store) return res.status(404).json({ error: '门店不存在' });
+      storeName = store.store_name;
+    }
+    res.json({
+      ok: true,
+      store_name: storeName,
+      period,
+      view,
+      cost_sources: Object.fromEntries(Object.entries(costSources).map(([key, source]) => [key, { key: source, ...sourceMetaByKey[source] }])),
+      wage,
+      accrual_costs: recurringCosts.map(item => ({
+        key: item.key, name: item.subcategory, source_key: item.source_key, source: item.source, monthly_basis: item.basis,
+        daily_amount: item.daily_amount, cumulative_amount: item.cumulative_amount, recorded_amount: item.ledger_amount,
+      })),
+      income_rows: incomeRows,
+      expense_rows: expenseRows,
+      stored_value_rows: storedValueRows,
+      daily_profit_series: dailyProfitSeries,
+      totals: {
+        daily_income: dailyIncome,
+        daily_expense: dailyExpense,
+        daily_net: dailyIncome - dailyExpense,
+        daily_stored_value: storedValue(dayRows),
+        cumulative_income: cumulativeIncome,
+        cumulative_expense: cumulativeExpense,
+        cumulative_net: cumulativeIncome - cumulativeExpense,
+        cumulative_stored_value: storedValue(monthRows),
+      },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/analysis/revenue', (req, res) => {
   try { const { store_id, date } = req.query; let sql = 'SELECT * FROM daily_reports WHERE 1=1'; const params = []; if (store_id) { sql += ' AND store_id=?'; params.push(store_id); } if (date) { sql += ' AND date=?'; params.push(date); } else { sql += " AND date=(SELECT MAX(date) FROM daily_reports)"; } const rows = db.queryAll(sql, params); const channels = { instore:0, pickup:0, mtWaimai:0, tbFlash:0, jdWaimai:0, mtPay:0, mtTuan:0, dyTuan:0, stored:0, coupon:0 }; rows.forEach(r => { channels.instore += r.instore||0; channels.pickup += r.pickup||0; channels.mtWaimai += r.mt_waimai||0; channels.tbFlash += r.tb_flash||0; channels.jdWaimai += r.jd_waimai||0; channels.mtPay += r.mt_pay||0; channels.mtTuan += r.mt_tuan||0; channels.dyTuan += r.dy_tuan||0; channels.stored += r.stored_value||0; channels.coupon += r.coupon||0; }); res.json({ ok: true, channels, totalRevenue: rows.reduce((s,r)=>s+(r.revenue||0),0) }); }
   catch (e) { res.status(500).json({ error: e.message }); }

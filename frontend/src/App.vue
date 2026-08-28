@@ -286,6 +286,7 @@ const POPUP_CONFIG = {
           { index: 'analysis-total-brand', label: '全门店汇总' },
           { index: 'analysis-total-store', label: '单店数据' },
           { index: 'analysis-total-custom', label: '自选门店汇总' },
+          { index: 'analysis-total-monthly-dashboard', label: '月经营数据看板' },
           { index: 'analysis-total-binding', label: '堂食菜品绑定' },
         ],
       },
@@ -333,7 +334,7 @@ const POPUP_CONFIG = {
       {
         title: '门店成本',
         items: [
-          { index: 'store-management-fixed', label: '固定成本' },
+          { index: 'store-management-fixed', label: '门店成本' },
           { index: 'store-management-operating', label: '运营成本' },
         ],
       },
@@ -499,6 +500,7 @@ async function selectPopupItem(index) {
       'analysis-total-brand': '/analysis/total/brand',
       'analysis-total-store': '/analysis/total/store',
       'analysis-total-custom': '/analysis/total/custom',
+      'analysis-total-monthly-dashboard': '/analysis/total/monthly-dashboard',
       'analysis-total-binding': '/analysis/total/binding',
       'analysis-group-meituan': '/analysis/group-buy/platform/meituan',
       'analysis-group-douyin': '/analysis/group-buy/platform/douyin',
@@ -574,6 +576,7 @@ async function selectTab(id) {
       'analysis-total-brand': '/analysis/total/brand',
       'analysis-total-store': '/analysis/total/store',
       'analysis-total-custom': '/analysis/total/custom',
+      'analysis-total-monthly-dashboard': '/analysis/total/monthly-dashboard',
       'analysis-total-binding': '/analysis/total/binding',
       'analysis-group-meituan': '/analysis/group-buy/platform/meituan',
       'analysis-group-douyin': '/analysis/group-buy/platform/douyin',

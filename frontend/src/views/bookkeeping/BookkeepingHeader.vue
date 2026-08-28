@@ -3,7 +3,7 @@
     <div class="bookkeeping-hero-copy">
       <span class="bookkeeping-eyebrow">BOOKKEEPING</span>
       <h2>记账本</h2>
-      <p>门店日常收支记录，分类管理，按日汇总。</p>
+      <p>门店日常收支记录，分类管理，分类汇总。</p>
     </div>
     <nav class="bookkeeping-nav">
       <button :class="{ active: active === 'entry' }" @click="navigate('entry')">门店记账</button>

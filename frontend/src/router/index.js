@@ -62,6 +62,12 @@ const routes = [
     meta: { analysisKey: 'analysis-total-custom', analysisTitle: '总数据视角 · 自选门店汇总', analysisScope: 'total', analysisMode: 'custom' },
   },
   {
+    path: '/analysis/total/monthly-dashboard',
+    name: 'analysis-total-monthly-dashboard',
+    component: () => import('@/views/analysis/MonthlyOperatingDashboard.vue'),
+    meta: { analysisKey: 'analysis-total-monthly-dashboard', analysisTitle: '总数据视角 · 月经营数据看板', analysisScope: 'total', analysisMode: 'monthly-dashboard' },
+  },
+  {
     path: '/analysis/total/binding',
     name: 'analysis-total-binding',
     component: () => import('@/views/analysis/DishSalesBinding.vue'),

@@ -31,8 +31,9 @@
       <template v-if="analysisScope === 'total'">
         <section class="panel composition-panel"><header><div><h3>渠道营业构成</h3><p>{{ rangeLabel }} · 店内销售、自提销售及三方外卖渠道</p></div><span class="panel-badge">{{ channelTableRows.length }} 个渠道</span></header><div v-if="channelTableRows.length" class="composition-layout"><el-table :data="channelTableRows" class="composition-table" stripe><el-table-column prop="name" label="渠道字段" min-width="150" /><el-table-column label="营业额" min-width="135" align="right"><template #default="{ row }">{{ money(row.gross) }}</template></el-table-column><el-table-column v-if="compareMode" label="营业额环比" min-width="130" align="right"><template #default="{ row }"><span :class="compareValueClass(row.grossCompareRate)">{{ comparePercent(row.grossCompareRate) }}</span></template></el-table-column><el-table-column label="营业额占比" min-width="108" align="right"><template #default="{ row }">{{ percent(row.grossRatio) }}</template></el-table-column><el-table-column label="实收" min-width="135" align="right"><template #default="{ row }">{{ money(row.actual) }}</template></el-table-column><el-table-column v-if="compareMode" label="实收环比" min-width="130" align="right"><template #default="{ row }"><span :class="compareValueClass(row.actualCompareRate)">{{ comparePercent(row.actualCompareRate) }}</span></template></el-table-column><el-table-column label="实收占比" min-width="108" align="right"><template #default="{ row }">{{ percent(row.actualRatio) }}</template></el-table-column></el-table><aside class="ring-column"><div ref="channelCompositionChartRef" class="ring-chart"></div><span>按实收占比</span></aside></div><el-empty v-else :description="emptyDescription" /></section>
         <section class="panel composition-panel income-panel"><header><div><h3>营业收入构成</h3><p>{{ rangeLabel }} · 按经营日报“营业收入构成”上级字段汇总</p></div><span class="panel-badge">{{ incomeTableRows.length }} 项构成</span></header><div v-if="incomeTableRows.length" class="composition-layout"><el-table :data="incomeTableRows" class="composition-table" stripe><el-table-column prop="name" label="收入字段" min-width="200" /><el-table-column label="实收" min-width="155" align="right"><template #default="{ row }">{{ money(row.actual) }}</template></el-table-column><el-table-column v-if="compareMode" label="实收环比" min-width="135" align="right"><template #default="{ row }"><span :class="compareValueClass(row.actualCompareRate)">{{ comparePercent(row.actualCompareRate) }}</span></template></el-table-column><el-table-column label="实收占比" min-width="130" align="right"><template #default="{ row }">{{ percent(row.actualRatio) }}</template></el-table-column></el-table><aside class="ring-column"><div ref="compositionChartRef" class="ring-chart"></div><span>按实收占比</span></aside></div><el-empty v-else description="暂无营业收入构成数据" /></section>
+        <section class="panel hourly-order-panel"><header><div><h3>时段订单走势图</h3><p>{{ rangeLabel }} · 从 00:00 至次日 00:00，每小时统计一次实际订单量</p></div><span class="panel-badge">24 个时段</span></header><div v-if="dishAnalytics.hourly_trend?.length" ref="hourlyOrderChartRef" class="hourly-order-chart"></div><el-empty v-else description="暂无带下单时间的菜品销售数据" /></section>
         <section class="panel dish-panel">
-          <header><div><h3>菜品销售分析</h3><p>{{ rangeLabel }} · 按菜品汇总销量 / 销售额 / 收入 / 优惠 / 退款</p></div>
+          <header><div><h3>菜品销售分析</h3><p>{{ rangeLabel }} · 按菜品汇总销量、销售额、收入、预估成本与净收入</p></div>
             <div class="panel-actions"><el-radio-group v-model="dishSort" size="small" @change="changeDishSort"><el-radio-button value="income">按收入</el-radio-button><el-radio-button value="quantity">按销量</el-radio-button><el-radio-button value="amount">按金额</el-radio-button></el-radio-group></div>
           </header>
           <div class="dish-metrics">
@@ -42,6 +43,8 @@
             <div><span>菜品收入</span><strong>{{ money(dishAnalytics.summary.income_amount) }}</strong></div>
             <div><span>优惠金额</span><strong>{{ money(dishAnalytics.summary.discount_amount) }}</strong></div>
             <div><span>退款金额</span><strong class="dish-refund-text">{{ money(dishAnalytics.summary.refund_amount) }}</strong></div>
+            <div><span>预估成本</span><strong class="dish-cost-text">{{ money(dishAnalytics.summary.estimated_cost) }}</strong><small>已绑定 {{ dishAnalytics.summary.cost_covered_product_count ?? 0 }}/{{ dishAnalytics.summary.product_count ?? 0 }} 款</small></div>
+            <div><span>净收入</span><strong class="dish-income">{{ money(dishAnalytics.summary.net_income) }}</strong><small>收入 − 预估成本</small></div>
           </div>
           <el-table v-loading="dishLoading" :data="dishAnalytics.top" class="dish-table" stripe>
             <el-table-column type="index" label="排名" width="62" />
@@ -51,6 +54,8 @@
             <el-table-column label="销售额" width="108" align="right"><template #default="{ row }">{{ money(row.amount_total) }}</template></el-table-column>
             <el-table-column label="优惠" width="96" align="right"><template #default="{ row }">{{ money(row.discount_amount) }}</template></el-table-column>
             <el-table-column label="收入" width="106" align="right"><template #default="{ row }"><b class="dish-income">{{ money(row.income_amount) }}</b></template></el-table-column>
+            <el-table-column label="预估成本" width="108" align="right"><template #default="{ row }"><span v-if="row.cost_available" class="dish-cost-text">{{ money(row.estimated_cost) }}</span><span v-else class="dish-cost-pending">未绑定</span></template></el-table-column>
+            <el-table-column label="净收入" width="108" align="right"><template #default="{ row }"><b v-if="row.cost_available" class="dish-income">{{ money(row.net_income) }}</b><span v-else class="dish-cost-pending">—</span></template></el-table-column>
             <el-table-column label="退款金额" width="100" align="right"><template #default="{ row }"><span :class="Number(row.refund_amount) > 0 ? 'dish-refund-text' : ''">{{ money(row.refund_amount) }}</span></template></el-table-column>
             <el-table-column label="订单数" width="84" align="right"><template #default="{ row }">{{ numberText(row.order_count) }}</template></el-table-column>
             <el-table-column label="退款笔数" width="84" align="right"><template #default="{ row }">{{ row.refunded_count || 0 }}</template></el-table-column>
@@ -111,12 +116,12 @@ const timeModes = [{ label: '日数据', value: 'day' }, { label: '周数据', v
 const tabs = [{ label: '经营总览', value: 'overview' }, { label: '双向核对', value: 'reconciliation' }]
 const groupPlatforms = ['美团团购', '抖音团购', '免费试']
 const deliveryPlatforms = ['美团外卖', '淘宝闪购', '京东外卖']
-const activeTab = ref('overview'), loading = ref(false), storeOptions = ref([]), trendChartRef = ref(), compositionChartRef = ref(), channelCompositionChartRef = ref()
+const activeTab = ref('overview'), loading = ref(false), storeOptions = ref([]), trendChartRef = ref(), compositionChartRef = ref(), channelCompositionChartRef = ref(), hourlyOrderChartRef = ref()
 const storeDetailVisible = ref(false), storeDetailLoading = ref(false), selectedStore = ref(null), detailRangeLabel = ref('')
 const compareMode = ref(false), compareDialogVisible = ref(false), compareCurrentLocked = ref(false), compareCurrentRange = ref([]), comparePreviousRange = ref([]), compareCurrentSelection = ref(null), comparePreviousSelection = ref(null), hasQueried = ref(false)
 const reconciliationPage = ref(1), reconciliationPageSize = ref(20)
 const diagnosisVisible = ref(false), diagnosisLoading = ref(false), diagnosisAvailable = ref(false), diagnosis = ref(null), diagnosisSignatureAtQuery = ref('')
-let trendChart, compositionChart, channelCompositionChart, chartFrame
+let trendChart, compositionChart, channelCompositionChart, hourlyOrderChart, chartFrame
 function toDateText(value) { return value.toISOString().slice(0, 10) }
 function yesterday() { const date = new Date(); date.setDate(date.getDate() - 1); return toDateText(date) }
 function thisWeek() { const date = new Date(); const weekday = date.getDay() || 7; const start = new Date(date); start.setDate(date.getDate() - weekday + 1); const end = new Date(start); end.setDate(start.getDate() + 6); return [toDateText(start), toDateText(end)] }
@@ -125,7 +130,7 @@ function thisMonth() { return toDateText(new Date()).slice(0, 7) }
 function monthRange(month) { const [year, value] = String(month || '').split('-').map(Number); if (!year || !value) return []; const text = `${year}-${String(value).padStart(2, '0')}`; return [`${text}-01`, `${text}-${new Date(year, value, 0).getDate()}`] }
 const filters = reactive({ timeMode: 'day', day: yesterday(), week: thisWeek()[0], month: thisMonth(), customRange: [], storeId: null, storeIds: [], platform: '' })
 const data = reactive({ totals: {}, trend: [], reconciliation: [], reconciliation_total: 0, reconciliation_page: 1, reconciliation_page_size: 20, stores: [], revenue_composition: [], channel_breakdown: [] })
-const dishAnalytics = reactive({ summary: {}, top: [] })
+const dishAnalytics = reactive({ summary: {}, top: [], hourly_trend: [] })
 const dishLoading = ref(false)
 const dishSort = ref('income')
 const dishPage = ref(1)
@@ -211,7 +216,7 @@ function ratio(value, total) { return total ? `${(Number(value || 0) / total * 1
 function differenceClass(value) { return Math.abs(value) <= 0.01 ? 'difference-ok' : 'difference-warn' }
 function compareValueClass(value) { if (!compareMode.value || value == null) return 'compare-flat'; return value > 0 ? 'compare-up' : value < 0 ? 'compare-down' : 'compare-flat' }
 function changeTimeMode(mode) { filters.timeMode = mode }
-function clearData() { Object.assign(data, { totals: {}, trend: [], reconciliation: [], reconciliation_total: 0, reconciliation_page: 1, reconciliation_page_size: reconciliationPageSize.value, stores: [], revenue_composition: [], channel_breakdown: [] }); Object.assign(dishAnalytics, { summary: {}, top: [] }); dishTotal.value = 0; dishPage.value = 1; diagnosisVisible.value = false; diagnosisAvailable.value = false; diagnosis.value = null; diagnosisSignatureAtQuery.value = '' }
+function clearData() { Object.assign(data, { totals: {}, trend: [], reconciliation: [], reconciliation_total: 0, reconciliation_page: 1, reconciliation_page_size: reconciliationPageSize.value, stores: [], revenue_composition: [], channel_breakdown: [] }); Object.assign(dishAnalytics, { summary: {}, top: [], hourly_trend: [] }); dishTotal.value = 0; dishPage.value = 1; diagnosisVisible.value = false; diagnosisAvailable.value = false; diagnosis.value = null; diagnosisSignatureAtQuery.value = '' }
 function resetScopeFilters() { filters.storeId = analysisMode.value === 'store' ? storeOptions.value[0]?.id || null : null; filters.storeIds = []; filters.platform = '' }
 function selectionToRange(value) { if (!value) return []; if (filters.timeMode === 'day') return [value, value]; if (filters.timeMode === 'week') return fullWeekRange(value); if (filters.timeMode === 'month') return monthRange(value); return Array.isArray(value) ? value : [] }
 function rangeToSelection(range) { if (!range?.length) return null; if (filters.timeMode === 'day' || filters.timeMode === 'week') return range[0]; if (filters.timeMode === 'month') return String(range[0]).slice(0, 7); return [...range] }
@@ -254,7 +259,7 @@ async function loadData() { const range = reportRange.value; if ((!compareMode.v
 async function loadDishAnalytics() {
   const range = reportRange.value
   if (analysisScope.value !== 'total' || range?.length !== 2 || !range[0] || !range[1]) {
-    Object.assign(dishAnalytics, { summary: {}, top: [] })
+    Object.assign(dishAnalytics, { summary: {}, top: [], hourly_trend: [] })
     dishTotal.value = 0
     return
   }
@@ -271,18 +276,16 @@ async function loadDishAnalytics() {
     if (analysisMode.value === 'store' && filters.storeId) params.store_id = filters.storeId
     if (analysisMode.value === 'custom' && filters.storeIds.length) params.store_ids = filters.storeIds.join(',')
     const result = await getDishSalesAnalytics(params)
-    Object.assign(dishAnalytics, { summary: result.summary || {}, top: result.top || [] })
+    Object.assign(dishAnalytics, { summary: result.summary || {}, top: result.top || [], hourly_trend: result.hourly_trend || [] })
     dishTotal.value = Number(result.total) || 0
   } catch (error) {
-    Object.assign(dishAnalytics, { summary: {}, top: [] })
+    Object.assign(dishAnalytics, { summary: {}, top: [], hourly_trend: [] })
     dishTotal.value = 0
   } finally {
     dishLoading.value = false
   }
 }
-function changeDishSort(sort) {
-  if (dishSort.value === sort) return
-  dishSort.value = sort
+function changeDishSort() {
   dishPage.value = 1
   loadDishAnalytics()
 }
@@ -319,6 +322,39 @@ function renderPie(chartRef, chart, items, centerText, centerLabel) {
   }, true)
   return instance
 }
+function renderHourlyOrderChart() {
+  if (!hourlyOrderChartRef.value || analysisScope.value !== 'total') return
+  hourlyOrderChart = reuseChart(hourlyOrderChart, hourlyOrderChartRef.value)
+  const rows = dishAnalytics.hourly_trend || []
+  if (!rows.length) { hourlyOrderChart.clear(); return }
+  const dark = compareThemeActive.value
+  hourlyOrderChart.resize()
+  hourlyOrderChart.setOption({
+    color: ['#4b83ed'],
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: dark ? '#172b48' : '#fff',
+      textStyle: { color: dark ? '#e7f0ff' : '#182230' },
+      formatter: params => `${params?.[0]?.axisValue || ''}<br/>订单量：<b>${numberText(params?.[0]?.value || 0)}</b> 单`,
+    },
+    grid: { left: 14, right: 22, top: 24, bottom: 16, containLabel: true },
+    xAxis: {
+      type: 'category', data: rows.map(row => row.period), boundaryGap: false,
+      axisLine: { lineStyle: { color: dark ? '#2d527e' : '#e4e9f1' } }, axisTick: { show: false },
+      axisLabel: { color: dark ? '#aec4e4' : '#8a94a6', interval: 1, fontSize: 10 },
+    },
+    yAxis: {
+      type: 'value', minInterval: 1,
+      axisLabel: { color: dark ? '#aec4e4' : '#8a94a6', formatter: value => numberText(value) },
+      splitLine: { lineStyle: { color: dark ? 'rgba(148,180,224,.14)' : '#edf1f6', type: 'dashed' } },
+    },
+    series: [{
+      name: '订单量', type: 'line', smooth: true, data: rows.map(row => Number(row.order_count) || 0),
+      symbol: 'circle', symbolSize: 5, lineStyle: { width: 3 }, itemStyle: { color: '#4b83ed' },
+      areaStyle: { color: dark ? 'rgba(75,131,237,.24)' : 'rgba(75,131,237,.14)' },
+    }],
+  }, true)
+}
 function renderCharts() {
   if (activeTab.value !== 'overview') return
   const series = chartSeries.value
@@ -331,17 +367,18 @@ function renderCharts() {
   }
   compositionChart = renderPie(compositionChartRef, compositionChart, analysisScope.value === 'total' ? incomeCompositionItems.value : channelCompositionItems.value, analysisScope.value === 'total' ? scopeIncome.value : channelCompositionItems.value.reduce((sum, item) => sum + item.value, 0), analysisScope.value === 'total' ? '营业收入构成' : '渠道营业构成')
   channelCompositionChart = renderPie(channelCompositionChartRef, channelCompositionChart, channelCompositionItems.value, scopeIncome.value, '渠道营业构成')
+  renderHourlyOrderChart()
 }
 function queueChartRender() {
   if (chartFrame) cancelAnimationFrame(chartFrame)
   chartFrame = requestAnimationFrame(() => { chartFrame = null; renderCharts() })
 }
-function resizeCharts() { trendChart?.resize(); compositionChart?.resize(); channelCompositionChart?.resize() }
+function resizeCharts() { trendChart?.resize(); compositionChart?.resize(); channelCompositionChart?.resize(); hourlyOrderChart?.resize() }
 watch(activeTab, async value => { if (value === 'overview') { await nextTick(); queueChartRender() } })
 watch(compareThemeActive, async () => { await nextTick(); queueChartRender() })
 watch(() => route.fullPath, () => { resetScopeFilters(); activeTab.value = 'overview'; exitCompareMode(); hasQueried.value = false; clearData() })
 onMounted(async () => { const result = await getStores({ page: 1, pageSize: 200 }).catch(() => ({ stores: [] })); storeOptions.value = result.stores || []; resetScopeFilters(); hasQueried.value = false; clearData(); window.addEventListener('resize', resizeCharts) })
-onBeforeUnmount(() => { if (chartFrame) cancelAnimationFrame(chartFrame); trendChart?.dispose(); compositionChart?.dispose(); channelCompositionChart?.dispose(); window.removeEventListener('resize', resizeCharts) })
+onBeforeUnmount(() => { if (chartFrame) cancelAnimationFrame(chartFrame); trendChart?.dispose(); compositionChart?.dispose(); channelCompositionChart?.dispose(); hourlyOrderChart?.dispose(); window.removeEventListener('resize', resizeCharts) })
 </script>
 
 <style scoped>
@@ -355,5 +392,6 @@ onBeforeUnmount(() => { if (chartFrame) cancelAnimationFrame(chartFrame); trendC
 .reconciliation-pagination{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-top:1px solid #edf0f4;color:#8793a6;font-size:12px}.compare-mode .reconciliation-pagination{border-top-color:rgba(128,163,216,.18);color:#b8c9e1}.compare-mode :deep(.el-pagination button),.compare-mode :deep(.el-pagination .number){background:transparent;color:#c7d8f2}.compare-mode :deep(.el-pagination .number.is-active){color:#75b2ff}
 .hero-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px}.analytics-hero :deep(.el-button--primary){border-color:rgba(255,255,255,.52);background:rgba(255,255,255,.22);font-weight:700}.analytics-hero :deep(.el-button.is-disabled){opacity:.5}.diagnosis-content{color:#253247}.diagnosis-meta{display:flex;flex-wrap:wrap;align-items:center;gap:10px;color:#7e8b9c;font-size:12px}.diagnosis-summary{margin:18px 0;padding:15px 17px;border-left:4px solid #4d87e8;border-radius:0 10px 10px 0;background:#f4f8ff;color:#45607f;line-height:1.7}.diagnosis-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:22px}.diagnosis-metrics>div{padding:13px;border:1px solid #e3eaf5;border-radius:11px;background:linear-gradient(145deg,#fbfdff,#f3f7fd)}.diagnosis-metrics span,.diagnosis-metrics b{display:block}.diagnosis-metrics span{color:#7e8da1;font-size:11px}.diagnosis-metrics b{margin-top:8px;color:#245fae;font-size:17px}.diagnosis-section{margin-top:18px}.diagnosis-section h4{margin:0 0 10px;font-size:14px}.diagnosis-section article{margin:8px 0;padding:12px 14px;border:1px solid #e8edf5;border-radius:10px;background:#fff}.diagnosis-section article b{font-size:13px}.diagnosis-section article p{margin:6px 0 0;color:#718095;font-size:12px;line-height:1.65}.diagnosis-section article.warning{border-left:3px solid #e6a23c}.diagnosis-section article.success{border-left:3px solid #35ad7c}.diagnosis-section article.info{border-left:3px solid #4d87e8}.diagnosis-section ol{margin:0;padding:2px 0 2px 20px;color:#4d5f75}.diagnosis-section li{padding:5px 0;line-height:1.6}@media(max-width:900px){.hero-actions{justify-content:flex-start}.diagnosis-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.hero-actions{width:100%}.hero-actions :deep(.el-button){flex:1}.diagnosis-metrics{grid-template-columns:1fr}.diagnosis-meta{align-items:flex-start;flex-direction:column;gap:6px}}
 .store-trend-panel,.custom-store-panel{margin-top:14px}.custom-store-panel :deep(.el-table__inner-wrapper:before){display:none}.compare-mode .custom-store-panel :deep(.el-table__inner-wrapper:before){background-color:rgba(128,163,216,.18)}
-.dish-panel{margin-top:14px}.dish-panel header{display:flex;align-items:center;justify-content:space-between;gap:14px}.dish-panel .panel-actions{flex:none}.dish-panel .panel-actions :deep(.el-radio-button__inner){font-size:12px;padding:6px 11px}.dish-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;padding:14px 18px}.dish-metrics>div{padding:12px 14px;border:1px solid #e6ebf2;border-radius:10px;background:#f8fbff}.dish-metrics span,.dish-metrics strong{display:block}.dish-metrics span{color:#718096;font-size:11px}.dish-metrics strong{margin-top:6px;color:#1f5fb9;font-size:18px;font-variant-numeric:tabular-nums}.dish-refund-text{color:#d65262!important}.dish-income{color:#16865a}.dish-table{border:0}.dish-panel :deep(.el-table__inner-wrapper:before){display:none}.compare-mode .dish-metrics>div{background:rgba(13,30,53,.9);border-color:rgba(118,157,213,.22)}.compare-mode .dish-metrics strong{color:#f3f7ff}.compare-mode .dish-metrics span{color:#a9bbd6}.compare-mode .dish-refund-text{color:#ff7583!important}.dish-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 18px;border-top:1px solid #edf0f4;background:#fafbfc;color:#7f8999;font-size:12px}.dish-footer :deep(.el-pagination){--el-pagination-font-size:12px}.dish-footer :deep(.el-pagination.is-background .btn-prev),.dish-footer :deep(.el-pagination.is-background .btn-next),.dish-footer :deep(.el-pagination.is-background .el-pager li){border-radius:7px}.compare-mode .dish-footer{border-top-color:rgba(128,163,216,.18);background:rgba(13,30,53,.85);color:#b8c9e1}@media(max-width:900px){.dish-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:560px){.dish-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.dish-panel header{align-items:flex-start;flex-direction:column}.dish-footer{align-items:flex-start;flex-direction:column}}
+.dish-panel{margin-top:14px}.dish-panel header{display:flex;align-items:center;justify-content:space-between;gap:14px}.dish-panel .panel-actions{flex:none}.dish-panel .panel-actions :deep(.el-radio-button__inner){font-size:12px;padding:6px 11px}.dish-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:14px 18px}.dish-metrics>div{min-height:66px;padding:12px 14px;border:1px solid #e6ebf2;border-radius:10px;background:#f8fbff}.dish-metrics span,.dish-metrics strong,.dish-metrics small{display:block}.dish-metrics span{color:#718096;font-size:11px}.dish-metrics strong{margin-top:6px;color:#1f5fb9;font-size:18px;font-variant-numeric:tabular-nums}.dish-metrics small{margin-top:4px;color:#98a3b4;font-size:9px;white-space:nowrap}.dish-refund-text{color:#d65262!important}.dish-cost-text{color:#c47c12!important}.dish-cost-pending{color:#98a3b4;font-size:11px}.dish-income{color:#16865a}.dish-table{border:0}.dish-panel :deep(.el-table__inner-wrapper:before){display:none}.compare-mode .dish-metrics>div{background:rgba(13,30,53,.9);border-color:rgba(118,157,213,.22)}.compare-mode .dish-metrics strong{color:#f3f7ff}.compare-mode .dish-metrics span,.compare-mode .dish-metrics small{color:#a9bbd6}.compare-mode .dish-refund-text{color:#ff7583!important}.compare-mode .dish-cost-text{color:#f4bd63!important}.compare-mode .dish-cost-pending{color:#91a7c5}.dish-footer{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 18px;border-top:1px solid #edf0f4;background:#fafbfc;color:#7f8999;font-size:12px}.dish-footer :deep(.el-pagination){--el-pagination-font-size:12px}.dish-footer :deep(.el-pagination.is-background .btn-prev),.dish-footer :deep(.el-pagination.is-background .btn-next),.dish-footer :deep(.el-pagination.is-background .el-pager li){border-radius:7px}.compare-mode .dish-footer{border-top-color:rgba(128,163,216,.18);background:rgba(13,30,53,.85);color:#b8c9e1}@media(max-width:900px){.dish-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}@media(max-width:560px){.dish-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.dish-panel header{align-items:flex-start;flex-direction:column}.dish-footer{align-items:flex-start;flex-direction:column}}
+.hourly-order-panel{margin:0 0 14px}.hourly-order-chart{height:286px;padding:8px 14px 0}.compare-mode .hourly-order-panel{border-color:rgba(118,157,213,.22);background:rgba(13,30,53,.92)}@media(max-width:560px){.hourly-order-chart{height:260px;padding:8px 4px 0}}
 </style>
