@@ -34,7 +34,7 @@ app.use(express.json({ limit: '50mb' }));
 
 // JWT 认证中间件（保护 /api/*，放行登录接口）
 app.use((req, res, next) => {
-  if (req.path === '/api/auth/login' || req.path === '/api/bot/status') return next();
+  if (req.path === '/api/auth/login' || req.path === '/api/bot/status' || req.path === '/api/geo/bound') return next();
   if (!req.path.startsWith('/api/')) return next();
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -534,6 +534,16 @@ function amapSign(params, secret) {
   const sorted = Object.keys(params).sort().map(k => `${k}=${params[k]}`).join('&');
   return crypto.createHash('md5').update(sorted + secret).digest('hex');
 }
+
+// 阿里云 DataV 边界 GeoJSON 代理（后端转发，绕过浏览器 Referer 防盗链——云端域名访问会被 DataV 403）
+app.get('/api/geo/bound', async (req, res) => {
+  try {
+    const path = String(req.query.path || '').trim();
+    if (!path || !/^[\w-]+_full\.json$/.test(path)) return res.status(400).json({ error: '非法路径参数' });
+    const data = await fetch(`https://geo.datav.aliyun.com/areas_v3/bound/${encodeURIComponent(path)}`).then(r => r.text());
+    res.type('application/json').send(data);
+  } catch (e) { res.status(500).json({ error: `边界数据获取失败：${e.message}` }); }
+});
 
 // 高德地理编码代理（后端转发，避免前端 JS key 无 Web API 权限）
 app.get('/api/geocode', async (req, res) => {

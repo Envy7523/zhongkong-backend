@@ -314,7 +314,7 @@ import * as echarts from 'echarts'
 import { getProvinceStats, getCityStats, getDistrictStats, getStoreLocations, getMapPins, createMapPin, updateMapPin, deleteMapPin, updateStore, getPinComments, addPinComment, deletePinComment, getStoreComments, addStoreComment, deleteStoreComment } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-const GEO_BASE = 'https://geo.datav.aliyun.com/areas_v3/bound'
+const GEO_BASE = '/api/geo/bound'
 
 const PROVINCE_ADCODE = {
   '北京':'110000','天津':'120000','河北':'130000','山西':'140000','内蒙古':'150000',
@@ -885,7 +885,7 @@ async function loadChina() {
   loading.value = true
   try {
     const [geo, stats] = await Promise.all([
-      fetch(`${GEO_BASE}/100000_full.json`).then(r=>r.json()),
+      fetch(`${GEO_BASE}?path=100000_full.json`).then(r=>r.json()),
       getProvinceStats().catch(()=>({data:[]})),
     ])
     if (!chartRef.value || !geo) return
@@ -915,7 +915,7 @@ async function drillToProvince(name) {
   loading.value = true
   try {
     const [geo,stats] = await Promise.all([
-      fetch(`${GEO_BASE}/${adcode}_full.json`).then(r=>r.json()),
+      fetch(`${GEO_BASE}?path=${adcode}_full.json`).then(r=>r.json()),
       getCityStats(name).catch(()=>({data:[]})),
     ])
     if (!chartRef.value||!geo) return
@@ -948,7 +948,7 @@ async function drillToCity(name) {
   loading.value = true
   try {
     const [geo,stats] = await Promise.all([
-      fetch(`${GEO_BASE}/${adcode}_full.json`).then(r=>r.json()),
+      fetch(`${GEO_BASE}?path=${adcode}_full.json`).then(r=>r.json()),
       getDistrictStats(provinceName.value, name).catch(()=>({data:[]})),
     ])
     if (!chartRef.value||!geo) return

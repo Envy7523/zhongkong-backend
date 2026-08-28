@@ -3,7 +3,11 @@ node_modules/
 
 # 敏感配置（含真实凭据）
 config.json
-server-access/zhongkong_company
+server-access/
+
+# 数据库（含敏感业务数据，不进 git）
+data/database.sqlite
+data/*.sqlite
 
 # 系统文件
 .DS_Store
