@@ -459,11 +459,9 @@ watch(selectedCategory, (cat) => {
   border-radius: 50%;
   cursor: pointer;
   border: 2px solid transparent;
-  transition: transform 0.1s ease;
 }
 
 .color-dot:hover {
-  transform: scale(1.1);
 }
 
 .color-dot.active {

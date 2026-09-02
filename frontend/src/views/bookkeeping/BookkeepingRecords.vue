@@ -17,17 +17,15 @@
         <div class="filter-field date-filter">
           <span class="filter-label">日期</span>
           <div class="date-range">
-            <el-date-picker v-model="filters.date_from" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" clearable @change="handleFilter" />
+            <el-date-picker v-model="filters.date_from" :clearable="false" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" @change="handleFilter" />
             <span class="filter-sep">至</span>
-            <el-date-picker v-model="filters.date_to" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" clearable @change="handleFilter" />
+            <el-date-picker v-model="filters.date_to" :clearable="false" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" @change="handleFilter" />
           </div>
         </div>
 
         <div v-if="canSelectStore" class="filter-field">
           <span class="filter-label">门店</span>
-          <el-select v-model="filters.store_id" filterable clearable placeholder="全部门店" @change="handleFilter">
-            <el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" />
-          </el-select>
+          <StoreRegionSelect v-model="filters.store_ids" :stores="stores" multiple placeholder="全部门店或按区域勾选" @update:model-value="handleFilter" />
         </div>
 
         <div class="filter-field">
@@ -157,7 +155,7 @@
         <el-tag type="warning" effect="plain">所有数据将归属到同一天</el-tag>
       </div>
       <div class="quick-entry-controls">
-        <el-date-picker v-model="quickDate" type="date" value-format="YYYY-MM-DD" placeholder="选择归属日期" @change="clearQuickPreview" />
+        <el-date-picker v-model="quickDate" :clearable="false" type="date" value-format="YYYY-MM-DD" placeholder="选择归属日期" @change="clearQuickPreview" />
         <el-button type="primary" plain :loading="quickLoading" @click="previewQuickEntry">解析并预览</el-button>
       </div>
       <el-input
@@ -200,6 +198,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { getBookkeepingEntries, deleteBookkeepingEntry, getBookkeepingCategories, getStores, previewBookkeepingQuickEntry, commitBookkeepingQuickEntry } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import BookkeepingHeader from './BookkeepingHeader.vue'
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 
 const authStore = useAuthStore()
 
@@ -208,7 +207,9 @@ const maxThumbs = 3
 const canSelectStore = computed(() => !authStore.user?.store_id)
 const selectedStoreLabel = computed(() => {
   if (!canSelectStore.value) return authStore.user?.store_name || '当前门店'
-  return stores.value.find(store => store.id === filters.store_id)?.store_name || '全部门店'
+  if (!filters.store_ids.length) return '全部门店'
+  if (filters.store_ids.length === 1) return stores.value.find(store => store.id === filters.store_ids[0])?.store_name || '单店'
+  return `已选 ${filters.store_ids.length} 家门店`
 })
 
 const mode = ref('detail')
@@ -232,7 +233,7 @@ const filters = reactive({
   date_from: '',
   date_to: '',
   category_id: null,
-  store_id: null
+  store_ids: []
 })
 
 const sumAmount = computed(() =>
@@ -274,8 +275,8 @@ function buildParams() {
   if (filters.category_id != null && filters.category_id !== '') {
     params.category_id = filters.category_id
   }
-  if (canSelectStore.value && filters.store_id != null && filters.store_id !== '') {
-    params.store_id = filters.store_id
+  if (canSelectStore.value && filters.store_ids.length) {
+    params.store_ids = filters.store_ids.join(',')
   } else if (authStore.user?.store_id != null) {
     params.store_id = authStore.user.store_id
   }
@@ -336,7 +337,7 @@ function resetFilters() {
   filters.date_from = ''
   filters.date_to = ''
   filters.category_id = null
-  filters.store_id = null
+  filters.store_ids = []
   detailPage.value = 1
   loadData()
 }

@@ -20,10 +20,6 @@
         </el-form-item>
       </el-form>
       <div v-if="error" class="login-error">{{ error }}</div>
-      <div class="login-hint">
-        <p>管理员：admin / admin123</p>
-        <p>专&nbsp;&nbsp;&nbsp;员：agent / agent123</p>
-      </div>
     </div>
   </div>
 </template>

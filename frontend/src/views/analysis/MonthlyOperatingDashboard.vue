@@ -10,9 +10,9 @@
     </section>
 
     <section class="query-card">
-      <div class="query-field"><span>选择月份</span><el-date-picker v-model="filters.month" type="month" value-format="YYYY-MM" placeholder="选择月份" /></div>
-      <div class="query-field"><span>截止日期</span><el-date-picker v-model="filters.asOf" type="date" value-format="YYYY-MM-DD" placeholder="选择时间" /></div>
-      <div class="query-field store-select"><span>选择门店</span><el-select v-model="filters.storeId" clearable filterable placeholder="全部门店汇总"><el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" /></el-select></div>
+      <div class="query-field"><span>选择月份</span><el-date-picker v-model="filters.month" :clearable="false" type="month" value-format="YYYY-MM" placeholder="选择月份" /></div>
+      <div class="query-field"><span>截止日期</span><el-date-picker v-model="filters.asOf" :clearable="false" type="date" value-format="YYYY-MM-DD" placeholder="选择时间" /></div>
+      <div class="query-field store-select"><span>选择门店</span><StoreRegionSelect v-model="filters.storeIds" :stores="stores" multiple placeholder="全部门店或按区域勾选" /></div>
       <div class="query-field view-select"><span>数据口径</span><el-radio-group v-model="filters.view"><el-radio-button label="cash">现金收支</el-radio-button><el-radio-button label="accrual">经营盈亏</el-radio-button></el-radio-group></div>
       <el-button type="primary" :loading="loading" @click="queryBoard">查询看板</el-button>
     </section>
@@ -108,9 +108,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
 import { getMonthlyOperatingDashboard, getStores } from '@/api'
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 
 function today() { return new Date().toISOString().slice(0, 10) }
-const filters = reactive({ month: today().slice(0, 7), asOf: today(), storeId: null, view: 'cash', costSources: { wage: 'operating_previous', rent: 'bookkeeping', utilities: 'bookkeeping' } })
+const filters = reactive({ month: today().slice(0, 7), asOf: today(), storeIds: [], view: 'cash', costSources: { wage: 'operating_previous', rent: 'bookkeeping', utilities: 'bookkeeping' } })
 const stores = ref([])
 const loading = ref(false)
 const queried = ref(false)
@@ -125,8 +126,8 @@ const isAccrual = computed(() => board.view === 'accrual')
 const incomeChildCount = computed(() => board.income_rows.filter(row => !row.is_group).length)
 const expenseChildCount = computed(() => board.expense_rows.filter(row => !row.is_group).length)
 const costSourceOptions = [
-  { value: 'operating_previous', label: '运营成本 · 上月数据', description: '读取门店管理“运营成本”内的上月工资；当前未配置房租、水电时按 ¥0.00。' },
-  { value: 'operating_current', label: '运营成本 · 本月数据', description: '读取门店管理“运营成本”内的本月工资；当前未配置房租、水电时按 ¥0.00。' },
+  { value: 'operating_previous', label: '运营成本 · 上月数据', description: '读取门店管理“运营成本”内上月录入的工资、房租/物业或水电费。' },
+  { value: 'operating_current', label: '运营成本 · 本月数据', description: '读取门店管理“运营成本”内本月录入的工资、房租/物业或水电费。' },
   { value: 'bookkeeping', label: '记账本记录数据', description: '汇总当前查询范围内的工资、房租/物业、水电记录作为本月均摊基数。' },
 ]
 const costSourceTargetLabel = computed(() => ({ wage: '工资', rent: '房租/物业', utilities: '水电' }[costSourceTarget.value] || '成本'))
@@ -172,7 +173,7 @@ async function queryBoard() {
   loading.value = true
   try {
     const data = await getMonthlyOperatingDashboard({
-      month: filters.month, as_of: filters.asOf, store_id: filters.storeId || undefined, view: filters.view,
+      month: filters.month, as_of: filters.asOf, store_ids: filters.storeIds.join(',') || undefined, view: filters.view,
       wage_source: filters.costSources.wage, rent_source: filters.costSources.rent, utilities_source: filters.costSources.utilities,
     })
     Object.assign(board, data)
@@ -267,7 +268,7 @@ function netClass(value) { return Number(value) >= 0 ? 'positive-net' : 'negativ
 .board-panel { overflow:hidden; border:1px solid #e5ebf3; border-radius:14px; background:#fff; box-shadow:0 5px 16px rgba(30,54,86,.05); }
 .board-panel header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:16px 18px 13px; border-bottom:1px solid #edf1f5; }.board-panel h3 { margin:0; color:#243d5e; font-size:16px; }.board-panel p { margin:5px 0 0; color:#8a97a7; font-size:11px; }.board-panel header > span { padding:4px 8px; border-radius:12px; color:#57789f; background:#eef5ff; font-size:11px; }
 .expense-panel :deep(.dashboard-group-row td) { color:#9a3d33; background:#fff5f3 !important; }.income-panel :deep(.dashboard-group-row td) { color:#18734f; background:#f1fbf6 !important; }.child-name { padding-left:20px; color:#68778c; }.child-name::before { content:'↳'; margin-right:7px; color:#a7b2c1; }
-.metric-section { margin-top:20px; }.metric-section > h3 { margin:0 0 12px 3px; color:#273e5d; font-size:17px; }.metric-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }.summary-card { min-height:112px; display:flex; flex-direction:column; justify-content:center; gap:8px; padding:14px 18px; border:2px solid #f0d6b5; background:#fff; }.summary-card span { display:flex; align-items:center; gap:7px; color:#6e7d91; font-size:12px; }.summary-card span i { padding:2px 5px; border-radius:7px; color:#8b9aae; background:#f1f5f9; font-size:9px; font-style:normal; opacity:0; transition:opacity .15s ease; }.summary-card.has-breakdown { cursor:help; outline:none; transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease; }.summary-card.has-breakdown:hover,.summary-card.has-breakdown:focus { border-color:#93b4df; box-shadow:0 9px 18px rgba(39,83,132,.12); transform:translateY(-2px); }.summary-card.has-breakdown:hover span i,.summary-card.has-breakdown:focus span i { opacity:1; }.summary-card b { color:#283b57; font-size:24px; line-height:1.1; }.summary-card small { color:#98a4b2; font-size:11px; }.summary-card.expense b, .summary-card.negative-net b { color:#d9504d; }.summary-card.income b, .summary-card.positive-net b { color:#16865a; }.summary-card.stored b { color:#7561c9; }
+.metric-section { margin-top:20px; }.metric-section > h3 { margin:0 0 12px 3px; color:#273e5d; font-size:17px; }.metric-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }.summary-card { min-height:112px; display:flex; flex-direction:column; justify-content:center; gap:8px; padding:14px 18px; border:2px solid #f0d6b5; background:#fff; }.summary-card span { display:flex; align-items:center; gap:7px; color:#6e7d91; font-size:12px; }.summary-card span i { padding:2px 5px; border-radius:7px; color:#8b9aae; background:#f1f5f9; font-size:9px; font-style:normal; opacity:0; transition:opacity .15s ease; }.summary-card.has-breakdown { cursor:help; outline:none; transition:box-shadow .16s ease, border-color .16s ease; }.summary-card.has-breakdown:hover,.summary-card.has-breakdown:focus { border-color:#93b4df; box-shadow:0 9px 18px rgba(39,83,132,.12); }.summary-card.has-breakdown:hover span i,.summary-card.has-breakdown:focus span i { opacity:1; }.summary-card b { color:#283b57; font-size:24px; line-height:1.1; }.summary-card small { color:#98a4b2; font-size:11px; }.summary-card.expense b, .summary-card.negative-net b { color:#d9504d; }.summary-card.income b, .summary-card.positive-net b { color:#16865a; }.summary-card.stored b { color:#7561c9; }
 .metric-breakdown { width:260px; padding:2px; color:#31435b; }.metric-breakdown strong { display:block; margin-bottom:5px; color:#243e65; font-size:13px; }.metric-breakdown > p { margin:0 0 9px; color:#7d8b9d; font-size:11px; line-height:1.5; }.breakdown-line { display:flex; justify-content:space-between; gap:14px; padding:5px 0; border-top:1px dashed #e6ecf4; font-size:12px; }.breakdown-line span { overflow:hidden; color:#617289; text-overflow:ellipsis; white-space:nowrap; }.breakdown-line b { flex:none; color:#2f4669; font-variant-numeric:tabular-nums; }.breakdown-empty { padding:8px 0; color:#97a3b2; font-size:12px; }.metric-breakdown footer { display:flex; justify-content:space-between; margin-top:5px; padding-top:8px; border-top:1px solid #dbe5f0; color:#536983; font-size:12px; }.metric-breakdown footer b { color:#213d64; font-size:14px; }
 .board-empty { padding:76px 0; background:#fff; border:1px solid #edf1f5; border-radius:14px; }
 .trend-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:20px; }.trend-panel { overflow:hidden; border:1px solid #e5ebf3; border-radius:14px; background:#fff; box-shadow:0 5px 16px rgba(30,54,86,.05); }.trend-panel header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:16px 18px 8px; }.trend-panel h3 { margin:0; color:#273e5d; font-size:16px; }.trend-panel p { margin:5px 0 0; color:#8a97a7; font-size:11px; }.trend-panel header > span { color:#7391b4; font-size:11px; }.trend-chart { height:300px; }

@@ -156,12 +156,11 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 14px;
-  transition: box-shadow 0.2s, transform 0.2s;
+  transition: box-shadow 0.2s;
 }
 
 .dash-stat-card:hover {
   box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-  transform: translateY(-2px);
 }
 
 .dash-stat-icon {
@@ -237,13 +236,12 @@ onMounted(async () => {
   align-items: center;
   gap: 10px;
   cursor: pointer;
-  transition: box-shadow 0.2s, transform 0.2s;
+  transition: box-shadow 0.2s;
   user-select: none;
 }
 
 .dash-action-card:hover {
   box-shadow: 0 6px 20px rgba(64,158,255,0.15);
-  transform: translateY(-3px);
 }
 
 .dash-action-icon {

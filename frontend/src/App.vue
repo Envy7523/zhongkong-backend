@@ -1,8 +1,8 @@
 <template>
   <LoginView v-if="isLoginPage" />
-  <div v-else class="app-layout">
+  <div v-else :class="['app-layout', { 'is-compact': responsiveCollapsed }]">
     <!-- 侧边栏 -->
-    <aside :class="['app-sidebar', { 'is-collapsed': store.sidebarCollapsed }]">
+    <aside :class="['app-sidebar', { 'is-collapsed': isSidebarCollapsed }]">
       <div class="sidebar-brand">
         <span class="sidebar-brand-mark">鹅</span>
         <span class="sidebar-brand-copy">
@@ -13,7 +13,7 @@
       <div class="sidebar-navigation">
         <el-menu
           :default-active="sidebarActive"
-          :collapse="store.sidebarCollapsed"
+          :collapse="isSidebarCollapsed"
           background-color="transparent"
           text-color="#93a0b8"
           active-text-color="#fff"
@@ -151,8 +151,8 @@
     <!-- 主区域 -->
     <div class="app-main">
       <div class="app-topbar">
-        <el-button @click="store.toggleSidebar()" text>
-          <el-icon v-if="store.sidebarCollapsed"><Expand /></el-icon>
+        <el-button @click="toggleSidebar" text aria-label="展开或收起侧边栏">
+          <el-icon v-if="isSidebarCollapsed"><Expand /></el-icon>
           <el-icon v-else><Fold /></el-icon>
         </el-button>
         <span class="topbar-title">{{ pageTitle }}</span>
@@ -193,15 +193,21 @@
       </div>
 
       <div class="content-area">
-        <router-view v-if="isCollabRoute || isBusinessAnalyticsRoute || isDataImportRoute || isEnterpriseSettingsRoute" />
-        <component v-else :is="currentView" :key="store.activeTabId" />
+        <router-view v-slot="{ Component, route }">
+          <KeepAlive :max="30">
+            <component v-if="isSpecialRoute && Component" :is="Component" :key="route.name || route.path" />
+          </KeepAlive>
+        </router-view>
+        <KeepAlive :max="30">
+          <component v-if="!isSpecialRoute" :is="currentView" :key="store.activeTabId" />
+        </KeepAlive>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { SwitchButton } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
@@ -225,6 +231,7 @@ import StoreFixedCost from '@/views/store/StoreFixedCost.vue'
 import StoreOperatingCost from '@/views/store/StoreOperatingCost.vue'
 import StoreBusinessCircle from '@/views/store/StoreBusinessCircle.vue'
 import StoreMap from '@/views/store/StoreMap.vue'
+import StoreRegionManage from '@/views/store/StoreRegionManage.vue'
 import MenuOverview from '@/views/menu/MenuOverview.vue'
 import MenuCategory from '@/views/menu/MenuCategory.vue'
 import MenuCost from '@/views/menu/MenuCost.vue'
@@ -257,6 +264,7 @@ const COMPONENT_MAP = {
   'store-management-info-circle': StoreBusinessCircle,
   'store-management-info-platform': StorePlatform,
   'store-management-info-config': StoreConfig,
+  'store-management-region': StoreRegionManage,
   'store-management-map': StoreMap,
   'store-management-fixed': StoreFixedCost,
   'store-management-operating': StoreOperatingCost,
@@ -323,6 +331,7 @@ const POPUP_CONFIG = {
           { index: 'store-management-info-circle', label: '门店商圈' },
           { index: 'store-management-info-platform', label: '第三方平台' },
           { index: 'store-management-info-config', label: '门店配置' },
+          { index: 'store-management-region', label: '门店区域管理' },
         ],
       },
       {
@@ -412,12 +421,31 @@ const store = useAppStore()
 const router = useRouter()
 const auth = useAuthStore()
 const currentView = shallowRef(DashboardView)
+// 笔记本的可用内容宽度通常不足以同时容纳完整侧栏与数据表。
+// 默认自动收起侧栏；用户仍可通过顶部按钮临时展开查看导航。
+const responsiveCollapsed = ref(false)
+const responsiveSidebarOverride = ref(null)
+const isSidebarCollapsed = computed(() => store.sidebarCollapsed || (responsiveCollapsed.value && responsiveSidebarOverride.value !== false))
+
+function updateResponsiveLayout() {
+  responsiveCollapsed.value = window.innerWidth <= 1440
+  if (!responsiveCollapsed.value) responsiveSidebarOverride.value = null
+}
+
+function toggleSidebar() {
+  if (responsiveCollapsed.value && !store.sidebarCollapsed) {
+    responsiveSidebarOverride.value = isSidebarCollapsed.value ? false : null
+    return
+  }
+  store.toggleSidebar()
+}
 
 const isLoginPage = computed(() => router.currentRoute.value.path === '/login')
 const isCollabRoute = computed(() => router.currentRoute.value.path.startsWith('/collab'))
 const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path === '/analysis' || router.currentRoute.value.path.startsWith('/analysis/'))
 const isDataImportRoute = computed(() => router.currentRoute.value.path.startsWith('/data-import/'))
 const isEnterpriseSettingsRoute = computed(() => router.currentRoute.value.path.startsWith('/enterprise-settings'))
+const isSpecialRoute = computed(() => isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value)
 const businessRouteTabId = computed(() => router.currentRoute.value.meta.analysisKey || 'analysis-total-brand')
 const dataImportRouteTabId = computed(() => ({
   pos: 'data-import-pos',
@@ -642,6 +670,8 @@ watch(dataImportRouteTabId, (id) => {
 })
 
 onMounted(async () => {
+  updateResponsiveLayout()
+  window.addEventListener('resize', updateResponsiveLayout)
   // 初始化认证
   await auth.init()
   if (!auth.isLoggedIn) {
@@ -663,6 +693,10 @@ onMounted(async () => {
   else if (isEnterpriseSettingsRoute.value) store.openTabFromId('enterprise-settings')
   else store.openTabFromId('dashboard')
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateResponsiveLayout)
+})
 </script>
 
 <style>
@@ -680,15 +714,12 @@ onMounted(async () => {
   z-index: 2000;
   opacity: 0;
   visibility: hidden;
-  transform: translateX(-7px) scale(.985);
-  transform-origin: left top;
-  transition: opacity .2s ease, visibility .2s ease, transform .24s cubic-bezier(.22,.8,.25,1);
+  transition: opacity .16s ease, visibility .16s ease;
   pointer-events: none;
 }
 .nav-popup-panel.visible {
   opacity: 1;
   visibility: visible;
-  transform: translateX(0) scale(1);
   pointer-events: auto;
 }
 .popup-section {
@@ -723,7 +754,7 @@ onMounted(async () => {
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
-  transition: color .16s ease, background-color .16s ease, border-color .16s ease, transform .16s ease;
+  transition: color .16s ease, background-color .16s ease, border-color .16s ease;
 }
 .popup-item::before {
   content: "";
@@ -739,7 +770,6 @@ onMounted(async () => {
   border-color: #e4eaff;
   background: #f5f7ff;
   color: #3f62c9;
-  transform: translateX(1px);
 }
 .popup-item.active {
   border-color: #dce5ff;
@@ -759,11 +789,10 @@ onMounted(async () => {
   font-size: 17px;
   font-weight: 300;
   opacity: .8;
-  transition: color .18s ease, transform .2s ease;
+  transition: color .18s ease;
 }
 .el-menu-item.is-popup-open .nav-arrow {
   color: #9db4ff;
-  transform: translateX(3px);
 }
 
 @media (prefers-reduced-motion: reduce) {

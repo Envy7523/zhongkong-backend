@@ -59,11 +59,11 @@ export const useAppStore = defineStore('app', () => {
   function getTabTitle(id) {
     const info = INDEX_TO_PAGE_SUB[id]
     if (!info) return id
-    const base = PAGE_TITLES[info.page] || info.page
     if (info.sub && SUB_LABELS[info.page]?.[info.sub]) {
-      return base + ' · ' + SUB_LABELS[info.page][info.sub]
+      // 顶部标签只保留最后一级名称；完整路径仍显示在页面标题和导航中。
+      return SUB_LABELS[info.page][info.sub]
     }
-    return base
+    return PAGE_TITLES[info.page] || info.page
   }
 
   function openTabFromId(id) {

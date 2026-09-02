@@ -19,6 +19,8 @@ html, body, #app {
   color: #303133;
 }
 
+* { box-sizing: border-box; }
+
 /* ===== 全局滚动条美化 ===== */
 ::-webkit-scrollbar {
   width: 6px;
@@ -183,14 +185,14 @@ html, body, #app {
   border-radius: 10px;
   color: #929eb4 !important;
   line-height: 43px;
-  transition: color .18s ease, background-color .18s ease, border-color .18s ease, transform .18s ease;
+  transition: color .18s ease, background-color .18s ease, border-color .18s ease;
 }
 .sidebar-navigation .el-menu-item .el-icon {
   width: 21px;
   margin-right: 11px;
   color: #77849c;
   font-size: 17px;
-  transition: color .18s ease, transform .18s ease;
+  transition: color .18s ease;
 }
 .sidebar-navigation .el-menu-item:hover,
 .sidebar-navigation .el-menu-item.is-popup-open {
@@ -201,7 +203,6 @@ html, body, #app {
 .sidebar-navigation .el-menu-item:hover .el-icon,
 .sidebar-navigation .el-menu-item.is-popup-open .el-icon {
   color: #b8c6e4;
-  transform: translateY(-1px);
 }
 .sidebar-navigation .el-menu-item.is-active {
   border-color: rgba(112,149,255,.18);
@@ -437,13 +438,48 @@ html, body, #app {
 /* ===== 内容区 ===== */
 .content-area {
   flex: 1;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: scroll;
   padding: 24px;
   background: var(--bg-page);
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  /* 始终预留纵向滚动条空间，Windows 的“鼠标靠近才显示滚动条”
+     不会再改变可用宽度，避免筛选栏和卡片在悬停时发生横向跳动。 */
+  scrollbar-gutter: stable;
 }
-.content-area::-webkit-scrollbar {
-  display: none;
+.content-area > * { min-width: 0; }
+.content-area::-webkit-scrollbar { display: block; }
+
+/* ===== 笔记本与中等分辨率 =====
+   内容优先：自动收起侧栏后，页面保留充足宽度；筛选项可换行，表格
+   在需要时横向滚动，不再被静默裁切。 */
+@media (max-width: 1440px) {
+  .content-area { padding: 18px; }
+  .app-topbar { padding: 0 16px; }
+  .app-layout.is-compact .content-area { padding: 16px 18px 20px; }
+  .content-area .el-pagination { justify-content: flex-start; flex-wrap: wrap; height: auto; gap: 6px; }
+  .content-area .el-dialog { max-width: calc(100vw - 32px); }
+  .content-area .el-table { min-width: 680px; }
+  .content-area .el-table__body-wrapper,
+  .content-area .el-table__header-wrapper { scrollbar-width: thin; }
+}
+
+@media (max-width: 1100px) {
+  .content-area { padding: 14px; }
+  .app-topbar { gap: 8px; padding: 0 12px; }
+  .topbar-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .topbar-account-trigger { max-width: 150px; }
+  .content-area .el-table { min-width: 620px; }
+}
+
+@media (max-width: 760px) {
+  :root { --sidebar-collapsed: 60px; --topbar-height: 52px; }
+  .content-area { padding: 10px; }
+  .app-topbar { padding: 0 8px; }
+  .topbar-status, .topbar-account-copy { display: none; }
+  .tab-item { max-width: 145px; padding: 8px 10px; }
+  .tab-title { overflow: hidden; text-overflow: ellipsis; }
+  .content-area .el-dialog { margin: 8px auto; max-height: calc(100vh - 16px); overflow: auto; }
 }
 
 /* ===== 统计卡片 ===== */
@@ -460,12 +496,11 @@ html, body, #app {
   padding: 18px 20px;
   box-shadow: 0 2px 12px rgba(0,0,0,0.06);
   border: none;
-  transition: box-shadow 0.2s, transform 0.2s;
+  transition: box-shadow 0.2s;
 }
 
 .stat-card:hover {
   box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-  transform: translateY(-2px);
 }
 
 .stat-card .stat-label {
@@ -501,12 +536,11 @@ html, body, #app {
   display: flex;
   align-items: center;
   gap: 14px;
-  transition: box-shadow 0.2s, transform 0.2s;
+  transition: box-shadow 0.2s;
 }
 
 .dash-stat-card:hover {
   box-shadow: 0 4px 16px rgba(0,0,0,0.1);
-  transform: translateY(-2px);
 }
 
 .dash-stat-icon {
@@ -574,12 +608,11 @@ html, body, #app {
   font-size: 11px;
   margin-left: auto;
   opacity: 0.5;
-  transition: transform 0.2s;
+  transition: opacity 0.2s;
 }
 
 .el-menu-item.is-popup-open .nav-arrow {
   opacity: 1;
-  transform: translateX(2px);
 }
 
 /* ===== 隐藏折叠菜单的 tooltip 弹窗 =====

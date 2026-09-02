@@ -20,12 +20,10 @@
       <div class="card-header">📋 耗材数据录入</div>
       <el-form label-width="100px" style="max-width:600px;">
         <el-form-item label="门店">
-          <el-select v-model="supplyForm.storeId" placeholder="选择门店" style="width:100%;">
-            <el-option v-for="s in stores" :key="s.id" :label="s.store_name" :value="s.id" />
-          </el-select>
+          <StoreRegionSelect v-model="supplyForm.storeId" :stores="stores" placeholder="选择门店或区域" style="width:100%;" />
         </el-form-item>
         <el-form-item label="日期">
-          <el-date-picker v-model="supplyForm.date" type="date" style="width:100%;" />
+          <el-date-picker v-model="supplyForm.date" :clearable="false" type="date" style="width:100%;" />
         </el-form-item>
         <el-form-item label="耗材名称">
           <el-input v-model="supplyForm.item" placeholder="如：打包盒、竹签" />
@@ -61,6 +59,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { getStores, importDailyReport, addSupply } from '@/api'
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 
 const fileData = ref(null)
 const importing = ref(false)

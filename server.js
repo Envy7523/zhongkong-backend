@@ -14,6 +14,7 @@ const { parseDailyExcel, toReportData } = require('./lib/daily-data');
 const db = require('./lib/db');
 const collabService = require('./lib/collab-service');
 const businessAnalytics = require('./lib/business-analytics');
+const ledgerBackupImport = require('./lib/bookkeeping-import');
 const wecomBot = require('./lib/wecom-bot');
 const { createBusinessAssistant } = require('./lib/wecom-business-assistant');
 const jwt = require('jsonwebtoken');
@@ -606,6 +607,120 @@ app.post('/api/stores/init', (req, res) => { try { const excelStores = parseDail
 //  SQLite 版门店管理（新路由，路径 /api/db/stores）
 // ==========================================
 
+// ===== 自定义门店区域 =====
+// 区域可多层嵌套，门店与区域为多对多关系，便于按省/市/片区等多个维度汇总。
+function normalizeStoreIds(value) {
+  const raw = Array.isArray(value) ? value : [];
+  return [...new Set(raw.map(id => Number(id)).filter(id => Number.isInteger(id) && id > 0))];
+}
+
+function listStoreRegions() {
+  const regions = db.queryAll(`
+    SELECT r.*, COUNT(m.store_id) AS direct_store_count
+    FROM store_regions r
+    LEFT JOIN store_region_members m ON m.region_id=r.id
+    GROUP BY r.id
+    ORDER BY r.sort_order ASC, r.id ASC
+  `);
+  const members = db.queryAll(`
+    SELECT m.region_id, m.store_id, s.store_name
+    FROM store_region_members m
+    JOIN stores s ON s.id=m.store_id
+    ORDER BY s.store_name
+  `);
+  const memberMap = new Map();
+  members.forEach(member => {
+    const list = memberMap.get(member.region_id) || [];
+    list.push({ id: member.store_id, store_name: member.store_name });
+    memberMap.set(member.region_id, list);
+  });
+  return regions.map(region => ({
+    ...region,
+    store_ids: (memberMap.get(region.id) || []).map(item => item.id),
+    stores: memberMap.get(region.id) || [],
+  }));
+}
+
+app.get('/api/store-regions', (req, res) => {
+  try { res.json({ ok: true, regions: listStoreRegions() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/store-regions', (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    const parentId = req.body.parent_id === '' || req.body.parent_id == null ? null : Number(req.body.parent_id);
+    if (!name) return res.status(400).json({ error: '区域名称不能为空' });
+    if (parentId && !db.queryOne('SELECT id FROM store_regions WHERE id=?', [parentId])) return res.status(400).json({ error: '上级区域不存在' });
+    const id = db.insert('INSERT INTO store_regions (name,parent_id,sort_order) VALUES (?,?,?)', [name, parentId || null, Number(req.body.sort_order) || 0]);
+    normalizeStoreIds(req.body.store_ids).forEach(storeId => db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [id, storeId]));
+    db.save();
+    res.json({ ok: true, id, regions: listStoreRegions() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/store-regions/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const current = db.queryOne('SELECT * FROM store_regions WHERE id=?', [id]);
+    if (!current) return res.status(404).json({ error: '区域不存在' });
+    const name = String(req.body.name ?? current.name).trim();
+    const parentId = req.body.parent_id === '' || req.body.parent_id == null ? null : Number(req.body.parent_id);
+    if (!name) return res.status(400).json({ error: '区域名称不能为空' });
+    if (parentId === id) return res.status(400).json({ error: '区域不能选择自身作为上级' });
+    if (parentId) {
+      let cursor = db.queryOne('SELECT id,parent_id FROM store_regions WHERE id=?', [parentId]);
+      if (!cursor) return res.status(400).json({ error: '上级区域不存在' });
+      while (cursor) {
+        if (Number(cursor.id) === id) return res.status(400).json({ error: '不能将下级区域设为上级区域' });
+        cursor = cursor.parent_id ? db.queryOne('SELECT id,parent_id FROM store_regions WHERE id=?', [cursor.parent_id]) : null;
+      }
+    }
+    db.run("UPDATE store_regions SET name=?, parent_id=?, sort_order=?, updated_at=datetime('now','localtime') WHERE id=?", [name, parentId || null, Number(req.body.sort_order) || 0, id]);
+    if (Array.isArray(req.body.store_ids)) {
+      db.run('DELETE FROM store_region_members WHERE region_id=?', [id]);
+      normalizeStoreIds(req.body.store_ids).forEach(storeId => db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [id, storeId]));
+    }
+    db.save();
+    res.json({ ok: true, regions: listStoreRegions() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/store-regions/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const region = db.queryOne('SELECT id FROM store_regions WHERE id=?', [id]);
+    if (!region) return res.status(404).json({ error: '区域不存在' });
+    db.run('DELETE FROM store_regions WHERE id=?', [id]);
+    db.save();
+    res.json({ ok: true, regions: listStoreRegions() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 单门店的区域归属只保留一个末级区域。这样在门店列表中调整分组时，
+// 不需要先进入区域再批量勾选，也不会遗留旧分组的重复归属。
+app.put('/api/stores/:id/region-membership', (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    const store = db.queryOne('SELECT id FROM stores WHERE id=?', [storeId]);
+    if (!store) return res.status(404).json({ error: '门店不存在' });
+
+    const rawRegionId = req.body.region_id;
+    const regionId = rawRegionId === '' || rawRegionId == null ? null : Number(rawRegionId);
+    if (regionId != null) {
+      const region = db.queryOne('SELECT id FROM store_regions WHERE id=?', [regionId]);
+      if (!region) return res.status(400).json({ error: '所选区域不存在' });
+      const child = db.queryOne('SELECT id FROM store_regions WHERE parent_id=? LIMIT 1', [regionId]);
+      if (child) return res.status(400).json({ error: '门店只能归属到末级区域' });
+    }
+
+    db.run('DELETE FROM store_region_members WHERE store_id=?', [storeId]);
+    if (regionId != null) db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [regionId, storeId]);
+    db.save();
+    res.json({ ok: true, regions: listStoreRegions() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // 统计卡片
 app.get('/api/db/stores/stats', (req, res) => {
   try {
@@ -696,9 +811,35 @@ app.delete('/api/db/stores/:id', (req, res) => {
 });
 
 // ===== 第三方平台 =====
-app.get('/api/stores/:id/platforms', (req, res) => { try { res.json({ ok: true, platforms: db.queryAll('SELECT * FROM store_platforms WHERE store_id=?', [req.params.id]) }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post('/api/stores/:id/platforms', (req, res) => { try { const { platform_name, platform_id } = req.body; if (!platform_name) return res.status(400).json({ error: '平台名称不能为空' }); const id = db.insert('INSERT INTO store_platforms (store_id,platform_name,platform_id) VALUES (?,?,?)', [req.params.id, platform_name, platform_id||'']); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.put('/api/platforms/:id', (req, res) => { try { const { platform_name, platform_id } = req.body; db.run('UPDATE store_platforms SET platform_name=COALESCE(?,platform_name), platform_id=COALESCE(?,platform_id) WHERE id=?', [platform_name, platform_id, req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+const PLATFORM_NAMES = ['美团外卖', '淘宝闪购', '京东外卖', '美团团购', '抖音团购'];
+const PLATFORM_STATUS = ['已上线', '未上线', '筹备中'];
+function normalizePlatformRecord(value) {
+  const platform_name = String(value?.platform_name || '').trim();
+  const setup_status = String(value?.setup_status || '未上线').trim();
+  const online_date = String(value?.online_date || '').trim();
+  const platform_id = String(value?.platform_id || '').trim();
+  if (!PLATFORM_NAMES.includes(platform_name)) throw new Error('不支持的平台名称');
+  if (!PLATFORM_STATUS.includes(setup_status)) throw new Error('建号状态不正确');
+  if (online_date && !/^\d{4}-\d{2}-\d{2}$/.test(online_date)) throw new Error('上线时间格式应为 YYYY-MM-DD');
+  if (setup_status === '已上线' && !platform_id) throw new Error(`${platform_name} 已上线时必须填写平台 ID`);
+  return { platform_name, setup_status, online_date: online_date || null, platform_id };
+}
+function upsertStorePlatform(storeId, storeName, raw) {
+  const item = normalizePlatformRecord(raw);
+  const rows = db.queryAll('SELECT id FROM store_platforms WHERE store_id=? AND platform_name=? ORDER BY id DESC', [storeId, item.platform_name]);
+  if (rows.length) {
+    db.run("UPDATE store_platforms SET platform_id=?, setup_status=?, online_date=?, updated_at=datetime('now','localtime') WHERE id=?", [item.platform_id, item.setup_status, item.online_date, rows[0].id]);
+    rows.slice(1).forEach(row => db.run('DELETE FROM store_platforms WHERE id=?', [row.id]));
+    return rows[0].id;
+  }
+  return db.insert('INSERT INTO store_platforms (store_id,platform_name,platform_id,setup_status,online_date) VALUES (?,?,?,?,?)', [storeId, item.platform_name, item.platform_id, item.setup_status, item.online_date]);
+}
+app.get('/api/store-platforms', (req, res) => { try { const rows = db.queryAll('SELECT p.*, s.store_name FROM store_platforms p JOIN stores s ON s.id=p.store_id ORDER BY s.store_name, p.id'); res.json({ ok: true, platforms: rows }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get('/api/store-platforms/resolve', (req, res) => { try { const platform_name = String(req.query.platform_name || '').trim(); const platform_id = String(req.query.platform_id || '').trim(); if (!PLATFORM_NAMES.includes(platform_name) || !platform_id) return res.status(400).json({ error: '请提供平台名称和平台 ID' }); const row = db.queryOne('SELECT p.*, s.store_name, s.status AS store_status FROM store_platforms p JOIN stores s ON s.id=p.store_id WHERE p.platform_name=? AND p.platform_id=?', [platform_name, platform_id]); if (!row) return res.status(404).json({ error: '未找到对应门店的平台绑定' }); res.json({ ok: true, store: row }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get('/api/stores/:id/platforms', (req, res) => { try { res.json({ ok: true, platforms: db.queryAll('SELECT * FROM store_platforms WHERE store_id=? ORDER BY id', [req.params.id]) }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post('/api/stores/:id/platforms', (req, res) => { try { const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const id = upsertStorePlatform(Number(req.params.id), store.store_name, req.body); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/stores/:id/platforms', (req, res) => { try { const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const platforms = Array.isArray(req.body.platforms) ? req.body.platforms : []; if (!platforms.length) return res.status(400).json({ error: '请至少提交一个平台' }); platforms.forEach(item => upsertStorePlatform(Number(req.params.id), store.store_name, item)); db.save(); res.json({ ok: true, platforms: db.queryAll('SELECT * FROM store_platforms WHERE store_id=? ORDER BY id', [req.params.id]) }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/platforms/:id', (req, res) => { try { const current = db.queryOne('SELECT p.*, s.store_name FROM store_platforms p JOIN stores s ON s.id=p.store_id WHERE p.id=?', [req.params.id]); if (!current) return res.status(404).json({ error: '平台记录不存在' }); upsertStorePlatform(current.store_id, current.store_name, { ...current, ...req.body }); db.save(); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.delete('/api/platforms/:id', (req, res) => { try { db.run('DELETE FROM store_platforms WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 员工 =====
@@ -1003,6 +1144,29 @@ app.delete('/api/fixed-costs/:id', (req, res) => { try { db.run('DELETE FROM sto
 app.get('/api/stores/:id/operating-costs', (req, res) => { try { res.json({ ok: true, costs: db.queryAll('SELECT * FROM store_operating_costs WHERE store_id=? ORDER BY date DESC, id DESC', [req.params.id]) }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/stores/:id/operating-costs', (req, res) => { try { const { store_name, date, item, amount } = req.body; if (!item) return res.status(400).json({ error: '事项不能为空' }); const id = db.insert('INSERT INTO store_operating_costs (store_id,store_name,date,item,amount) VALUES (?,?,?,?,?)', [req.params.id, store_name||'', date||new Date().toISOString().slice(0,10), item, amount||0]); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put('/api/stores/:id/monthly-wage', (req, res) => { try { const month = String(req.body.month || ''); const amount = Number(req.body.amount); if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: '请选择工资月份' }); if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: '请输入有效工资金额' }); const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const date = `${month}-01`; const current = db.queryOne("SELECT id FROM store_operating_costs WHERE store_id=? AND item='月度工资' AND substr(date,1,7)=? ORDER BY id DESC LIMIT 1", [req.params.id, month]); if (current) db.run('UPDATE store_operating_costs SET store_name=?, date=?, amount=? WHERE id=?', [store.store_name, date, amount, current.id]); else db.insert("INSERT INTO store_operating_costs (store_id,store_name,date,item,amount) VALUES (?,?,?,?,?)", [req.params.id, store.store_name, date, '月度工资', amount]); db.save(); res.json({ ok: true, message: '月度工资已保存' }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.put('/api/stores/:id/monthly-operating-cost', (req, res) => {
+  try {
+    const month = String(req.body.month || '');
+    const item = String(req.body.item || '').trim();
+    const amount = Number(req.body.amount);
+    const allowedItems = new Set(['月度工资', '月度房租及物业', '月度水电费']);
+    if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: '请选择成本月份' });
+    if (!allowedItems.has(item)) return res.status(400).json({ error: '仅可记录工资、房租/物业或水电费' });
+    if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: '请输入有效金额' });
+    const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]);
+    if (!store) return res.status(404).json({ error: '门店不存在' });
+    const date = `${month}-01`;
+    const existing = db.queryAll('SELECT id FROM store_operating_costs WHERE store_id=? AND item=? AND substr(date,1,7)=? ORDER BY id DESC', [req.params.id, item, month]);
+    if (existing.length) {
+      db.run('UPDATE store_operating_costs SET store_name=?, date=?, amount=? WHERE id=?', [store.store_name, date, amount, existing[0].id]);
+      existing.slice(1).forEach(row => db.run('DELETE FROM store_operating_costs WHERE id=?', [row.id]));
+    } else {
+      db.insert('INSERT INTO store_operating_costs (store_id,store_name,date,item,amount) VALUES (?,?,?,?,?)', [req.params.id, store.store_name, date, item, amount]);
+    }
+    db.save();
+    res.json({ ok: true, message: '月度运营成本已保存' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.delete('/api/operating-costs/:id', (req, res) => { try { db.run('DELETE FROM store_operating_costs WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 菜品管理 =====
@@ -1732,6 +1896,10 @@ app.get('/api/bookkeeping/entries', (req, res) => {
     let sql = 'SELECT * FROM bookkeeping_entries WHERE 1=1';
     const params = [];
     if (store_id) { sql += ' AND store_id=?'; params.push(store_id); }
+    else if (req.query.store_ids) {
+      const storeIds = String(req.query.store_ids).split(',').map(Number).filter(id => Number.isInteger(id) && id > 0);
+      if (storeIds.length) { sql += ` AND store_id IN (${storeIds.map(() => '?').join(',')})`; params.push(...storeIds); }
+    }
     else if (req.query.store_id) { sql += ' AND store_id=?'; params.push(req.query.store_id); }
     if (date_from) { sql += ' AND date>=?'; params.push(date_from); }
     if (date_to) { sql += ' AND date<=?'; params.push(date_to); }
@@ -1893,6 +2061,14 @@ app.delete('/api/bookkeeping/entries/:id', (req, res) => {
     db.save();
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 记账本备份/更新覆盖导入：先删除 date >= replace_from 的本地记账，再导入文件（Excel，含 日期/门店名称/大类/小类/金额）
+app.post('/api/bookkeeping/import-replace', (req, res) => {
+  try {
+    const result = ledgerBackupImport.importLedgerBackup(db, req.body || {}, req.user);
+    res.status(201).json(result);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ===== 用户管理 =====
@@ -2303,17 +2479,24 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       utilities: sourceFor('utilities', 'bookkeeping'),
     };
     const period = monthlyDashboardRange(month, as_of);
-    const scopedStoreId = req.user.store_id || store_id || null;
+    const requestedStoreIds = String(req.query.store_ids || store_id || '')
+      .split(',').map(Number).filter(id => Number.isInteger(id) && id > 0);
+    const scopedStoreIds = req.user.store_id ? [Number(req.user.store_id)] : [...new Set(requestedStoreIds)];
+    const appendStoreScope = (where, params, field = 'store_id') => {
+      if (!scopedStoreIds.length) return;
+      where.push(`${field} IN (${scopedStoreIds.map(() => '?').join(',')})`);
+      params.push(...scopedStoreIds);
+    };
     const where = ['date>=?', 'date<=?'];
     const params = [period.start, period.cutoff];
-    if (scopedStoreId) { where.push('store_id=?'); params.push(scopedStoreId); }
+    appendStoreScope(where, params);
     const monthRows = db.queryAll(
       `SELECT category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${where.join(' AND ')} GROUP BY category_name, subcategory_name`,
       params
     );
     const dayWhere = ['date=?'];
     const dayParams = [period.cutoff];
-    if (scopedStoreId) { dayWhere.push('store_id=?'); dayParams.push(scopedStoreId); }
+    appendStoreScope(dayWhere, dayParams);
     const dayRows = db.queryAll(`SELECT category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${dayWhere.join(' AND ')} GROUP BY category_name, subcategory_name`, dayParams);
     const profitRows = db.queryAll(
       `SELECT date, category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${where.join(' AND ')} GROUP BY date, category_name, subcategory_name ORDER BY date`,
@@ -2328,19 +2511,21 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
     const ledgerUtilitiesAmount = recordedAmount(isUtilities);
     const previousPeriod = previousMonthRange(month);
     const sourceMetaByKey = {
-      operating_previous: { label: '门店管理 · 运营成本上月数据', detail: `${previousPeriod.month} 月度工资；房租/水电暂未配置，因此按 ¥0.00 计算` },
-      operating_current: { label: '门店管理 · 运营成本本月数据', detail: `${month} 月度工资；房租/水电暂未配置，因此按 ¥0.00 计算` },
+      operating_previous: { label: '门店管理 · 运营成本上月数据', detail: `${previousPeriod.month} 的工资、房租/物业、水电费月度记录` },
+      operating_current: { label: '门店管理 · 运营成本本月数据', detail: `${month} 的工资、房租/物业、水电费月度记录` },
       bookkeeping: { label: '记账本记录数据', detail: `按 ${period.start} 至 ${period.cutoff} 的工资、房租/物业、水电记账汇总` },
     };
-    const operatingWageTotal = (source) => {
+    const operatingCostTotal = (item, source) => {
       if (source === 'bookkeeping') return 0;
       const targetPeriod = source === 'operating_previous' ? previousPeriod : { start: period.start, end: period.end };
-      const wageWhere = ["item='月度工资'", 'date>=?', 'date<=?'];
-      const wageParams = [targetPeriod.start, targetPeriod.end];
-      if (scopedStoreId) { wageWhere.push('store_id=?'); wageParams.push(scopedStoreId); }
-      return Number(db.queryOne(`SELECT SUM(amount) AS total FROM store_operating_costs WHERE ${wageWhere.join(' AND ')}`, wageParams)?.total || 0);
+      const costWhere = ['item=?', 'date>=?', 'date<=?'];
+      const costParams = [item, targetPeriod.start, targetPeriod.end];
+      appendStoreScope(costWhere, costParams);
+      return Number(db.queryOne(`SELECT SUM(amount) AS total FROM store_operating_costs WHERE ${costWhere.join(' AND ')}`, costParams)?.total || 0);
     };
-    const monthlyWageBasis = costSources.wage === 'bookkeeping' ? ledgerWageAmount : operatingWageTotal(costSources.wage);
+    const monthlyWageBasis = costSources.wage === 'bookkeeping' ? ledgerWageAmount : operatingCostTotal('月度工资', costSources.wage);
+    const monthlyRentBasis = costSources.rent === 'bookkeeping' ? ledgerRentAmount : operatingCostTotal('月度房租及物业', costSources.rent);
+    const monthlyUtilitiesBasis = costSources.utilities === 'bookkeeping' ? ledgerUtilitiesAmount : operatingCostTotal('月度水电费', costSources.utilities);
     const wage = {
       mode: costSources.wage,
       source_month: costSources.wage === 'operating_previous' ? previousPeriod.month : String(month),
@@ -2358,13 +2543,13 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       },
       {
         key: 'rent', category: '房租及物业费', subcategory: '日应计房租及物业', matcher: isRentOrProperty,
-        basis: costSources.rent === 'bookkeeping' ? ledgerRentAmount : 0, ledger_amount: ledgerRentAmount, source_key: costSources.rent,
-        source: costSources.rent === 'bookkeeping' ? sourceMetaByKey[costSources.rent].label : `${sourceMetaByKey[costSources.rent].label}（暂未配置房租/物业）`,
+        basis: monthlyRentBasis, ledger_amount: ledgerRentAmount, source_key: costSources.rent,
+        source: sourceMetaByKey[costSources.rent].label,
       },
       {
         key: 'utilities', category: '店租物水电费', subcategory: '日应计水电', matcher: isUtilities,
-        basis: costSources.utilities === 'bookkeeping' ? ledgerUtilitiesAmount : 0, ledger_amount: ledgerUtilitiesAmount, source_key: costSources.utilities,
-        source: costSources.utilities === 'bookkeeping' ? sourceMetaByKey[costSources.utilities].label : `${sourceMetaByKey[costSources.utilities].label}（暂未配置水电）`,
+        basis: monthlyUtilitiesBasis, ledger_amount: ledgerUtilitiesAmount, source_key: costSources.utilities,
+        source: sourceMetaByKey[costSources.utilities].label,
       },
     ].map(item => ({
       ...item,
@@ -2409,10 +2594,12 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
     const cumulativeExpense = totals(expenseRows, 'cumulative_amount');
     const storedValue = rows => rows.reduce((sum, row) => isStoredValue(row) && Number(row.amount || 0) > 0 ? sum + Number(row.amount) : sum, 0);
     let storeName = '全门店汇总';
-    if (scopedStoreId) {
-      const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [scopedStoreId]);
+    if (scopedStoreIds.length === 1) {
+      const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [scopedStoreIds[0]]);
       if (!store) return res.status(404).json({ error: '门店不存在' });
       storeName = store.store_name;
+    } else if (scopedStoreIds.length > 1) {
+      storeName = `${scopedStoreIds.length} 家门店汇总`;
     }
     res.json({
       ok: true,
@@ -2576,6 +2763,22 @@ app.post('/api/business-analytics/diagnoses', (req, res) => {
 app.post('/api/business-analytics/import', (req, res) => {
   try {
     const result = businessAnalytics.importWorkbook(db, req.body || {}, req.user);
+    res.status(201).json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 美团“全部门店营业额收入单量”报表：严格按第三方平台档案的美团外卖门店 ID 关联。
+app.post('/api/business-analytics/import/meituan-delivery', (req, res) => {
+  try {
+    const result = businessAnalytics.importMeituanDeliveryWorkbook(db, req.body || {}, req.user);
+    res.status(201).json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 淘宝闪购“全部门店营业额收入单量”报表：与美团同口径，按淘宝闪购平台门店 ID 关联。
+app.post('/api/business-analytics/import/taobao-flash', (req, res) => {
+  try {
+    const result = businessAnalytics.importTaobaoFlashWorkbook(db, req.body || {}, req.user);
     res.status(201).json({ ok: true, ...result });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });

@@ -25,9 +25,7 @@
           <span>维护名称、分类、规格、价格与销售状态</span>
         </div>
         <div class="menu-filters">
-          <el-select v-model="storeFilter" clearable filterable placeholder="全部门店" @change="loadData">
-            <el-option v-for="store in storeList" :key="store.id" :label="store.store_name" :value="store.id" />
-          </el-select>
+          <StoreRegionSelect v-model="storeFilter" :stores="storeList" placeholder="全部门店或按区域定位" @update:model-value="loadData" />
           <el-input v-model="search" clearable placeholder="搜索菜品名称" class="wide-filter" />
           <el-select v-model="categoryFilter" clearable placeholder="全部分类">
             <el-option v-for="category in categories" :key="category" :label="category" :value="category" />
@@ -139,6 +137,7 @@ import { computed, onMounted, ref } from 'vue'
 import { createMenuItem, deleteMenuItem, getMenuItems, getStores, updateMenuItem } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MenuModuleHeader from './MenuModuleHeader.vue'
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 import { useMenuPagination } from './useMenuPagination'
 import './menu-theme.css'
 
@@ -250,7 +249,7 @@ async function loadData() {
 onMounted(async () => {
   try {
     const stores = await getStores({ page: 1, page_size: 500 })
-    storeList.value = stores.items || stores.data || stores || []
+    storeList.value = stores.stores || []
   } catch {}
   await loadData()
 })

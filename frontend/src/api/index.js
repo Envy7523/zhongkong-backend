@@ -72,6 +72,16 @@ export const getStoreById = (id) => http.get(`/api/db/stores/${id}`)
 export const createStore = (data) => http.post('/api/db/stores', data)
 export const updateStore = (id, data) => http.put(`/api/db/stores/${id}`, data)
 export const deleteStore = (id) => http.delete(`/api/db/stores/${id}`)
+export const getStorePlatforms = () => http.get('/api/store-platforms')
+export const saveStorePlatforms = (storeId, platforms) => http.put(`/api/stores/${storeId}/platforms`, { platforms })
+export const resolveStorePlatform = (params) => http.get('/api/store-platforms/resolve', { params })
+
+// ===== 自定义门店区域 =====
+export const getStoreRegions = () => http.get('/api/store-regions')
+export const createStoreRegion = (data) => http.post('/api/store-regions', data)
+export const updateStoreRegion = (id, data) => http.put(`/api/store-regions/${id}`, data)
+export const deleteStoreRegion = (id) => http.delete(`/api/store-regions/${id}`)
+export const setStoreRegionMembership = (storeId, regionId) => http.put(`/api/stores/${storeId}/region-membership`, { region_id: regionId })
 
 // ===== 门店统计 =====
 export const getStoreStats = () => http.get('/api/db/stores/stats')
@@ -157,6 +167,8 @@ export const autoBindBusinessProductMappings = (scope) => http.post('/api/busine
 export const getBusinessDiagnosis = (params) => http.get('/api/business-analytics/diagnoses', { params })
 export const generateBusinessDiagnosis = (data) => http.post('/api/business-analytics/diagnoses', data)
 export const importBusinessData = (data) => http.post('/api/business-analytics/import', data, { timeout: 120000 })
+export const importMeituanDeliveryData = (data) => http.post('/api/business-analytics/import/meituan-delivery', data, { timeout: 120000 })
+export const importTaobaoFlashData = (data) => http.post('/api/business-analytics/import/taobao-flash', data, { timeout: 120000 })
 export const getBusinessTemplate = (sourceType) => http.get('/api/business-analytics/template', { params: { source_type: sourceType } })
 
 // ===== 菜品销售分析 =====
@@ -189,6 +201,7 @@ export const updateFixedCost = (id, data) => http.put(`/api/fixed-costs/${id}`, 
 export const deleteFixedCost = (id) => http.delete(`/api/fixed-costs/${id}`)
 export const getOperatingCosts = (storeId) => http.get(`/api/stores/${storeId}/operating-costs`)
 export const saveMonthlyWage = (storeId, data) => http.put(`/api/stores/${storeId}/monthly-wage`, data)
+export const saveMonthlyOperatingCost = (storeId, data) => http.put(`/api/stores/${storeId}/monthly-operating-cost`, data)
 export const deleteOperatingCost = (id) => http.delete(`/api/operating-costs/${id}`)
 
 // ===== 协同事项管理 =====

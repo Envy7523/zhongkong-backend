@@ -1473,7 +1473,6 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
 .place-pin-button:hover {
   border-color: #b6c7ff;
   box-shadow: 0 6px 16px rgba(79,124,255,.10);
-  transform: translateY(-1px);
 }
 .place-pin-button.active {
   border-color: #f3c06b;
@@ -1516,8 +1515,6 @@ onBeforeUnmount(() => { chart?.dispose(); destroyAmap(); document.removeEventLis
   text-align: left;
 }
 .pin-list > button:hover { background: #f0f3f8; }
-.pin-list > button:active,
-.place-pin-button:active { transform: translateY(0); }
 .pin-swatch {
   flex: 0 0 auto;
   width: 9px;

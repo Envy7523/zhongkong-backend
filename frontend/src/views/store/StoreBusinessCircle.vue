@@ -12,22 +12,14 @@
     <el-row :gutter="12" style="margin-bottom:16px;">
       <el-col :span="10">
         <!-- 门店模式 -->
-        <el-select
+        <StoreRegionSelect
           v-if="sourceMode === 'store'"
           v-model="selectedStoreId"
-          filterable
-          placeholder="请选择门店"
-          clearable
+          :stores="allStores"
+          placeholder="请选择门店或区域"
           style="width:100%;"
-          @change="onStoreChange"
-        >
-          <el-option
-            v-for="s in allStores"
-            :key="s.id"
-            :label="s.store_name"
-            :value="s.id"
-          />
-        </el-select>
+          @update:model-value="onStoreChange"
+        />
         <!-- 点位模式 -->
         <el-select
           v-else
@@ -134,6 +126,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { getStores, getMapPins, searchAround } from '@/api'
 import { ElMessage } from 'element-plus'
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 
 const sourceMode = ref('store')
 const allStores = ref([])
@@ -287,13 +280,12 @@ function openPoiDetail(poi) {
   border-radius: 8px;
   padding: 12px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
   height: 100%;
 }
 .poi-card:hover {
   border-color: #409eff;
   box-shadow: 0 2px 8px rgba(64,158,255,0.15);
-  transform: translateY(-1px);
 }
 .poi-name {
   font-size: 13px;

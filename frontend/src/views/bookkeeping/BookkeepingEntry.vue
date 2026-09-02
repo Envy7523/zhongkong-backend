@@ -18,6 +18,7 @@
         <el-form-item label="日期" prop="date">
           <el-date-picker
             v-model="form.date"
+            :clearable="false"
             type="date"
             value-format="YYYY-MM-DD"
             placeholder="选择日期"

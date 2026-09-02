@@ -11,9 +11,7 @@
 
     <el-card class="cost-card" shadow="never">
       <div class="toolbar">
-        <el-select v-model="storeId" filterable placeholder="选择门店后维护成本" style="width:280px" @change="loadData">
-          <el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" />
-        </el-select>
+        <StoreRegionSelect v-model="storeId" :stores="stores" placeholder="选择门店或区域" style="width:280px" @update:model-value="loadData" />
         <span v-if="storeId" class="total-text">月度固定成本合计：<strong>¥{{ totalAmount.toFixed(2) }}</strong></span>
       </div>
 
@@ -50,6 +48,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createFixedCost, deleteFixedCost, getFixedCosts, getStores, updateFixedCost } from '@/api'
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 
 const stores = ref([])
 const storeId = ref(null)

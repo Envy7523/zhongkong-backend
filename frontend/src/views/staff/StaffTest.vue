@@ -88,7 +88,7 @@
         </el-col>
         <el-col :span="8">
           <el-form-item label="日期">
-            <el-date-picker v-model="form.date" type="date" placeholder="选择日期" value-format="x" style="width:100%;" />
+            <el-date-picker v-model="form.date" :clearable="false" type="date" placeholder="选择日期" value-format="x" style="width:100%;" />
           </el-form-item>
         </el-col>
       </el-row>

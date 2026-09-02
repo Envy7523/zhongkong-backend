@@ -4,12 +4,10 @@
       <div class="card-header">🧮 日成本核算</div>
       <el-form inline>
         <el-form-item label="门店">
-          <el-select v-model="form.storeId" placeholder="选择门店" style="width:200px;">
-            <el-option v-for="s in stores" :key="s.id" :label="s.store_name" :value="s.id" />
-          </el-select>
+          <StoreRegionSelect v-model="form.storeId" :stores="stores" placeholder="选择门店或区域" style="width:200px;" />
         </el-form-item>
         <el-form-item label="日期">
-          <el-date-picker v-model="form.date" type="date" />
+          <el-date-picker v-model="form.date" :clearable="false" type="date" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="calculate" :loading="loading">🧮 计算日成本</el-button>
@@ -52,6 +50,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { getStores, calculateCost, getCostAccounting } from '@/api'
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 
 const stores = ref([])
 const form = reactive({ storeId: null, date: new Date() })
