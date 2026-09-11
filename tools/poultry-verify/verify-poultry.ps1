@@ -1,6 +1,11 @@
 # 菜品核算端到端验证（自清理）：建档案 -> 算只数 -> 采购对比 -> 模板 -> 清理
 # 说明：本机为 Windows PowerShell 5.1，脚本须以 UTF-8 显式读取后执行，否则中文串会被按 GBK 解析。
+#   作为文件执行：pwsh -File verify-poultry.ps1
+#   用 Invoke-Expression 执行（PS 5.1 下中文必需）：先设 $VerifyDir = 本脚本所在目录绝对路径
 $ErrorActionPreference = 'Stop'
+if (-not $PSScriptRoot) {
+  if (-not $VerifyDir) { throw '请先设置 $VerifyDir = 本脚本所在目录（如 (Resolve-Path tools\poultry-verify).Path）' }
+} else { $VerifyDir = $PSScriptRoot }
 $base = 'http://127.0.0.1:3456'
 
 $login = Invoke-RestMethod -Uri "$base/api/auth/login" -Method Post -ContentType 'application/json' `
@@ -208,8 +213,10 @@ Write-Output ''
 Write-Output '===== 9b. Excel 导入（走真实 xlsx + base64，与页面同路径；目标是自建临时菜） ====='
 $tmpDish2 = Api POST '/api/menu' @{ name = '验证临时菜-导入'; category = '验证临时分类'; spec = '标准'; cost = 0 }
 $tmpDish2Id = $tmpDish2.id
-& node 'F:\NewDeom\_tmp\make-test-xlsx.js' | Out-Null
-$bytes = [System.IO.File]::ReadAllBytes('F:\NewDeom\_tmp\test-import.xlsx')
+$tmpXlsx = Join-Path $VerifyDir 'tmp\test-import.xlsx'
+New-Item -ItemType Directory -Force -Path (Split-Path $tmpXlsx) | Out-Null
+& node (Join-Path $VerifyDir 'make-test-xlsx.js') $tmpXlsx | Out-Null
+$bytes = [System.IO.File]::ReadAllBytes($tmpXlsx)
 $b64 = [System.Convert]::ToBase64String($bytes)
 $imp = Api POST '/api/poultry/import' @{ filename = 'test-import.xlsx'; data = "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,$b64" }
 Check '导入禽类档案' ($imp.birds -eq 1) "birds=$($imp.birds)（禽类值非法的行应报错跳过）"
@@ -246,7 +253,7 @@ foreach ($b in $ownBirds) { Api DELETE "/api/poultry/species/$($b.id)" | Out-Nul
 foreach ($p in (Api GET '/api/poultry/purchases').purchases) {
   if ($p.remark -eq '自动化验证临时数据') { Api DELETE "/api/poultry/purchases/$($p.id)" | Out-Null }
 }
-Remove-Item 'F:\NewDeom\_tmp\test-import.xlsx' -Force -ErrorAction SilentlyContinue
+Remove-Item $tmpXlsx -Force -ErrorAction SilentlyContinue
 
 $a1 = Api GET '/api/poultry/species'
 $a3 = Api GET '/api/poultry/dish-usage?filter=set'

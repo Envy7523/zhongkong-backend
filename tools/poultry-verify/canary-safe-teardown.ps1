@@ -43,12 +43,13 @@ Check '金丝雀已埋好' ($canaryBefore.birds -ge 1 -and $canaryBefore.usage20
 
 Write-Output ''
 Write-Output '===== 跑 verify-poultry.ps1 ====='
-$code = Get-Content -Raw -Encoding UTF8 'F:\NewDeom\_tmp\verify-poultry.ps1'
+$VerifyDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($VerifyDir) { $VerifyDir } else { throw '请先设置 $VerifyDir = 本脚本所在目录' }
+$code = Get-Content -Raw -Encoding UTF8 (Join-Path $VerifyDir 'verify-poultry.ps1')
 Invoke-Expression $code 2>&1 | Select-String 'FAIL|基线|回收|还原|未被改动|===== 验证结束' | ForEach-Object { $_.Line }
 
 Write-Output ''
 Write-Output '===== 跑 verify-poultry-batch.ps1 ====='
-$code2 = Get-Content -Raw -Encoding UTF8 'F:\NewDeom\_tmp\verify-poultry-batch.ps1'
+$code2 = Get-Content -Raw -Encoding UTF8 (Join-Path $VerifyDir 'verify-poultry-batch.ps1')
 Invoke-Expression $code2 2>&1 | Select-String 'FAIL|基线|快照|回收|还原|未被改动|===== 验证结束' | ForEach-Object { $_.Line }
 
 Write-Output ''

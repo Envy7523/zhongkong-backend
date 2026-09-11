@@ -1,6 +1,7 @@
 /** 生成导入用测试工作簿（三页签与正式模板列名一致） */
 const path = require('path');
-const XLSX = require(path.join(__dirname, '..', 'node_modules', 'xlsx'));
+// 依赖从项目根目录的 node_modules 取，脚本可放在任意路径
+const XLSX = require(path.join(__dirname, '..', '..', 'node_modules', 'xlsx'));
 
 const wb = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
@@ -19,6 +20,7 @@ XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
   { '菜品名称': '验证临时菜-导入', '规格': '标准', '分类': '', '品种名称': '', '部位名称': '', '每份耗用数量': '' },
 ]), '③ 菜品耗用');
 
-const out = path.join(__dirname, 'test-import.xlsx');
+// 输出路径可由调用方传入（默认写到脚本同目录）
+const out = process.argv[2] || path.join(__dirname, 'test-import.xlsx');
 XLSX.writeFile(wb, out);
 console.log('written: ' + out);
