@@ -1,22 +1,51 @@
-# 依赖
+# ===== 依赖 =====
 node_modules/
 
-# 敏感配置（含真实凭据）
+# ===== 敏感配置（含真实凭据：企微 corpid/botSecret、AI key）=====
 config.json
+config.local.json
+.env
+.env.*
+
+# ===== 生产服务器连接工具（含 SSH 私钥，等同服务器钥匙）=====
 server-access/
 
-# 数据库（含敏感业务数据，不进 git）
+# ===== 数据库与业务数据快照（含门店流水、员工、账目）=====
 data/database.sqlite
 data/*.sqlite
+data/*.sqlite.bak*
+*.sqlite.bak*
 
-# 系统文件
+# ===== 本地运维 / 抓包 / 浏览器诊断产物 =====
+# .chrome-diagnose 是带登录令牌（localStorage）的 Chrome 配置目录，绝不能入库
+.chrome-diagnose/
+_tmp/
+dist/
+*.log
+npm-debug.log*
+
+# 根目录的一次性排查脚本与输出（内容可能含服务器地址、密钥片段）
+/_*.js
+/_*.txt
+/_*.ps1
+/tools/_*.js
+/scripts/_*.js
+
+# ===== 未压缩的大型 3D 模型（135MB，代码中未引用）=====
+# 如确需入库请改用 git lfs：git lfs track "*.glb"
+frontend/public/models/
+
+# ===== 根目录的数据包 / 压缩包 =====
+# 例：中控后台-数据包-*.zip 内含 server-access 私钥、config.json、database.sqlite，绝不能入库
+/*.zip
+/*.7z
+/*.tar.gz
+/*.rar
+
+# ===== 系统文件 =====
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# 日志
-*.log
-npm-debug.log*
-
-# 运行时上传文件
+# ===== 运行时上传文件 =====
 data/avatars/
