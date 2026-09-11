@@ -134,9 +134,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDishSalesMappings, saveDishSalesMapping, batchSaveDishSalesMappings, deleteDishSalesMapping, autoBindDishSalesMappings } from '@/api'
+
+const route = useRoute()
 
 const items = ref([])
 const menuItems = ref([])
@@ -284,7 +287,17 @@ async function loadData() {
   }
 }
 
-onMounted(loadData)
+// 支持从「菜品核算」的缺口明细直达：?keyword=菜名&mapped=unbound
+// 覆盖率是核算准确度的前提，缺哪个菜就直接跳过来绑哪个，不用再手敲搜索词。
+function applyRouteQuery() {
+  const kw = String(route.query.keyword || '').trim()
+  const mapped = String(route.query.mapped || '').trim()
+  if (kw) search.value = kw
+  if (mapped === 'unbound' || mapped === 'bound') mappedFilter.value = mapped
+}
+
+onMounted(() => { applyRouteQuery(); loadData() })
+watch(() => route.query, () => { applyRouteQuery(); page.value = 1; loadData() })
 </script>
 
 <style scoped>

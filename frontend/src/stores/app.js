@@ -17,21 +17,25 @@ const PAGE_TITLES = {
   'store-management': '门店管理',
   'menu-management': '菜品管理',
   'cost-accounting': '成本核算',
-  'staff-management': '员工管理',
+  'staff-management': '人事专区',
   bookkeeping: '记账本',
+  'store-preparation': '筹建门店',
 }
 
 const SUB_LABELS = {
   analysis: {
-    'total-brand': '总数据 · 全门店汇总', 'total-store': '总数据 · 单店数据', 'total-custom': '总数据 · 自选门店汇总', 'total-monthly-dashboard': '总数据 · 月经营数据看板', 'total-binding': '堂食菜品绑定',
-    'group-meituan': '团购 · 美团团购', 'group-douyin': '团购 · 抖音团购', 'group-free-trial': '团购 · 美团免费试', 'group-brand': '品牌团购汇总', 'group-store': '门店团购汇总', 'group-binding': '团购菜品绑定',
-    'delivery-meituan': '外卖 · 美团外卖', 'delivery-taobao': '外卖 · 淘宝闪购', 'delivery-jd': '外卖 · 京东外卖', 'delivery-brand': '品牌外卖汇总', 'delivery-store': '门店外卖汇总', 'delivery-binding': '外卖菜品绑定',
+    'total-brand': '总数据 · 品牌视角', 'total-store': '总数据 · 门店视角', 'total-custom': '总数据 · 门店视角', 'total-monthly-dashboard': '总数据 · 月经营数据看板', 'total-binding': '堂食菜品绑定',
+    'group-platform': '团购 · 平台视角', 'group-brand': '团购 · 品牌视角', 'group-store': '团购 · 门店视角', 'group-binding': '团购菜品绑定', 'group-meituan': '团购 · 平台视角', 'group-douyin': '团购 · 平台视角', 'group-free-trial': '团购 · 平台视角',
+    'delivery-platform': '外卖 · 平台视角', 'delivery-brand': '外卖 · 品牌视角', 'delivery-store': '外卖 · 门店视角', 'delivery-binding': '外卖菜品绑定',
+    // 兼容此前已打开的单平台标签；再次点击时统一进入平台视角。
+    'delivery-meituan': '外卖 · 平台视角', 'delivery-taobao': '外卖 · 平台视角', 'delivery-jd': '外卖 · 平台视角',
   },
   'store-management': { 'info-basic': '门店基本信息', 'info-circle': '门店商圈', 'info-platform': '第三方平台', 'info-config': '门店配置', map: '全国地图', fixed: '固定成本', operating: '运营成本' },
-  'menu-management': { overview: '菜品总览', category: '菜品分类', template: '菜品模板', cost: '菜品成本', expiry: '效期管理' },
+  'menu-management': { overview: '菜品总览', category: '菜品分类', template: '菜品模板', cost: '菜品成本', expiry: '效期管理', accounting: '菜品核算' },
   'cost-accounting': { daily: '日成本核算', weekly: '周成本核算', monthly: '月成本核算' },
-  'staff-management': { manager: '店长管理', clerk: '店员管理', test: '测试数据' },
+  'staff-management': { manager: '店长管理', clerk: '店员管理', test: '测试数据', employees: '员工管理', store: '门店管理', salary: '工资表制作' },
   bookkeeping: { entry: '门店记账', categories: '记账分类', records: '门店账本' },
+  'store-preparation': { '3d': '门店渲染' },
   'data-import': { pos: '收银系统数据', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' },
 }
 

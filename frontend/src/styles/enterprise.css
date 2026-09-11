@@ -1,0 +1,227 @@
+/* Enterprise workstation: primitives → semantic → component tokens.
+   Scoped to the authenticated shell; retain the separately approved login design.
+   Specific selectors intentionally supersede legacy page-local visual treatments. */
+:root {
+  --ds-white: #ffffff;
+  --ds-gray-50: #f5f7fa;
+  --ds-gray-100: #eef2f6;
+  --ds-gray-200: #e2e8f0;
+  --ds-gray-500: #64748b;
+  --ds-gray-700: #334155;
+  --ds-gray-900: #111827;
+  --ds-blue-50: #eff6ff;
+  --ds-blue-600: #2563eb;
+  --ds-blue-700: #1d4ed8;
+  --ds-green-700: #047857;
+  --ds-red-600: #dc2626;
+  --ds-amber-700: #b45309;
+  --surface-page: var(--ds-gray-50);
+  --surface-card: var(--ds-white);
+  --text-main: var(--ds-gray-900);
+  --text-secondary: var(--ds-gray-700);
+  --text-muted: var(--ds-gray-500);
+  --action-primary: var(--ds-blue-600);
+  --stroke-subtle: var(--ds-gray-200);
+  --panel-radius: 8px;
+  --panel-padding: 18px;
+  --primary-color: var(--action-primary);
+  --primary-light: var(--ds-blue-50);
+  --bg-page: var(--surface-page);
+  --border-light: var(--stroke-subtle);
+  --el-color-primary: var(--action-primary);
+  --el-color-primary-dark-2: var(--ds-blue-700);
+  --el-color-primary-light-3: #6692f1;
+  --el-color-primary-light-5: #92b1f5;
+  --el-color-primary-light-7: #bed0f9;
+  --el-color-primary-light-8: #d3e0fb;
+  --el-color-primary-light-9: var(--ds-blue-50);
+  --el-text-color-primary: var(--text-main);
+  --el-text-color-regular: var(--text-secondary);
+  --el-text-color-secondary: var(--text-muted);
+  --el-border-color: var(--stroke-subtle);
+  --el-border-radius-base: 6px;
+}
+
+.app-layout.enterprise-theme { color: var(--text-main); }
+.app-layout.enterprise-theme .app-sidebar {
+  background: var(--ds-gray-900);
+  box-shadow: none;
+  transition: none;
+}
+.app-layout.enterprise-theme .app-sidebar::after { background: #253044; }
+.app-layout.enterprise-theme .sidebar-brand-mark {
+  background: var(--action-primary);
+  box-shadow: none;
+  border-radius: 8px;
+}
+.app-layout.enterprise-theme .sidebar-brand-copy small,
+.app-layout.enterprise-theme .sidebar-section-label { color: #94a3b8; font-size: 11px; letter-spacing: .04em; }
+.app-layout.enterprise-theme .sidebar-navigation .el-menu-item { border-radius: 6px; color: #bdc7d6 !important; }
+.app-layout.enterprise-theme .sidebar-navigation .el-menu-item.is-active {
+  background: var(--action-primary) !important;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--ds-white) !important;
+}
+.app-layout.enterprise-theme .sidebar-navigation .el-menu-item.is-active .el-icon { color: var(--ds-white); }
+.app-layout.enterprise-theme .sidebar-navigation .el-menu-item.is-active::before { display: none; }
+.app-layout.enterprise-theme .nav-badge { display: none; }
+.app-layout.enterprise-theme .app-topbar { box-shadow: none; border-bottom: 1px solid var(--stroke-subtle); }
+.app-layout.enterprise-theme .topbar-title { color: var(--text-main); font-size: 14px; }
+.app-layout.enterprise-theme .tab-item { border-radius: 0; color: var(--text-muted); transition: color .15s, background-color .15s; }
+.app-layout.enterprise-theme .tab-item.active { color: var(--action-primary); background: var(--ds-blue-50); }
+.app-layout.enterprise-theme .content-area { padding: 20px; container-type: inline-size; container-name: workspace; }
+.app-layout.enterprise-theme .monthly-board-page { max-width: none; margin: 0; padding: 0; }
+
+/* Compact titles: no large decorative hero occupying the first screen. */
+.app-layout.enterprise-theme :is(.analytics-hero, .board-hero, .import-hero) {
+  padding: 0 0 18px;
+  margin-bottom: 18px;
+  border: 0;
+  border-bottom: 1px solid var(--stroke-subtle);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-main);
+  box-shadow: none;
+  align-items: center;
+}
+.app-layout.enterprise-theme :is(.analytics-hero, .board-hero, .import-hero) .eyebrow { display: none; }
+.app-layout.enterprise-theme :is(.analytics-hero, .board-hero, .import-hero) h2 { margin: 0 0 6px; font-size: 24px; letter-spacing: -.02em; color: var(--text-main); }
+.app-layout.enterprise-theme :is(.analytics-hero, .board-hero, .import-hero) p { color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+.app-layout.enterprise-theme .analytics-hero .el-button { background: var(--action-primary); border-color: var(--action-primary); color: var(--ds-white); height: 34px; }
+.app-layout.enterprise-theme .analytics-hero .el-button.is-disabled { opacity: .5; }
+.app-layout.enterprise-theme .board-hero .update-text,
+.app-layout.enterprise-theme .board-hero .update-text b { color: var(--text-muted); }
+
+.app-layout.enterprise-theme :is(.panel, .board-panel, .trend-panel, .daily-cost-panel, .revenue-source-panel,
+  .metric-card, .summary-card, .stat-card, .dash-stat-card, .card-compact, .el-card,
+  .filter-bar, .query-card, .upload-panel) {
+  background: var(--surface-card);
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--panel-radius);
+  box-shadow: none;
+}
+.app-layout.enterprise-theme :is(.stat-card, .dash-stat-card, .metric-card, .summary-card):hover {
+  transform: none;
+  box-shadow: none;
+}
+.app-layout.enterprise-theme :is(.panel, .board-panel, .trend-panel, .daily-cost-panel) > header { padding: 16px 18px; border-bottom: 1px solid var(--stroke-subtle); }
+.app-layout.enterprise-theme :is(.panel, .board-panel, .trend-panel, .daily-cost-panel) h3 { color: var(--text-main); font-size: 15px; }
+.app-layout.enterprise-theme :is(.panel, .board-panel, .trend-panel, .daily-cost-panel) header p { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.app-layout.enterprise-theme :is(.metric-card small, .metric-foot, .summary-card small, .daily-cost-grid em, .daily-cost-grid p) { color: var(--text-muted); font-size: 12px; }
+.app-layout.enterprise-theme :is(.metric-card, .summary-card) { padding: 14px 16px; min-height: 122px; }
+.app-layout.enterprise-theme .metric-card strong { color: var(--text-main); font-size: 22px; margin: 10px 0 8px; overflow-wrap: anywhere; }
+.app-layout.enterprise-theme .metric-card.primary { background: var(--ds-blue-50); border-color: #bfdbfe; }
+.app-layout.enterprise-theme .metric-card.primary strong { color: var(--action-primary); }
+.app-layout.enterprise-theme .metric-card.warning strong { color: var(--ds-amber-700); }
+.app-layout.enterprise-theme .metric-card.success strong { color: var(--ds-green-700); }
+.app-layout.enterprise-theme :is(.metric-card strong, .summary-card b, .el-table .cell) { font-variant-numeric: tabular-nums; }
+.app-layout.enterprise-theme .business-analytics-page .metric-grid,
+.app-layout.enterprise-theme .business-analytics-page .metric-grid.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.app-layout.enterprise-theme .summary-card.stored b { color: var(--ds-red-600); }
+
+/* Fixed control bounds: wrap the toolbar instead of squeezing input text. */
+.app-layout.enterprise-theme .filter-bar { display: flex; flex-wrap: wrap; gap: 12px; padding: 14px; }
+.app-layout.enterprise-theme .filter-bar > .el-date-editor.el-input { width: 184px !important; min-width: 184px !important; flex: 0 0 184px !important; }
+.app-layout.enterprise-theme .filter-bar > .el-date-editor.el-range-editor { width: 300px !important; min-width: 300px !important; flex: 0 0 300px !important; }
+.app-layout.enterprise-theme .filter-bar .delivery-store-picker,
+.app-layout.enterprise-theme .filter-bar .store-region-select { width: 240px !important; min-width: 240px !important; max-width: 240px !important; flex: 0 0 240px !important; }
+.app-layout.enterprise-theme .filter-bar :is(.period-switch, .delivery-platform-switch, .analysis-source-switch) { flex-shrink: 0; }
+.app-layout.enterprise-theme .filter-summary { font-size: 12px; white-space: normal; }
+.app-layout.enterprise-theme .query-card { display: flex; flex-wrap: wrap; gap: 14px; padding: 16px; }
+.app-layout.enterprise-theme .query-field { flex: 0 0 184px; min-width: 184px; }
+.app-layout.enterprise-theme .query-field.store-select { flex-basis: 260px; min-width: 260px; }
+.app-layout.enterprise-theme .query-field .el-date-editor { width: 100% !important; }
+.app-layout.enterprise-theme .query-field :is(.el-input, .el-radio-group) { flex-shrink: 0; }
+.app-layout.enterprise-theme :is(.period-switch, .content-tabs) { background: var(--ds-gray-100); border-radius: 6px; }
+.app-layout.enterprise-theme :is(.period-switch, .content-tabs) button { border-radius: 4px; font-size: 13px; }
+.app-layout.enterprise-theme :is(.period-switch, .content-tabs) button.active { box-shadow: none; color: var(--action-primary); }
+.app-layout.enterprise-theme .compare-button { color: var(--action-primary); border-color: #bfdbfe; background: var(--ds-blue-50); }
+
+/* White enterprise tables. Preserve income/expense/exception row semantics. */
+.app-layout.enterprise-theme .el-table {
+  min-width: 0;
+  font-size: 13px;
+  --el-table-text-color: var(--text-secondary);
+  --el-table-header-text-color: var(--text-muted);
+  --el-table-header-bg-color: var(--ds-gray-50);
+  --el-table-border-color: var(--stroke-subtle);
+  --el-table-row-hover-bg-color: var(--ds-blue-50);
+  --el-table-tr-bg-color: var(--surface-card);
+}
+.app-layout.enterprise-theme .el-table th.el-table__cell { background: var(--ds-gray-50); color: var(--text-muted); font-size: 12px; font-weight: 600; }
+.app-layout.enterprise-theme .el-table .el-table__cell { padding-top: 11px; padding-bottom: 11px; }
+.app-layout.enterprise-theme .el-table--striped .el-table__body tr.el-table__row--striped:not([class*="dashboard-"]) td.el-table__cell { background: #fafbfd; }
+.app-layout.enterprise-theme .el-table .cell { line-height: 22px; }
+.app-layout.enterprise-theme .el-input__wrapper,
+.app-layout.enterprise-theme .el-select__wrapper { min-height: 34px; border-radius: 6px; transition: box-shadow .15s; }
+.app-layout.enterprise-theme .el-button { border-radius: 6px; transition: background-color .15s, color .15s, border-color .15s; }
+.app-layout.enterprise-theme .el-button:hover { transform: none; }
+.app-layout.enterprise-theme button:focus-visible { outline: 2px solid var(--action-primary); outline-offset: 2px; }
+.app-layout.enterprise-theme .el-pagination { flex-wrap: wrap; height: auto; gap: 6px; }
+
+/* Breakpoints depend on content width, including sidebar open/closed state. */
+@container workspace (min-width: 1180px) {
+  .app-layout.enterprise-theme .business-analytics-page .metric-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .app-layout.enterprise-theme .business-analytics-page .metric-grid.compact { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+@container workspace (max-width: 1100px) {
+  .app-layout.enterprise-theme :is(.chart-grid, .tables-grid, .trend-grid) { grid-template-columns: minmax(0, 1fr); }
+  .app-layout.enterprise-theme .revenue-source-panel { flex-direction: column; align-items: stretch; }
+  .app-layout.enterprise-theme .revenue-source-metrics { width: 100%; min-width: 0; }
+}
+@container workspace (max-width: 700px) {
+  .app-layout.enterprise-theme .business-analytics-page .metric-grid,
+  .app-layout.enterprise-theme .business-analytics-page .metric-grid.compact,
+  .app-layout.enterprise-theme .monthly-board-page .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .app-layout.enterprise-theme .filter-summary { width: 100%; margin-left: 0; }
+  .app-layout.enterprise-theme .panel > header { flex-wrap: wrap; }
+}
+@container workspace (max-width: 430px) {
+  .app-layout.enterprise-theme .business-analytics-page .metric-grid,
+  .app-layout.enterprise-theme .business-analytics-page .metric-grid.compact,
+  .app-layout.enterprise-theme .monthly-board-page .metric-grid { grid-template-columns: minmax(0, 1fr); }
+}
+/* Shared module headers and directories use the same visual hierarchy. */
+.app-layout.enterprise-theme :is(.page-hero, .bookkeeping-hero, .menu-module-hero,
+  .map-hero, .platform-hero, .binding-hero, .store3d-header) {
+  background: transparent;
+  box-shadow: none;
+  border: 0;
+  border-bottom: 1px solid var(--stroke-subtle);
+  border-radius: 0;
+  padding: 0 0 18px;
+  margin-bottom: 18px;
+  color: var(--text-main);
+}
+.app-layout.enterprise-theme :is(.page-hero, .bookkeeping-hero, .menu-module-hero,
+  .map-hero, .platform-hero, .binding-hero, .store3d-header) :is(h1, h2) {
+  color: var(--text-main); font-size: 24px; margin: 0 0 6px;
+}
+.app-layout.enterprise-theme :is(.page-hero, .bookkeeping-hero, .menu-module-hero,
+  .map-hero, .platform-hero, .binding-hero, .store3d-header) p {
+  color: var(--text-muted); font-size: 13px; line-height: 1.6;
+}
+.app-layout.enterprise-theme :is(.bookkeeping-eyebrow, .menu-eyebrow, .map-eyebrow, .binding-eyebrow,
+  .page-hero .eyebrow, .platform-hero .eyebrow) { display: none; }
+.app-layout.enterprise-theme :is(.menu-hero-metrics, .hero-metrics, .binding-hero-metrics) :is(span, strong) { color: var(--text-secondary); }
+.app-layout.enterprise-theme :is(.bookkeeping-nav, .menu-module-nav) { gap: 6px; flex-wrap: wrap; }
+.app-layout.enterprise-theme :is(.bookkeeping-nav, .menu-module-nav) button {
+  color: var(--text-muted); background: var(--surface-card); border: 1px solid var(--stroke-subtle); border-radius: 6px;
+  transition: color .15s, background-color .15s;
+}
+.app-layout.enterprise-theme :is(.bookkeeping-nav, .menu-module-nav) button.active {
+  color: var(--action-primary); background: var(--ds-blue-50); border-color: #bfdbfe;
+}
+.app-layout.enterprise-theme :is(.model-directory, .directory-card, .platform-card, .region-console,
+  .entry-card, .history-card, .template-sidebar, .binding-panel) {
+  background: var(--surface-card); border: 1px solid var(--stroke-subtle); border-radius: var(--panel-radius); box-shadow: none;
+}
+.app-layout.enterprise-theme .delivery-settlement-chain {
+  background: var(--surface-card); border: 1px solid var(--stroke-subtle); border-radius: var(--panel-radius); box-shadow: none;
+}
+.app-layout.enterprise-theme .delivery-settlement-chain :is(span, small) { color: var(--text-muted); font-size: 12px; }
+.app-layout.enterprise-theme .delivery-settlement-chain strong { color: var(--text-main); }
+.app-layout.enterprise-theme .delivery-settlement-chain .settlement-result { background: #ecfdf5; border-radius: 6px; }
+.app-layout.enterprise-theme .delivery-settlement-chain .settlement-result strong { color: var(--ds-green-700); }
+@media (max-width: 760px) { .app-layout.enterprise-theme .content-area { padding: 12px; } }

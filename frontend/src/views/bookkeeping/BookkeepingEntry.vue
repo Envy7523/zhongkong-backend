@@ -109,7 +109,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { getBookkeepingCategories, getBookkeepingSubcategories, createBookkeepingEntry } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import BookkeepingHeader from './BookkeepingHeader.vue'
@@ -228,7 +228,26 @@ async function handleSubmit() {
     ElMessage.success('记账成功')
     resetForm()
   } catch (e) {
-    ElMessage.error(e?.response?.data?.message || '提交失败，请稍后再试')
+    const duplicates = e?.response?.data?.duplicates
+    if (e?.response?.status === 409 && duplicates?.length) {
+      const hit = duplicates[0]
+      try {
+        await ElMessageBox.confirm(
+          `该记录与已有记账重复：${hit.date} ${hit.store_name || ''} ${hit.category_name || ''} / ${hit.subcategory_name || ''}，金额 ${Number(hit.amount).toFixed(2)}。确认仍要录入吗？`,
+          '重复记录提示',
+          { type: 'warning', confirmButtonText: '仍要录入', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' }
+        )
+      } catch { return }
+      try {
+        await createBookkeepingEntry({ ...payload, force: true })
+        ElMessage.success('记账成功')
+        resetForm()
+      } catch (e2) {
+        ElMessage.error(e2?.response?.data?.message || '提交失败，请稍后再试')
+      }
+    } else {
+      ElMessage.error(e?.response?.data?.message || '提交失败，请稍后再试')
+    }
   } finally {
     submitting.value = false
   }

@@ -35,7 +35,7 @@
             placeholder="全部分类"
             clearable
             style="width: 180px"
-            @change="handleFilter"
+            @change="handleCategoryChange"
           >
             <el-option
               v-for="cat in categories"
@@ -47,6 +47,26 @@
         </div>
 
         <div class="filter-field">
+          <span class="filter-label">子分类</span>
+          <el-select
+            v-model="filters.subcategory_id"
+            placeholder="先选择分类"
+            clearable
+            filterable
+            :disabled="!filters.category_id"
+            style="width: 180px"
+            @change="handleFilter"
+          >
+            <el-option
+              v-for="subcategory in subcategories"
+              :key="subcategory.id"
+              :label="subcategory.name"
+              :value="subcategory.id"
+            />
+          </el-select>
+        </div>
+
+        <div class="filter-field view-filter">
           <span class="filter-label">视图</span>
           <el-radio-group v-model="mode">
             <el-radio-button value="detail">每日明细</el-radio-button>
@@ -71,8 +91,12 @@
         <span class="card-total">
           合计：<strong :class="amountClass(sumAmount)">{{ formatAmount(sumAmount) }}</strong>
         </span>
+        <el-button v-if="selectedEntries.length" type="danger" plain size="small" @click="handleBatchDelete">
+          批量删除所选 {{ selectedEntries.length }} 条
+        </el-button>
       </div>
-      <el-table :data="entries" v-loading="loading" stripe style="width: 100%">
+      <el-table :data="entries" v-loading="loading" stripe style="width: 100%" row-key="id" @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="46" fixed="left" reserve-selection />
         <el-table-column prop="date" label="日期" width="110" />
         <el-table-column prop="store_name" label="门店" min-width="170" show-overflow-tooltip />
         <el-table-column prop="category_name" label="分类" width="120" />
@@ -195,7 +219,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getBookkeepingEntries, deleteBookkeepingEntry, getBookkeepingCategories, getStores, previewBookkeepingQuickEntry, commitBookkeepingQuickEntry } from '@/api'
+import { getBookkeepingEntries, deleteBookkeepingEntry, batchDeleteBookkeepingEntries, getBookkeepingCategories, getBookkeepingSubcategories, getStores, previewBookkeepingQuickEntry, commitBookkeepingQuickEntry } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import BookkeepingHeader from './BookkeepingHeader.vue'
 import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
@@ -215,8 +239,10 @@ const selectedStoreLabel = computed(() => {
 const mode = ref('detail')
 const loading = ref(false)
 const entries = ref([])
+const selectedEntries = ref([])
 const summaryRows = ref([])
 const categories = ref([])
+const subcategories = ref([])
 const stores = ref([])
 const recordTotal = ref(0)
 const detailPage = ref(1)
@@ -233,6 +259,7 @@ const filters = reactive({
   date_from: '',
   date_to: '',
   category_id: null,
+  subcategory_id: null,
   store_ids: []
 })
 
@@ -275,6 +302,9 @@ function buildParams() {
   if (filters.category_id != null && filters.category_id !== '') {
     params.category_id = filters.category_id
   }
+  if (filters.subcategory_id != null && filters.subcategory_id !== '') {
+    params.subcategory_id = filters.subcategory_id
+  }
   if (canSelectStore.value && filters.store_ids.length) {
     params.store_ids = filters.store_ids.join(',')
   } else if (authStore.user?.store_id != null) {
@@ -290,6 +320,7 @@ function buildParams() {
 
 async function loadData() {
   loading.value = true
+  selectedEntries.value = []
   try {
     if (mode.value === 'summary') {
       const data = await getBookkeepingEntries(buildParams())
@@ -318,6 +349,20 @@ async function loadCategories() {
   }
 }
 
+async function loadSubcategories() {
+  if (!filters.category_id) {
+    subcategories.value = []
+    return
+  }
+  try {
+    const data = await getBookkeepingSubcategories({ category_id: filters.category_id })
+    subcategories.value = data?.subcategories || []
+  } catch (e) {
+    subcategories.value = []
+    ElMessage.error('加载子分类失败')
+  }
+}
+
 async function loadStores() {
   if (!canSelectStore.value) return
   try {
@@ -333,10 +378,18 @@ function handleFilter() {
   loadData()
 }
 
+async function handleCategoryChange() {
+  filters.subcategory_id = null
+  await loadSubcategories()
+  handleFilter()
+}
+
 function resetFilters() {
   filters.date_from = ''
   filters.date_to = ''
   filters.category_id = null
+  filters.subcategory_id = null
+  subcategories.value = []
   filters.store_ids = []
   detailPage.value = 1
   loadData()
@@ -382,7 +435,28 @@ async function commitQuickEntry() {
     quickEntryVisible.value = false
     await Promise.all([loadCategories(), loadData()])
   } catch (error) {
-    ElMessage.error(error.message || '录入失败')
+    const duplicates = error?.response?.data?.duplicates
+    if (error?.response?.status === 409 && duplicates?.length) {
+      const hit = duplicates[0]
+      try {
+        await ElMessageBox.confirm(
+          `检测到 ${duplicates.length} 条与已有记账重复，例如 ${hit.date} ${hit.store_name || ''} ${hit.category_name || ''} / ${hit.subcategory_name || ''} 金额 ${Number(hit.amount).toFixed(2)}。确认仍要录入吗？`,
+          '重复记录提示',
+          { type: 'warning', confirmButtonText: '仍要录入', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' }
+        )
+      } catch { return }
+      quickSubmitting.value = true
+      try {
+        const data2 = await commitBookkeepingQuickEntry({ date: quickDate.value, text: quickText.value, force: true })
+        ElMessage.success(`已录入 ${data2?.inserted || quickPreviewRows.value.length} 条数据`)
+        quickEntryVisible.value = false
+        await Promise.all([loadCategories(), loadData()])
+      } catch (e2) {
+        ElMessage.error(e2?.response?.data?.message || e2?.message || '录入失败')
+      } finally { quickSubmitting.value = false }
+    } else {
+      ElMessage.error(error?.response?.data?.message || error?.message || '录入失败')
+    }
   } finally { quickSubmitting.value = false }
 }
 
@@ -402,6 +476,28 @@ async function handleDelete(row) {
     loadData()
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || e?.message || '删除失败')
+  }
+}
+
+function onSelectionChange(rows) { selectedEntries.value = rows || [] }
+
+async function handleBatchDelete() {
+  const ids = (selectedEntries.value || []).map(row => row.id).filter(Boolean)
+  if (!ids.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除所选 ${ids.length} 条记账记录吗？此操作不可恢复。`,
+      '批量删除确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消', confirmButtonClass: 'el-button--danger' }
+    )
+  } catch { return }
+  try {
+    const res = await batchDeleteBookkeepingEntries(ids)
+    ElMessage.success(`已删除 ${res.deleted || ids.length} 条记录`)
+    selectedEntries.value = []
+    loadData()
+  } catch (e) {
+    ElMessage.error(e?.response?.data?.message || e?.message || '批量删除失败')
   }
 }
 
@@ -468,7 +564,7 @@ onMounted(() => {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(300px, 1.6fr) repeat(3, minmax(160px, .72fr)) auto;
+  grid-template-columns: minmax(400px, 1.45fr) minmax(200px, .9fr) 165px 165px 205px auto;
   align-items: flex-end;
   gap: 12px;
   margin-top: 18px;
@@ -500,7 +596,13 @@ onMounted(() => {
 
 .filter-actions {
   justify-content: flex-end;
+  white-space: nowrap;
 }
+
+.view-filter :deep(.el-radio-group) { display: inline-flex; height: 34px; flex: 0 0 auto; flex-wrap: nowrap; vertical-align: middle; }
+.view-filter :deep(.el-radio-button) { display: flex; }
+.view-filter :deep(.el-radio-button__inner) { display: flex; min-height: 34px; align-items: center; padding: 0 13px; border-color: #d9e2ef; color: #61708a; font-size: 13px; font-weight: 500; line-height: 1; white-space: nowrap; box-shadow: none; }
+.view-filter :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) { border-color: #2f6fed; background: #2f6fed; color: #fff; box-shadow: -1px 0 0 0 #2f6fed; }
 
 .card-head {
   display: flex;

@@ -101,7 +101,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getMenuItems, updateMenuItem } from '@/api'
 import { ElMessage } from 'element-plus'
 import MenuModuleHeader from './MenuModuleHeader.vue'
@@ -119,7 +119,7 @@ const editingItem = ref(null)
 const expiryDays = ref(0)
 const saleStatus = ref('在售')
 
-const categories = computed(() => [...new Set(items.value.map(item => item.category).filter(Boolean))].sort())
+const categories = computed(() => [...new Set(items.value.map(item => item.category).filter(Boolean))])
 function riskGroup(days) {
   const value = Number(days) || 0
   if (!value) return 'unset'
@@ -186,7 +186,12 @@ async function loadData() {
   } catch (error) { ElMessage.error('加载失败：' + error.message) }
   finally { loading.value = false }
 }
-onMounted(loadData)
+const refreshMenuCategoryOrder = () => loadData()
+onMounted(() => {
+  window.addEventListener('menu-category-order-changed', refreshMenuCategoryOrder)
+  loadData()
+})
+onBeforeUnmount(() => window.removeEventListener('menu-category-order-changed', refreshMenuCategoryOrder))
 </script>
 
 <style scoped>

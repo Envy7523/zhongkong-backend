@@ -113,7 +113,7 @@
 </template>
 
 <script setup>
-import { computed, defineComponent, h, onMounted, ref } from 'vue'
+import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getMenuCostComponents, getMenuItems, saveMenuCostComponents } from '@/api'
 import { ElMessage } from 'element-plus'
 import MenuModuleHeader from './MenuModuleHeader.vue'
@@ -152,7 +152,7 @@ const MarginCell = defineComponent({
     ])
   },
 })
-const categories = computed(() => [...new Set(items.value.map(item => item.category).filter(Boolean))].sort())
+const categories = computed(() => [...new Set(items.value.map(item => item.category).filter(Boolean))])
 const filteredItems = computed(() => {
   const keyword = search.value.trim().toLowerCase()
   return items.value.filter(item => {
@@ -241,7 +241,12 @@ async function loadData() {
   } catch (error) { ElMessage.error('加载失败：' + error.message) }
   finally { loading.value = false }
 }
-onMounted(loadData)
+const refreshMenuCategoryOrder = () => loadData()
+onMounted(() => {
+  window.addEventListener('menu-category-order-changed', refreshMenuCategoryOrder)
+  loadData()
+})
+onBeforeUnmount(() => window.removeEventListener('menu-category-order-changed', refreshMenuCategoryOrder))
 </script>
 
 <style scoped>

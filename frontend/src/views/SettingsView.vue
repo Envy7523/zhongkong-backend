@@ -7,10 +7,10 @@
     <div class="card-compact">
       <div class="card-header">关于</div>
       <div style="color:#666;line-height:1.8;">
-        <p><strong>鹅太公中控后台 v0.4.0</strong></p>
-        <p>前端：Vue 3 + Element Plus + ECharts + 高德地图 · 后端：Node.js + Express 5 + SQLite</p>
-        <p style="margin-top:8px;">启动方式：<code>node server.js</code> 启动后端（端口 3456），<code>cd frontend &amp;&amp; npx vite --host</code> 启动前端（端口 5173），访问 <code>http://localhost:5173</code></p>
-        <p style="margin-top:4px;font-size:12px;color:#999;">默认登录：admin / admin123</p>
+        <p><strong>鹅太公中控后台 v0.5.0</strong></p>
+        <p style="font-size:12px;color:#999;">更新于 2026-09-08</p>
+        <p style="margin-top:8px;">门店档案与区域管理、菜品总览（菜品 / 套餐档案、SKUID 编码与成本核算）、外卖与团购菜品绑定（规格拆分、平台 ID 对账）、平台账单导入与真实到账核对、月经营数据看板、记账本等一体化经营管理。</p>
+        <p style="margin-top:8px;">前端：Vue 3 + Element Plus + ECharts + 高德地图 · 后端：Node.js + Express + SQLite（本地数据）</p>
       </div>
     </div>
   </div>

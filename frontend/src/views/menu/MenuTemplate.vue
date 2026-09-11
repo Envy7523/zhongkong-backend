@@ -139,7 +139,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, reactive } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, reactive } from 'vue'
 import {
   getMenuTemplates, createMenuTemplate, updateMenuTemplate, deleteMenuTemplate,
   getMenuTemplateDetail, createTemplateItem, updateTemplateItem, deleteTemplateItem,
@@ -312,13 +312,18 @@ async function removeItem(row) {
   }
 }
 
+async function refreshMenuCategories() {
+  try { const res = await getMenuCategories(); categories.value = res.categories || [] }
+  catch { /* 保留当前分类 */ }
+}
+const refreshMenuCategoryOrder = () => refreshMenuCategories()
 // ===== 初始化 =====
 onMounted(async () => {
+  window.addEventListener('menu-category-order-changed', refreshMenuCategoryOrder)
   await loadTemplates()
-  // 加载分类
-  try { const res = await getMenuCategories(); categories.value = res.categories || [] }
-  catch { /* 忽略 */ }
+  await refreshMenuCategories()
 })
+onBeforeUnmount(() => window.removeEventListener('menu-category-order-changed', refreshMenuCategoryOrder))
 </script>
 
 <style scoped>

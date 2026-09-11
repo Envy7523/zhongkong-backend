@@ -227,3 +227,91 @@
   .metric-strip { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .menu-pagination-footer { align-items: flex-start; flex-direction: column; }
 }
+
+/* 菜品管理重构：以档案工作台为主线，子页共用相同层级与密度 */
+.menu-module-page {
+  --menu-ink: #172b4d;
+  --menu-muted: #73819a;
+  --menu-line: #dfe7f3;
+  --menu-primary: #2468e8;
+  --menu-green: #159a72;
+  --menu-orange: #d97706;
+  max-width: none;
+}
+.menu-module-hero {
+  min-height: 126px;
+  margin-bottom: 14px;
+  padding: 20px 22px 48px;
+  overflow: visible;
+  border: 1px solid var(--menu-line);
+  border-radius: 12px;
+  color: var(--menu-ink);
+  background: #fff;
+  box-shadow: 0 3px 12px rgba(28, 55, 100, .035);
+}
+.menu-eyebrow { color: #5e7fab; font-size: 11px; letter-spacing: .12em; }
+.menu-hero-copy h2 { margin: 5px 0 4px; color: #102a56; font-size: 23px; line-height: 1.25; }
+.menu-hero-copy p { color: #6e809b; font-size: 13px; }
+.menu-hero-metrics { align-items: center; gap: 8px; }
+.menu-hero-metrics > div {
+  min-width: 84px;
+  padding: 8px 11px;
+  border-color: #e4ebf5;
+  border-radius: 9px;
+  background: #f7faff;
+}
+.menu-hero-metrics strong { color: #1e5ccc; font-size: 20px; }
+.menu-hero-metrics strong.success { color: var(--menu-green); }
+.menu-hero-metrics strong.warning { color: var(--menu-orange); }
+.menu-hero-metrics span { color: #7788a1; }
+.menu-module-nav { left: 18px; bottom: -1px; gap: 2px; }
+.menu-module-nav button {
+  padding: 12px 14px 11px;
+  color: #73819a;
+  font-size: 13px;
+}
+.menu-module-nav button:hover { color: var(--menu-primary); background: #f6f9ff; }
+.menu-module-nav button.active { border-bottom-color: var(--menu-primary); color: var(--menu-primary); }
+.menu-panel { border-radius: 12px; box-shadow: none; }
+.menu-panel-header { min-height: 76px; padding: 15px 18px; }
+.menu-panel-title h3 { color: #18345d; font-size: 16px; }
+.menu-panel-title span { color: #7686a0; }
+.menu-data-table th.el-table__cell { background: #f6f8fc !important; color: #60738f; }
+.menu-data-table td.el-table__cell { height: 66px; }
+.metric-strip { gap: 10px; margin-bottom: 14px; }
+.metric-card { min-height: 99px; padding: 15px 17px; border-radius: 11px; box-shadow: none; }
+.metric-card.metric-main { border-color: #b9d0ff; background: linear-gradient(135deg, #f5f9ff, #fff); }
+.metric-card strong { margin: 6px 0 3px; color: #173f8a; font-size: 22px; }
+.metric-card strong.metric-success { color: #159a72; }
+.metric-card strong.metric-warning { color: #d97706; }
+.menu-pagination-footer { min-height: 56px; }
+.menu-dialog .el-dialog__header { margin-right: 0; padding: 18px 22px 14px; border-bottom: 1px solid #edf1f7; }
+.menu-dialog .el-dialog__body { padding: 18px 22px 10px; }
+.menu-dialog .el-dialog__footer { padding: 14px 22px 18px; border-top: 1px solid #edf1f7; }
+
+/* 菜品档案总览 */
+.menu-archive-title { display: flex; align-items: center; gap: 15px; }
+.archive-status { display: inline-flex; align-items: center; gap: 6px; color: #168160; font-size: 12px; font-weight: 650; white-space: nowrap; }
+.archive-status i { width: 7px; height: 7px; border-radius: 50%; background: #21ba88; box-shadow: 0 0 0 4px #e7faf2; }
+.archive-status-switch { --el-segmented-bg-color: #f4f7fb; --el-segmented-item-selected-bg-color: #2468e8; --el-segmented-item-selected-color: #fff; }
+.sku-code { display: block; margin-top: 5px; color: #8b98ab; font-size: 11px; }
+.price-stack { display: inline-grid; grid-template-columns: repeat(3, auto); gap: 8px; text-align: left; }
+.price-stack span { color: #8a98ab; font-size: 11px; white-space: nowrap; }
+.price-stack b { margin-left: 2px; color: #344054; font-size: 12px; font-variant-numeric: tabular-nums; }
+.price-stack span:nth-child(2) b { color: #bd772a; }
+.price-stack span:nth-child(3) b { color: #2468c9; }
+.cost-cell { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+
+@media (max-width: 1100px) {
+  .menu-hero-metrics > div { display: none; }
+  .menu-panel-header { align-items: flex-start; flex-direction: column; }
+  .menu-filters { width: 100%; }
+}
+@media (max-width: 700px) {
+  .menu-module-hero { min-height: 153px; padding: 17px 16px 45px; }
+  .menu-module-nav { left: 8px; overflow-x: auto; max-width: calc(100% - 16px); }
+  .menu-module-nav button { padding-inline: 10px; white-space: nowrap; }
+  .menu-filters .el-input, .menu-filters .el-select, .menu-filters .wide-filter { width: 100%; }
+  .metric-strip { grid-template-columns: 1fr 1fr; }
+  .price-stack { grid-template-columns: 1fr; gap: 2px; }
+}

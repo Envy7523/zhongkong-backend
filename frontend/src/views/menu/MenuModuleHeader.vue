@@ -1,7 +1,7 @@
 <template>
   <section class="menu-module-hero">
     <div class="menu-hero-copy">
-      <span class="menu-eyebrow">MENU OPERATIONS</span>
+      <span class="menu-eyebrow">菜品管理</span>
       <h2>{{ title }}</h2>
       <p>{{ description }}</p>
     </div>
@@ -42,5 +42,7 @@ const navItems = [
   { id: 'menu-management-template', label: '菜品模板' },
   { id: 'menu-management-cost', label: '成本分析' },
   { id: 'menu-management-expiry', label: '效期管理' },
+  // 菜品核算：暂挂「菜品管理」下，功能打通后迁往「成本核算」时改成 cost-accounting-accounting
+  { id: 'menu-management-accounting', label: '菜品核算' },
 ]
 </script>

@@ -14,8 +14,11 @@ const { parseDailyExcel, toReportData } = require('./lib/daily-data');
 const db = require('./lib/db');
 const collabService = require('./lib/collab-service');
 const businessAnalytics = require('./lib/business-analytics');
+const poultryAccounting = require('./lib/poultry-accounting');
 const ledgerBackupImport = require('./lib/bookkeeping-import');
 const wecomBot = require('./lib/wecom-bot');
+const staffImport = require('./lib/staff-import');
+const wecomStaffSync = require('./lib/wecom-staff-sync');
 const { createBusinessAssistant } = require('./lib/wecom-business-assistant');
 const jwt = require('jsonwebtoken');
 
@@ -28,7 +31,39 @@ const CONFIG_PATH = path.join(__dirname, 'config.json');
 const AVATAR_DIR = path.join(__dirname, 'data', 'avatars');
 if (!fs.existsSync(AVATAR_DIR)) fs.mkdirSync(AVATAR_DIR, { recursive: true });
 const businessAssistant = createBusinessAssistant({ db, businessAnalytics, getAiConfig: getActiveAiConfig });
-wecomBot.setTextMessageHandler(async (content) => (await businessAssistant.answer(content)).reply);
+wecomBot.setTextMessageHandler(async (content) => {
+  // 用户在会话里发送企微文档/智能表格链接：长连接机器人无法直接读取文档内容，给出导出文件导入指引
+  const link = String(content || '').match(/https:\/\/doc\.weixin\.qq\.com\/\S+/);
+  if (link) {
+    return [
+      '检测到这是企业微信文档／智能表格链接 📄',
+      '我无法直接读取链接内容（长连接机器人不支持文档读取）。请用下面任一方式导入：',
+      '',
+      '【推荐】导出文件后发给我',
+      '1）打开该智能表格 → 右上角「…」→ 导出 → Excel(.xlsx)',
+      '2）在本会话点「+」→「文件」，把导出的 xlsx / csv 发给我',
+      '我会自动识别「姓名 / 手机号 / 性别 / 年龄 / 所属门店 / 职位 / 角色 / 入职日期 / 状态 / 备注」，并回复“新增 X 人 / 更新 Y 人”。',
+      '',
+      '【进阶】如已为企业微信应用开通「智能表格」权限并配置企业可信IP，也可在网页端「人事专区 → 员工管理」点「↻ 从企微智能表格同步」一键同步。',
+    ].join('\n');
+  }
+  return (await businessAssistant.answer(content)).reply;
+});
+// 企业微信里把员工表格（Excel/CSV）发给机器人 → 自动导入员工档案（人事专区 · 员工管理）
+wecomBot.setFileMessageHandler(async ({ buffer, filename }) => {
+  const lower = String(filename || '').toLowerCase();
+  if (!/\.(xlsx|xls|csv)$/.test(lower)) {
+    return `已收到「${filename || '文件'}」。目前只支持导入员工表格（.xlsx / .xls / .csv）：请把员工档案表发给我即可自动建档。`;
+  }
+  try {
+    const result = staffImport.importStaffWorkbook(db, buffer, filename);
+    console.log(`[staff import] ${filename}: 新增 ${result.created} / 更新 ${result.updated} / 跳过 ${result.skipped}`);
+    return staffImport.formatImportReply(result, filename);
+  } catch (e) {
+    console.error('[staff import] 失败:', e.message);
+    return `员工表导入失败：${e.message}`;
+  }
+});
 
 // ===== 中间件 =====
 app.use(express.json({ limit: '50mb' }));
@@ -59,10 +94,22 @@ app.use('/uploads/avatars', express.static(AVATAR_DIR, {
 // 静态文件：优先使用 Vue 前端构建产物，回退到旧版静态文件
 const vueDist = path.join(__dirname, 'frontend', 'dist');
 if (fs.existsSync(vueDist)) {
-  app.use(express.static(vueDist));
+  // index.html 绝不缓存：每次构建后的 JS 文件名都会变化，旧 HTML 若被缓存会引用不存在的旧资源并白屏。
+  // 带哈希的 assets 则可长期缓存，避免每次打开重复下载大包。
+  app.use(express.static(vueDist, {
+    // 入口页交给下面的 SPA 回退输出，静态目录只提供带哈希的资源文件。
+    index: false,
+    maxAge: '1y',
+    immutable: true,
+  }));
   // SPA 回退：非 /api 路径返回 index.html
   app.get(/^(?!\/api).*/, (req, res, next) => {
-    if (req.path.startsWith('/api')) return next();
+    // 资源请求绝不能回退 index.html；否则旧版浏览器缓存请求不到旧哈希 JS 时，
+    // 会收到 HTML 并导致动态路由模块加载失败、只剩页面外壳。
+    if (req.path.startsWith('/api') || req.path.startsWith('/assets/') || req.path === '/favicon.svg') return next();
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    // 仅清理脚本/样式缓存，不影响登录令牌、已打开的标签或本地业务数据。
+    res.setHeader('Clear-Site-Data', '"cache"');
     res.sendFile(path.join(vueDist, 'index.html'));
   });
 } else {
@@ -130,11 +177,28 @@ async function ensureToken() {
   return tokenCache.token;
 }
 
-// ===== 门店 JSON 兼容 =====
-const STORES_PATH = path.join(__dirname, 'stores.json');
-function loadStores() { try { const raw = fs.readFileSync(STORES_PATH, 'utf-8'); return JSON.parse(stripBOM(raw)); } catch { return []; } }
-function saveStores(stores) { fs.writeFileSync(STORES_PATH, JSON.stringify(stores, null, 2) + '\n', 'utf-8'); }
-const STORE_FIELDS = ['businessType','storeName','legalPerson','paymentType','status','openingDate','phone','province','city','district','address','businessHours','storeSize','monthlyRent','monthlyUtilities','employeeCount','laborCost','closingTime','businessDays'];
+// ===== 门店主档（统一 SQLite stores 表；stores.json 已停用归档）=====
+// 旧 JSON 版门店（text id store_2..store_18）全部已并入 DB stores（按门店名 1:1），
+// 此处仅保留字段名兼容映射，供历史 camelCase 调用方（若有）写库时转换。
+const LEGACY_STORE_FIELD_MAP = {
+  storeName: 'store_name', businessType: 'store_type', legalPerson: 'legal_person',
+  paymentType: 'payment_type', openingDate: 'opening_date', businessHours: 'business_hours',
+  storeSize: 'store_size', status: 'status', province: 'province', city: 'city',
+  district: 'district', address: 'address', phone: 'phone',
+};
+function dbStoresAll() { return db.queryAll('SELECT * FROM stores ORDER BY id'); }
+function applyStoreUpdate(id, body) {
+  const sets = [], params = [];
+  Object.entries(LEGACY_STORE_FIELD_MAP).forEach(([camel, col]) => {
+    if (body && body[camel] !== undefined && body[camel] !== null) { sets.push(`${col}=?`); params.push(String(body[camel]).trim()); }
+  });
+  if (!sets.length) return false;
+  sets.push("updated_at=datetime('now','localtime')");
+  params.push(id);
+  const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params);
+  db.save();
+  return affected > 0;
+}
 
 // ===== 配置 API =====
 app.get('/api/config', (_req, res) => {
@@ -503,8 +567,11 @@ app.post('/api/report/daily/push-all', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ===== 门店管理（JSON 兼容旧版）=====
-app.get('/api/stores', (req, res) => { try { const stores = loadStores(); res.json({ ok: true, stores }); } catch (e) { res.status(500).json({ error: e.message }); } });
+// ===== 门店列表（统一读 DB 主档；兼容旧路径 /api/stores）=====
+app.get('/api/stores', (req, res) => { try { res.json({ ok: true, stores: dbStoresAll() }); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// 历史接口：从日报 Excel 初始化门店列表（旧 stores.json 时代用），现已停用
+app.post('/api/stores/init', (_req, res) => { res.status(410).json({ error: '该接口已废弃：门店主档统一使用数据库 stores 表，请在「门店管理-基本信息」维护' }); });
 
 // 地图统计（必须在 :id 之前，否则 province-stats 被 :id 捕获）
 app.get('/api/stores/province-stats', (req, res) => {
@@ -597,11 +664,10 @@ app.get('/api/stores/locations', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.get('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const s = stores.find(s => s.id === req.params.id); if (!s) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, store: s }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const idx = stores.findIndex(s => s.id === req.params.id); if (idx === -1) return res.status(404).json({ error: '门店不存在' }); STORE_FIELDS.forEach(f => { if (req.body[f] !== undefined) stores[idx][f] = String(req.body[f]).trim(); }); saveStores(stores); res.json({ ok: true, store: stores[idx] }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.put('/api/stores/:id', (req, res) => { try { const stores = loadStores(); const idx = stores.findIndex(s => s.id === req.params.id); if (idx === -1) return res.status(404).json({ error: '门店不存在' }); STORE_FIELDS.forEach(f => { if (req.body[f] !== undefined) stores[idx][f] = String(req.body[f]).trim(); }); saveStores(stores); res.json({ ok: true, store: stores[idx] }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.delete('/api/stores/:id', (req, res) => { try { let stores = loadStores(); const idx = stores.findIndex(s => s.id === req.params.id); if (idx === -1) return res.status(404).json({ error: '门店不存在' }); const removed = stores[idx]; stores = stores.filter(s => s.id !== req.params.id); saveStores(stores); res.json({ ok: true, message: '门店已删除', removed }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post('/api/stores/init', (req, res) => { try { const excelStores = parseDailyExcel(); let stores = loadStores(); excelStores.forEach(es => { const existing = stores.find(s => s.id === es.id); if (!existing) { const s = { id: es.id }; STORE_FIELDS.forEach(f => { s[f] = ''; }); s.storeName = es.storeName; stores.push(s); } else if (!existing.storeName || existing.storeName !== es.storeName) existing.storeName = es.storeName; }); stores.sort((a, b) => { const na = parseInt(a.id.replace('store_', '')), nb = parseInt(b.id.replace('store_', '')); return na - nb; }); saveStores(stores); res.json({ ok: true, stores, count: stores.length }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get('/api/stores/:id', (req, res) => { try { const s = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]); if (!s) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, store: s }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.post('/api/stores/:id', (req, res) => { try { if (!applyStoreUpdate(req.params.id, req.body)) return res.status(404).json({ error: '门店不存在' }); const s = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]); res.json({ ok: true, store: s }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.put('/api/stores/:id', (req, res) => { try { if (!applyStoreUpdate(req.params.id, req.body)) return res.status(404).json({ error: '门店不存在' }); const s = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]); res.json({ ok: true, store: s }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.delete('/api/stores/:id', (req, res) => { try { const store = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); db.run('DELETE FROM stores WHERE id=?', [req.params.id]); db.run('DELETE FROM store_region_members WHERE store_id=?', [req.params.id]); db.save(); res.json({ ok: true, message: '门店已删除', removed: store }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ==========================================
 //  SQLite 版门店管理（新路由，路径 /api/db/stores）
@@ -843,6 +909,24 @@ app.put('/api/platforms/:id', (req, res) => { try { const current = db.queryOne(
 app.delete('/api/platforms/:id', (req, res) => { try { db.run('DELETE FROM store_platforms WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 员工 =====
+function ageFromIdCard(value) {
+  const idCard = String(value || '').trim().toUpperCase();
+  const match = idCard.match(/^\d{6}(\d{4})(\d{2})(\d{2})\d{3}[0-9X]$/);
+  if (!match) return null;
+  const birth = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (birth.getFullYear() !== Number(match[1]) || birth.getMonth() !== Number(match[2]) - 1 || birth.getDate() !== Number(match[3])) return null;
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  if (today.getMonth() < birth.getMonth() || (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate())) age -= 1;
+  return age >= 0 && age <= 130 ? age : null;
+}
+
+function resolveStaffStoreId(storeName) {
+  const name = String(storeName || '').trim();
+  if (!name) return null;
+  return db.queryOne('SELECT id FROM stores WHERE store_name=? LIMIT 1', [name])?.id || null;
+}
+
 app.get('/api/stores/:id/employees', (req, res) => {
   try { const { status } = req.query; let sql = 'SELECT * FROM employees WHERE store_id=?'; const params = [req.params.id]; if (status) { sql += ' AND status=?'; params.push(status); } sql += ' ORDER BY id'; res.json({ ok: true, employees: db.queryAll(sql, params) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -872,12 +956,52 @@ app.get('/api/staff', (req, res) => {
     const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
 
     const total = db.queryOne(`SELECT COUNT(*) as cnt FROM employees e ${whereClause}`, params).cnt;
+    const resolvedStoreId = "COALESCE(NULLIF(e.store_id, 0), (SELECT id FROM stores sx WHERE sx.store_name=e.store_name LIMIT 1))";
     const list = db.queryAll(
-      `SELECT e.* FROM employees e ${whereClause} ORDER BY e.id DESC LIMIT ? OFFSET ?`,
+      `SELECT e.*, ${resolvedStoreId} AS resolved_store_id, COALESCE(manager.name, '') AS manager_name
+       FROM employees e
+       LEFT JOIN store_manager_assignments assignment ON assignment.store_id=${resolvedStoreId}
+       LEFT JOIN employees manager ON manager.id=assignment.employee_id
+       ${whereClause} ORDER BY e.id DESC LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
 
     res.json({ ok: true, list, total, page: pageNum, page_size: pageSize });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 门店管理：店长归属只在这里维护，员工列表读取该绑定结果。
+app.get('/api/staff/store-managers', (req, res) => {
+  try {
+    const stores = db.queryAll(`SELECT s.id, s.store_name, s.status, assignment.employee_id AS manager_id,
+      COALESCE(manager.name, '') AS manager_name, COALESCE(manager.phone, '') AS manager_phone,
+      COALESCE(manager.position, '') AS manager_position
+      FROM stores s
+      LEFT JOIN store_manager_assignments assignment ON assignment.store_id=s.id
+      LEFT JOIN employees manager ON manager.id=assignment.employee_id
+      ORDER BY s.id`);
+    const candidates = db.queryAll(`SELECT id, name, phone, position, store_name FROM employees
+      WHERE status='在职' ORDER BY name COLLATE NOCASE, id`);
+    res.json({ ok: true, stores, candidates });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/staff/store-managers/:storeId', (req, res) => {
+  try {
+    const storeId = Number(req.params.storeId);
+    const managerId = Number(req.body?.employee_id);
+    if (!db.queryOne('SELECT id FROM stores WHERE id=?', [storeId])) return res.status(404).json({ error: '门店不存在' });
+    if (!managerId) {
+      db.run('DELETE FROM store_manager_assignments WHERE store_id=?', [storeId]);
+      db.save();
+      return res.json({ ok: true, manager: null });
+    }
+    const employee = db.queryOne("SELECT id,name,phone,position FROM employees WHERE id=? AND status='在职'", [managerId]);
+    if (!employee) return res.status(400).json({ error: '请选择在职员工担任店长' });
+    db.run(`INSERT INTO store_manager_assignments (store_id,employee_id,updated_at) VALUES (?,?,datetime('now','localtime'))
+      ON CONFLICT(store_id) DO UPDATE SET employee_id=excluded.employee_id,updated_at=excluded.updated_at`, [storeId, managerId]);
+    db.save();
+    res.json({ ok: true, manager: employee });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -897,6 +1021,64 @@ app.get('/api/staff/stats', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// POST /api/staff — 新增员工（本地建档），并异步尝试同步到企微智能表格
+app.post('/api/staff', (req, res) => {
+  try {
+    const { name, phone, gender, photo_url, store_name, onboarding_status, status, entry_date, position, role, hire_type, salary, probation_date, leave_date, id_card_number, id_card_front_url, id_card_back_url, bank_name, bank_branch, bank_account_name, bank_card_number, emergency_contact, emergency_phone, health_certificate_url, health_certificate_expiry, remark } = req.body || {};
+    const cleanName = String(name || '').trim();
+    if (!cleanName) return res.status(400).json({ error: '姓名不能为空' });
+    const cleanStoreName = String(store_name || '').trim();
+    const storeId = resolveStaffStoreId(cleanStoreName);
+    const calculatedAge = ageFromIdCard(id_card_number) || 0;
+    const id = db.insert(
+      `INSERT INTO employees (name,phone,gender,age,store_name,manager_name,onboarding_status,status,entry_date,position,role,hire_type,salary,probation_date,leave_date,id_card_number,id_card_front_url,id_card_back_url,bank_name,bank_branch,bank_account_name,bank_card_number,emergency_contact,emergency_phone,health_certificate_url,health_certificate_expiry,remark,store_id,smartsheet_record_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [cleanName, String(phone || '').trim(), String(gender || '').trim(), calculatedAge,
+        cleanStoreName, '', String(onboarding_status || '已入职').trim(), status === '离职' ? '离职' : '在职', String(entry_date || '').trim(),
+        String(position || '').trim(), String(role || '店员').trim(), String(hire_type || '全职').trim(), Number(salary) || 0, String(probation_date || '').trim(), String(leave_date || '').trim(),
+        String(id_card_number || '').trim(), String(id_card_front_url || '').trim(), String(id_card_back_url || '').trim(), String(bank_name || '').trim(), String(bank_branch || '').trim(), String(bank_account_name || '').trim(), String(bank_card_number || '').trim(), String(emergency_contact || '').trim(), String(emergency_phone || '').trim(), String(health_certificate_url || '').trim(), String(health_certificate_expiry || '').trim(), String(remark || '').trim(), storeId, '']
+    );
+    db.run('UPDATE employees SET photo_url=? WHERE id=?', [String(photo_url || '').trim(), id]);
+    db.save();
+    const created = db.queryOne('SELECT * FROM employees WHERE id=?', [id]);
+    const cfg = loadConfig();
+    syncStaffToSmartsheet(created, cfg).then(r => {
+      if (r.synced) console.log(`[staff sync] 企微同步成功 (${r.action}): ${created.name}`);
+      else console.error(`[staff sync] 企微同步失败: ${r.reason}`);
+    }).catch(e => console.error('[staff sync] 同步异常:', e.message));
+    res.json({ ok: true, id, staff: created });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/staff/import — 上传员工表格（Excel/CSV，base64）导入员工档案
+app.post('/api/staff/import', (req, res) => {
+  try {
+    const { filename, data } = req.body || {};
+    if (!data) return res.status(400).json({ error: '缺少文件数据' });
+    const buffer = Buffer.from(String(data).replace(/^data:[^,]+,/, ''), 'base64');
+    if (!buffer.length) return res.status(400).json({ error: '文件内容为空' });
+    const result = staffImport.importStaffWorkbook(db, buffer, filename || '员工表.xlsx');
+    console.log(`[staff import/http] ${filename}: 新增 ${result.created} / 更新 ${result.updated} / 跳过 ${result.skipped}`);
+    res.json({ ok: true, ...result, message: staffImport.formatImportReply(result, filename) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// POST /api/staff/sync-wecom — 以机器人身份从企业微信智能表格同步员工档案（无需自建应用 wedoc 权限）
+app.post('/api/staff/sync-wecom', async (req, res) => {
+  try {
+    const cfg = loadConfig();
+    const docid = String(req.body?.docid || cfg.staffSmartSheetDocId || '').trim();
+    const sheetTitle = String(req.body?.sheet_title || cfg.staffSmartSheetTitle || '员工信息表').trim();
+    if (!docid) return res.status(400).json({ error: '请先在 config.json 配置 staffSmartSheetDocId（企微智能表格链接中的 s3_ 开头 ID）' });
+    const result = await wecomStaffSync.syncEmployeesFromWecom(db, { docid, sheetTitle });
+    console.log(`[staff sync/wecom] ${sheetTitle}: 新增 ${result.created} / 更新 ${result.updated} / 跳过 ${result.skipped}`);
+    res.json({ ok: true, ...result, message: `同步完成：新增 ${result.created} 人，更新 ${result.updated} 人，跳过 ${result.skipped} 行` });
+  } catch (e) {
+    console.error('[staff sync/wecom] 失败:', e.message);
+    res.status(400).json({ error: e.message });
+  }
+});
+
 // 员工同步到企微智能表格的辅助函数
 async function syncStaffToSmartsheet(employee, cfg) {
   // 优先使用 access_token API (支持 update_records)，回退到 webhook
@@ -906,15 +1088,30 @@ async function syncStaffToSmartsheet(employee, cfg) {
   if (!hasApiConfig && !hasWebhook) return { synced: false, reason: '未配置企微表格' };
 
   const values = {
-    '姓名': employee.name || '',
+    '名字': employee.name || '',
     '手机号': employee.phone || '',
     '性别': employee.gender || '',
     '年龄': String(employee.age || ''),
-    '所属门店': employee.store_name || '',
-    '状态': employee.status || '',
+    '个人照片': employee.photo_url || '',
+    '归属门店': employee.store_name || '',
+    '入职状态': employee.onboarding_status || '',
+    '在职状态': employee.status || '',
     '入职日期': employee.entry_date || '',
-    '职位': employee.position || '',
-    '角色': employee.role || '',
+    '岗位': employee.position || '',
+    '用工类型': employee.hire_type || '',
+    '薪酬标准': String(employee.salary || ''),
+    '转正时间': employee.probation_date || '',
+    '离职时间': employee.leave_date || '',
+    '身份证号码': employee.id_card_number || '',
+    '身份证正反面照片': [employee.id_card_front_url, employee.id_card_back_url].filter(Boolean).join(' | '),
+    '开户银行': employee.bank_name || '',
+    '开户银行支行': employee.bank_branch || '',
+    '银行卡姓名': employee.bank_account_name || '',
+    '银行卡卡号': employee.bank_card_number || '',
+    '紧急联系人': employee.emergency_contact || '',
+    '紧急联系电话': employee.emergency_phone || '',
+    '健康证照片': employee.health_certificate_url || '',
+    '健康证失效时间': employee.health_certificate_expiry || '',
     '备注': employee.remark || '',
   };
 
@@ -1000,13 +1197,16 @@ async function syncStaffToSmartsheet(employee, cfg) {
 // PUT /api/staff/:id — 更新员工 + 同步到企微智能表格
 app.put('/api/staff/:id', async (req, res) => {
   try {
-    const fields = ['name', 'phone', 'gender', 'age', 'store_name', 'status', 'entry_date', 'position', 'remark', 'role'];
+    const fields = ['name', 'phone', 'gender', 'photo_url', 'store_name', 'onboarding_status', 'status', 'entry_date', 'position', 'remark', 'hire_type', 'salary', 'probation_date', 'leave_date', 'id_card_number', 'id_card_front_url', 'id_card_back_url', 'bank_name', 'bank_branch', 'bank_account_name', 'bank_card_number', 'emergency_contact', 'emergency_phone', 'health_certificate_url', 'health_certificate_expiry'];
     const sets = [];
     const params = [];
 
     fields.forEach(f => {
       if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); }
     });
+
+    if (req.body.store_name !== undefined) { sets.push('store_id=?'); params.push(resolveStaffStoreId(req.body.store_name)); }
+    if (req.body.id_card_number !== undefined) { sets.push('age=?'); params.push(ageFromIdCard(req.body.id_card_number) || 0); }
 
     if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' });
 
@@ -1079,20 +1279,23 @@ app.get('/api/staff/sync-pull', async (req, res) => {
     for (const rec of allRecords) {
       const vals = rec.values || {};
       // 企微字段标题 → 值映射
-      const name = (vals['姓名'] || []).map(v => v.text || v).join('') || '';
+      const text = (field) => (vals[field] || []).map(v => v.text || v).join('').trim();
+      const name = text('姓名') || text('名字');
       if (!name) { skipped++; continue; }
 
       const rowData = {
         name,
-        phone: (vals['手机号'] || []).map(v => v.text || v).join('') || '',
-        gender: (vals['性别'] || []).map(v => v.text || v).join('') || '',
-        age: parseInt((vals['年龄'] || []).map(v => v.text || v).join('')) || 0,
-        store_name: (vals['所属门店'] || []).map(v => v.text || v).join('') || '',
-        status: (vals['状态'] || []).map(v => v.text || v).join('') || '在职',
-        entry_date: (vals['入职日期'] || []).map(v => v.text || v).join('') || '',
-        position: (vals['职位'] || []).map(v => v.text || v).join('') || '',
-        role: (vals['角色'] || []).map(v => v.text || v).join('') || '店员',
-        remark: (vals['备注'] || []).map(v => v.text || v).join('') || '',
+        phone: text('手机号'), gender: text('性别'), age: parseInt(text('年龄')) || 0,
+        store_name: text('归属门店') || text('所属门店'), manager_name: text('归属店长'),
+        onboarding_status: text('入职状态') || '已入职', status: text('在职状态') || text('状态') || '在职',
+        entry_date: text('入职日期'), position: text('岗位') || text('职位'), role: text('角色') || '店员',
+        hire_type: text('用工类型') || '全职', salary: Number(text('薪酬标准') || text('员工工资') || text('兼职时薪')) || 0,
+        probation_date: text('转正时间'), leave_date: text('离职时间'), id_card_number: text('身份证号码'),
+        id_card_front_url: text('身份证正面照片') || text('身份证正反面照片').split(' | ')[0] || '',
+        id_card_back_url: text('身份证反面照片') || text('身份证正反面照片').split(' | ').slice(1).join(' | ') || '',
+        bank_name: text('开户银行'), bank_branch: text('开户银行支行'), bank_account_name: text('银行卡姓名'), bank_card_number: text('银行卡卡号'),
+        emergency_contact: text('紧急联系人'), emergency_phone: text('紧急联系电话'),
+        health_certificate_url: text('健康证照片'), health_certificate_expiry: text('健康证失效时间'), remark: text('备注'),
       };
 
       // 尝试匹配：先按 record_id，再按姓名
@@ -1104,23 +1307,27 @@ app.get('/api/staff/sync-pull', async (req, res) => {
       if (localEmployee) {
         // 更新本地记录 + 写入 record_id
         db.run(
-          `UPDATE employees SET smartsheet_record_id=?, name=?, phone=?, gender=?, age=?,
-           store_name=?, status=?, entry_date=?, position=?, role=?, remark=?,
+          `UPDATE employees SET smartsheet_record_id=?, name=?, phone=?, gender=?, age=?, store_name=?, manager_name=?, onboarding_status=?,
+           status=?, entry_date=?, position=?, role=?, hire_type=?, salary=?, probation_date=?, leave_date=?, id_card_number=?, id_card_front_url=?, id_card_back_url=?,
+           bank_name=?, bank_branch=?, bank_account_name=?, bank_card_number=?, emergency_contact=?, emergency_phone=?, health_certificate_url=?, health_certificate_expiry=?, remark=?,
            updated_at=datetime('now','localtime') WHERE id=?`,
           [rec.record_id, rowData.name, rowData.phone, rowData.gender, rowData.age,
-           rowData.store_name, rowData.status, rowData.entry_date, rowData.position,
-           rowData.role, rowData.remark, localEmployee.id]
+           rowData.store_name, rowData.manager_name, rowData.onboarding_status, rowData.status, rowData.entry_date, rowData.position, rowData.role, rowData.hire_type, rowData.salary,
+           rowData.probation_date, rowData.leave_date, rowData.id_card_number, rowData.id_card_front_url, rowData.id_card_back_url,
+           rowData.bank_name, rowData.bank_branch, rowData.bank_account_name, rowData.bank_card_number, rowData.emergency_contact, rowData.emergency_phone,
+           rowData.health_certificate_url, rowData.health_certificate_expiry, rowData.remark, localEmployee.id]
         );
         updated++;
       } else {
         // 新建本地员工
         const newId = db.insert(
-          `INSERT INTO employees (name, phone, gender, age, store_name, status, entry_date,
-           position, role, remark, smartsheet_record_id, store_id)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+          `INSERT INTO employees (name,phone,gender,age,store_name,manager_name,onboarding_status,status,entry_date,position,role,hire_type,salary,probation_date,leave_date,id_card_number,id_card_front_url,id_card_back_url,bank_name,bank_branch,bank_account_name,bank_card_number,emergency_contact,emergency_phone,health_certificate_url,health_certificate_expiry,remark,smartsheet_record_id,store_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
           [rowData.name, rowData.phone, rowData.gender, rowData.age,
-           rowData.store_name, rowData.status, rowData.entry_date,
-           rowData.position, rowData.role, rowData.remark, rec.record_id, 0]
+           rowData.store_name, rowData.manager_name, rowData.onboarding_status, rowData.status, rowData.entry_date, rowData.position, rowData.role, rowData.hire_type, rowData.salary,
+           rowData.probation_date, rowData.leave_date, rowData.id_card_number, rowData.id_card_front_url, rowData.id_card_back_url,
+           rowData.bank_name, rowData.bank_branch, rowData.bank_account_name, rowData.bank_card_number, rowData.emergency_contact, rowData.emergency_phone,
+           rowData.health_certificate_url, rowData.health_certificate_expiry, rowData.remark, rec.record_id, 0]
         );
         allLocal.push({ id: newId, smartsheet_record_id: rec.record_id, name: rowData.name });
         created++;
@@ -1142,6 +1349,20 @@ app.delete('/api/fixed-costs/:id', (req, res) => { try { db.run('DELETE FROM sto
 
 // ===== 运营成本 =====
 app.get('/api/stores/:id/operating-costs', (req, res) => { try { res.json({ ok: true, costs: db.queryAll('SELECT * FROM store_operating_costs WHERE store_id=? ORDER BY date DESC, id DESC', [req.params.id]) }); } catch (e) { res.status(500).json({ error: e.message }); } });
+// 月度费用台账默认允许查看全门店；可按门店范围和费用月份筛选。
+app.get('/api/operating-costs', (req, res) => {
+  try {
+    const clauses = ['1=1'];
+    const params = [];
+    const storeIds = String(req.query.store_ids || '').split(',').map(Number).filter(id => Number.isInteger(id) && id > 0);
+    if (storeIds.length) { clauses.push(`store_id IN (${storeIds.map(() => '?').join(',')})`); params.push(...storeIds); }
+    else if (req.query.store_id) { clauses.push('store_id=?'); params.push(Number(req.query.store_id)); }
+    const month = String(req.query.month || '').trim();
+    if (/^\d{4}-\d{2}$/.test(month)) { clauses.push('substr(date,1,7)=?'); params.push(month); }
+    const costs = db.queryAll(`SELECT * FROM store_operating_costs WHERE ${clauses.join(' AND ')} ORDER BY date DESC, store_name ASC, id DESC`, params);
+    res.json({ ok: true, costs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/stores/:id/operating-costs', (req, res) => { try { const { store_name, date, item, amount } = req.body; if (!item) return res.status(400).json({ error: '事项不能为空' }); const id = db.insert('INSERT INTO store_operating_costs (store_id,store_name,date,item,amount) VALUES (?,?,?,?,?)', [req.params.id, store_name||'', date||new Date().toISOString().slice(0,10), item, amount||0]); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put('/api/stores/:id/monthly-wage', (req, res) => { try { const month = String(req.body.month || ''); const amount = Number(req.body.amount); if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: '请选择工资月份' }); if (!Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: '请输入有效工资金额' }); const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const date = `${month}-01`; const current = db.queryOne("SELECT id FROM store_operating_costs WHERE store_id=? AND item='月度工资' AND substr(date,1,7)=? ORDER BY id DESC LIMIT 1", [req.params.id, month]); if (current) db.run('UPDATE store_operating_costs SET store_name=?, date=?, amount=? WHERE id=?', [store.store_name, date, amount, current.id]); else db.insert("INSERT INTO store_operating_costs (store_id,store_name,date,item,amount) VALUES (?,?,?,?,?)", [req.params.id, store.store_name, date, '月度工资', amount]); db.save(); res.json({ ok: true, message: '月度工资已保存' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put('/api/stores/:id/monthly-operating-cost', (req, res) => {
@@ -1175,12 +1396,12 @@ app.get('/api/menu', (req, res) => {
     const { store_id, category, status } = req.query;
     let sql = `SELECT m.*, s.store_name,
       (SELECT COUNT(*) FROM menu_cost_components c WHERE c.menu_item_id=m.id) AS cost_component_count
-      FROM menu_items m LEFT JOIN stores s ON m.store_id=s.id WHERE 1=1`;
+      FROM menu_items m LEFT JOIN stores s ON m.store_id=s.id LEFT JOIN menu_categories mc ON mc.name=m.category WHERE 1=1`;
     const params = [];
     if (store_id) { sql += ' AND (m.store_id=? OR m.store_id IS NULL)'; params.push(store_id); }
     if (category) { sql += ' AND m.category=?'; params.push(category); }
     if (status) { sql += ' AND m.status=?'; params.push(status); }
-    sql += ' ORDER BY m.id';
+    sql += " ORDER BY CASE WHEN m.category IS NULL OR m.category='' THEN 1 ELSE 0 END, COALESCE(mc.sort_order, 999999), mc.id, m.id";
     const items = db.queryAll(sql, params);
     res.json({ ok: true, items, count: items.length });
   }
@@ -1191,15 +1412,21 @@ app.post('/api/menu', (req, res) => {
     const {
       store_id, name, category, method, spec, price, dine_in_price,
       member_price, takeout_price, spec_unit, spec_weight, cost,
-      expiry_days, status,
+      expiry_days, status, item_type, spuid, skuid,
     } = req.body;
     const cleanName = String(name || '').trim();
     if (!cleanName) return res.status(400).json({ error: '菜品名称不能为空' });
+    const cleanSkuid = String(skuid || '').trim();
+    const cleanSpuid = String(spuid || '').trim();
+    if (cleanSkuid) {
+      const dup = db.queryOne("SELECT id FROM menu_items WHERE skuid=? AND skuid != ''", [cleanSkuid]);
+      if (dup) return res.status(409).json({ error: `菜品编码(SKUID) ${cleanSkuid} 已存在（id=${dup.id}），请勿重复新增` });
+    }
     const dinePrice = Number(dine_in_price) || 0;
     const id = db.insert(
       `INSERT INTO menu_items
-       (store_id,name,category,method,spec,price,dine_in_price,member_price,takeout_price,spec_unit,spec_weight,cost,expiry_days,status)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       (store_id,name,category,method,spec,price,dine_in_price,member_price,takeout_price,spec_unit,spec_weight,cost,expiry_days,status,item_type,spuid,skuid)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         store_id || null,
         cleanName,
@@ -1215,21 +1442,28 @@ app.post('/api/menu', (req, res) => {
         Number(cost) || 0,
         expiry_days == null || expiry_days === '' ? null : Number(expiry_days),
         status === '停售' ? '停售' : '在售',
+        item_type === 'combo' ? 'combo' : 'dish',
+        cleanSpuid,
+        cleanSkuid,
       ]
     );
     db.save();
     res.json({ ok: true, id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.put('/api/menu/:id', (req, res) => { try { const fields = ['name','category','method','spec','price','dine_in_price','member_price','takeout_price','spec_unit','spec_weight','cost','expiry_days','status']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE menu_items SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.put('/api/menu/:id', (req, res) => { try { const fields = ['name','category','method','spec','price','dine_in_price','member_price','takeout_price','spec_unit','spec_weight','cost','expiry_days','status','item_type','spuid','skuid']; const sets = [], params = []; const sk = req.body.skuid !== undefined ? String(req.body.skuid).trim() : ''; const dup = sk ? db.queryOne("SELECT id FROM menu_items WHERE skuid=? AND skuid != '' AND id != ?", [sk, req.params.id]) : null; if (dup) return res.status(409).json({ error: `菜品编码(SKUID) ${sk} 已被 id=${dup.id} 使用` }); fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE menu_items SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.delete('/api/menu/:id', (req, res) => { try { db.run('DELETE FROM menu_items WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 app.get('/api/menu/:id/cost-components', (req, res) => {
   try {
-    const item = db.queryOne('SELECT id,name,cost FROM menu_items WHERE id=?', [req.params.id]);
+    const item = db.queryOne('SELECT id,name,cost,item_type FROM menu_items WHERE id=?', [req.params.id]);
     if (!item) return res.status(404).json({ error: '菜品不存在' });
     const components = db.queryAll(
-      'SELECT id,ingredient_name,quantity,unit,unit_cost,subtotal,sort_order FROM menu_cost_components WHERE menu_item_id=? ORDER BY sort_order,id',
+      `SELECT c.id,c.ingredient_name,c.quantity,c.unit,c.unit_cost,c.subtotal,c.component_menu_item_id,c.choice_group,c.choice_min,c.choice_max,c.sort_order,
+              cm.name AS component_name, cm.spec AS component_spec, cm.cost AS component_current_cost
+       FROM menu_cost_components c
+       LEFT JOIN menu_items cm ON cm.id=c.component_menu_item_id
+       WHERE c.menu_item_id=? ORDER BY c.sort_order,c.id`,
       [req.params.id]
     );
     res.json({ ok: true, item, components, total_cost: Number(item.cost) || 0 });
@@ -1243,30 +1477,55 @@ app.put('/api/menu/:id/cost-components', (req, res) => {
     if (!Array.isArray(req.body?.components)) return res.status(400).json({ error: '成本明细格式不正确' });
     if (req.body.components.length > 100) return res.status(400).json({ error: '单个菜品最多录入 100 条成本明细' });
     const components = req.body.components.map((row, index) => {
-      const name = String(row.ingredient_name || '').trim();
+      const refId = Number(row.component_menu_item_id) || null;
       const quantity = Number(row.quantity);
-      const unitCost = Number(row.unit_cost);
-      if (!name) throw new Error(`第 ${index + 1} 行请填写材料名称`);
       if (!Number.isFinite(quantity) || quantity <= 0) throw new Error(`第 ${index + 1} 行用量必须大于 0`);
+      let name = String(row.ingredient_name || '').trim();
+      let unitCost = Number(row.unit_cost);
+      // 引用菜单商品：名称与单位成本以商品当前档案为准（商品无成本时按 0 计，由前端提示）
+      if (refId) {
+        const src = db.queryOne('SELECT id,name,cost FROM menu_items WHERE id=?', [refId]);
+        if (!src) throw new Error(`第 ${index + 1} 行引用的商品不存在`);
+        name = name || String(src.name || '').trim();
+        unitCost = Number(src.cost) || 0;
+      }
+      if (!name) throw new Error(`第 ${index + 1} 行请填写材料名称`);
       if (!Number.isFinite(unitCost) || unitCost < 0) throw new Error(`第 ${index + 1} 行单位成本不能小于 0`);
       return {
         ingredient_name: name,
         quantity,
         unit: String(row.unit || '份').trim() || '份',
         unit_cost: unitCost,
+        component_menu_item_id: refId,
+        choice_group: String(row.choice_group || '').trim().slice(0, 80),
+        choice_min: Math.max(1, Math.floor(Number(row.choice_min) || 1)),
+        choice_max: Math.max(1, Math.floor(Number(row.choice_max) || Number(row.choice_min) || 1)),
         subtotal: Math.round(quantity * unitCost * 100) / 100,
         sort_order: index,
       };
     });
-    const totalCost = Math.round(components.reduce((sum, row) => sum + row.subtotal, 0) * 100) / 100;
+    const fixedCost = components.filter(row => !row.choice_group).reduce((sum, row) => sum + row.subtotal, 0);
+    const choiceGroups = new Map();
+    components.filter(row => row.choice_group).forEach(row => {
+      if (!choiceGroups.has(row.choice_group)) choiceGroups.set(row.choice_group, []);
+      choiceGroups.get(row.choice_group).push(row);
+    });
+    const optionalCost = [...choiceGroups.values()].reduce((sum, group) => {
+      const min = group[0].choice_min;
+      const max = group[0].choice_max;
+      if (group.some(row => row.choice_min !== min || row.choice_max !== max)) throw new Error('同一选择组的可选数量必须一致');
+      if (min > group.length || max < min || max > group.length) throw new Error('选择组的可选数量超出备选菜品范围');
+      return sum + group.map(row => row.subtotal).sort((a, b) => a - b).slice(0, min).reduce((value, cost) => value + cost, 0);
+    }, 0);
+    const totalCost = Math.round((fixedCost + optionalCost) * 100) / 100;
     db.exec('BEGIN');
     try {
       db.run('DELETE FROM menu_cost_components WHERE menu_item_id=?', [itemId]);
       components.forEach(row => db.insert(
-        'INSERT INTO menu_cost_components (menu_item_id,ingredient_name,quantity,unit,unit_cost,subtotal,sort_order) VALUES (?,?,?,?,?,?,?)',
-        [itemId, row.ingredient_name, row.quantity, row.unit, row.unit_cost, row.subtotal, row.sort_order]
+        'INSERT INTO menu_cost_components (menu_item_id,ingredient_name,quantity,unit,unit_cost,component_menu_item_id,choice_group,choice_min,choice_max,subtotal,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        [itemId, row.ingredient_name, row.quantity, row.unit, row.unit_cost, row.component_menu_item_id, row.choice_group, row.choice_min, row.choice_max, row.subtotal, row.sort_order]
       ));
-      db.run('UPDATE menu_items SET cost=? WHERE id=?', [totalCost, itemId]);
+      db.run("UPDATE menu_items SET cost=?, item_type=CASE WHEN item_type IS NULL THEN 'combo' ELSE item_type END WHERE id=?", [totalCost, itemId]);
       db.exec('COMMIT');
       db.save();
     } catch (error) {
@@ -1275,6 +1534,17 @@ app.put('/api/menu/:id/cost-components', (req, res) => {
     }
     res.json({ ok: true, components, total_cost: totalCost });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 清空成本构成：只删除成分行，不改变手工录入的成本
+app.delete('/api/menu/:id/cost-components', (req, res) => {
+  try {
+    const item = db.queryOne('SELECT id FROM menu_items WHERE id=?', [req.params.id]);
+    if (!item) return res.status(404).json({ error: '菜品不存在' });
+    db.run('DELETE FROM menu_cost_components WHERE menu_item_id=?', [req.params.id]);
+    db.save();
+    res.json({ ok: true, message: '成本构成已清空（成本值保留）' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== 菜品分类 =====
@@ -1305,7 +1575,8 @@ app.post('/api/menu-category', (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: '分类名称不能为空' });
     if (db.queryOne('SELECT id FROM menu_categories WHERE name=?', [name])) return res.status(400).json({ error: `分类「${name}」已存在` });
-    const sort_order = Number(req.body?.sort_order) || 0;
+    const nextSortOrder = (Number(db.queryOne('SELECT MAX(sort_order) AS value FROM menu_categories')?.value) || 0) + 10;
+    const sort_order = req.body?.sort_order !== undefined ? Number(req.body.sort_order) || nextSortOrder : nextSortOrder;
     const remark = String(req.body?.remark || '').trim();
     const id = db.insert('INSERT INTO menu_categories (name, sort_order, remark) VALUES (?,?,?)', [name, sort_order, remark]);
     db.save();
@@ -1319,12 +1590,34 @@ app.post('/api/menu-category/adopt', (req, res) => {
     const name = String(req.body?.name || '').trim();
     if (!name) return res.status(400).json({ error: '分类名称不能为空' });
     if (db.queryOne('SELECT id FROM menu_categories WHERE name=?', [name])) return res.status(400).json({ error: `分类「${name}」已存在` });
-    const id = db.insert('INSERT INTO menu_categories (name, sort_order) VALUES (?,?)', [name, 0]);
+    const nextSortOrder = (Number(db.queryOne('SELECT MAX(sort_order) AS value FROM menu_categories')?.value) || 0) + 10;
+    const id = db.insert('INSERT INTO menu_categories (name, sort_order) VALUES (?,?)', [name, nextSortOrder]);
     db.save();
     res.status(201).json({ ok: true, id, name });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 拖动排序：提交全部已管理分类，统一重写连续排序值，保证所有分类选择器顺序一致
+app.put('/api/menu-category/order', (req, res) => {
+  try {
+    if (!Array.isArray(req.body?.ids)) return res.status(400).json({ error: '排序数据格式不正确' });
+    const rows = db.queryAll('SELECT id FROM menu_categories ORDER BY sort_order, id');
+    const ids = req.body.ids.map(Number).filter(Number.isFinite);
+    if (new Set(ids).size !== ids.length || ids.length !== rows.length || rows.some(row => !ids.includes(row.id))) {
+      return res.status(400).json({ error: '请提交全部分类的完整排序' });
+    }
+    db.exec('BEGIN');
+    try {
+      ids.forEach((id, index) => db.run("UPDATE menu_categories SET sort_order=?, updated_at=datetime('now','localtime') WHERE id=?", [(index + 1) * 10, id]));
+      db.exec('COMMIT');
+      db.save();
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    res.json({ ok: true, ids });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 // 编辑分类（改名会同步更新菜品与模板中的分类名）
 app.put('/api/menu-category/:id', (req, res) => {
   try {
@@ -1578,11 +1871,11 @@ app.get('/api/dish-sales/analytics', (req, res) => {
       }
     }
     if (keyword) { where += ' AND (product_name LIKE ? OR product_code LIKE ?)'; params.push(`%${keyword}%`, `%${keyword}%`); }
-    const sortCol = { income: 'income_amount', quantity: 'quantity', amount: 'amount_total' }[sort] || 'income_amount';
-    const total = db.queryOne(`SELECT COUNT(*) as cnt FROM (SELECT product_code, product_name, spec FROM dish_sales ${where} GROUP BY product_code, product_name, spec)`, params).cnt;
+    const sortKey = { income: 'income_amount', quantity: 'quantity', amount: 'amount_total' }[sort] || 'income_amount';
     const psize = Math.min(100, Math.max(1, parseInt(page_size) || 20));
     const pg = Math.max(1, parseInt(page) || 1);
-    const rows = db.queryAll(`
+    // 取数分两段：SQL 只做分组汇总（不设 LIMIT，分组数在千级），本地 SKU 识别、排序、翻页都在 JS 做。
+    const groups = db.queryAll(`
       SELECT d.product_code, d.product_name, d.spec,
         SUM(d.quantity) as quantity,
         SUM(d.amount_total) as amount_total,
@@ -1591,35 +1884,89 @@ app.get('/api/dish-sales/analytics', (req, res) => {
         SUM(d.refund_amount) as refund_amount,
         COUNT(DISTINCT d.order_no) as order_count,
         SUM(CASE WHEN d.refunded='部分退' THEN 1 ELSE 0 END) as refunded_count,
-        MAX(CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END) as cost_available,
-        SUM(CASE WHEN m.id IS NOT NULL THEN d.quantity * COALESCE(mi.cost, 0) ELSE 0 END) as estimated_cost,
-        CASE WHEN MAX(CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END) = 1
-          THEN SUM(d.income_amount) - SUM(d.quantity * COALESCE(mi.cost, 0))
-          ELSE NULL END as net_income
+        MAX(m.id) as mapping_id,
+        MAX(m.menu_item_id) as menu_item_id
       FROM dish_sales d
       LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
         AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
-      LEFT JOIN menu_items mi ON mi.id = m.menu_item_id
       ${where}
-      GROUP BY d.product_code, d.product_name, d.spec
-      ORDER BY ${sortCol} DESC
-      LIMIT ? OFFSET ?`, [...params, psize, (pg - 1) * psize]);
-    const summary = db.queryOne(`
+      GROUP BY d.product_code, d.product_name, d.spec`, params);
+    // 收银机品项名称本来就取自本地菜品库，绝大多数行应与本地菜品对得上，
+    // 不能因为 dish_sales_mappings 里没有手工记录就要求用户「本地菜品绑本地菜品」。
+    // 识别优先级：手工绑定 → 菜品编码=skuid（名称互校）→ 名称+规格唯一 → 名称唯一。
+    const menus = db.queryAll(`SELECT id,name,category,method,spec,spec_unit,spec_weight,cost,skuid
+      FROM menu_items WHERE status='在售' AND INSTR(name,'员工餐')=0`).map(withDishMenuSku);
+    const menuById = new Map(menus.map(menu => [Number(menu.id), menu]));
+    // 手工绑定可能指向已下架菜品，也要查得到成本
+    const manualIds = [...new Set(groups.map(g => Number(g.menu_item_id)).filter(Boolean))].filter(id => !menuById.has(id));
+    if (manualIds.length) {
+      db.queryAll(`SELECT id,name,category,method,spec,spec_unit,spec_weight,cost,skuid FROM menu_items
+        WHERE id IN (${manualIds.map(() => '?').join(',')})`, manualIds)
+        .map(withDishMenuSku).forEach(menu => menuById.set(Number(menu.id), menu));
+    }
+    const dishMenuKey = value => String(value || '').replace(/[【】\[\]（）()\s]/g, '').trim();
+    const menuBySkuid = new Map(menus.filter(menu => String(menu.skuid || '').trim()).map(menu => [String(menu.skuid).trim(), menu]));
+    const menusByName = new Map();
+    const menusByNameSpec = new Map();
+    menus.forEach(menu => {
+      const nameKey = dishMenuKey(menu.name);
+      menusByName.set(nameKey, [...(menusByName.get(nameKey) || []), menu]);
+      const specKey = `${nameKey}|${normalizeDishSpec(menu.spec)}`;
+      menusByNameSpec.set(specKey, [...(menusByNameSpec.get(specKey) || []), menu]);
+    });
+    const onlyOne = list => (list && list.length === 1 ? list[0] : null);
+    const round2 = value => Math.round(value * 100) / 100;
+    const items = groups.map(group => {
+      const nameKey = dishMenuKey(group.product_name);
+      const coded = menuBySkuid.get(String(group.product_code || '').trim());
+      // 编码与名称互相校验，避免把「金牌烧鸭饭」错归到另一道菜
+      const byCode = coded && dishMenuKey(coded.name) === nameKey ? coded : null;
+      const menu = menuById.get(Number(group.menu_item_id))
+        || byCode
+        || onlyOne(menusByNameSpec.get(`${nameKey}|${normalizeDishSpec(group.spec)}`))
+        || onlyOne(menusByName.get(nameKey))
+        || null;
+      const quantity = Number(group.quantity) || 0;
+      const income = Number(group.income_amount) || 0;
+      const unitCost = menu ? Number(menu.cost) || 0 : 0;
+      return {
+        ...group,
+        mapped: !!menu,
+        mapping_id: group.mapping_id || null,
+        auto_matched: !!menu && !group.mapping_id,
+        menu_item_id: menu ? menu.id : null,
+        menu_name: menu ? menu.name : '',
+        menu_category: menu ? menu.category : '',
+        menu_sku_label: menu ? menu.sku_label : '',
+        menu_sku_variant: menu ? menu.sku_variant : '',
+        menu_sku_price_summary: menu ? menu.sku_price_summary : '',
+        unit_cost: unitCost,
+        cost_available: menu ? 1 : 0,
+        estimated_cost: menu ? round2(quantity * unitCost) : null,
+        net_income: menu ? round2(income - quantity * unitCost) : null,
+      };
+    });
+    // 已关联的排前面，未关联的自动沉到列表末尾（与外卖/团购看板一致），再按所选指标倒序。
+    items.sort((a, b) => Number(b.mapped) - Number(a.mapped)
+      || (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0));
+    const total = items.length;
+    const mappedItems = items.filter(item => item.mapped);
+    const summaryRow = db.queryOne(`
       SELECT COUNT(DISTINCT d.product_code) as product_count,
         SUM(d.quantity) as quantity,
         SUM(d.amount_total) as amount_total,
         SUM(d.discount_amount) as discount_amount,
         SUM(d.income_amount) as income_amount,
         SUM(d.refund_amount) as refund_amount,
-        COUNT(DISTINCT d.order_no) as order_count,
-        COUNT(DISTINCT CASE WHEN m.id IS NOT NULL THEN d.product_code || '|' || d.product_name || '|' || d.spec END) as cost_covered_product_count,
-        SUM(CASE WHEN m.id IS NOT NULL THEN d.quantity * COALESCE(mi.cost, 0) ELSE 0 END) as estimated_cost,
-        SUM(CASE WHEN m.id IS NOT NULL THEN d.income_amount - d.quantity * COALESCE(mi.cost, 0) ELSE 0 END) as net_income
-      FROM dish_sales d
-      LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
-        AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
-      LEFT JOIN menu_items mi ON mi.id = m.menu_item_id
-      ${where}`, params);
+        COUNT(DISTINCT d.order_no) as order_count
+      FROM dish_sales d ${where}`, params) || {};
+    const summary = {
+      ...summaryRow,
+      // 订单量是全区间去重值，不能由分组行相加；成本三项则按识别后的本地菜品汇总。
+      cost_covered_product_count: mappedItems.length,
+      estimated_cost: round2(mappedItems.reduce((sum, item) => sum + Number(item.estimated_cost || 0), 0)),
+      net_income: round2(mappedItems.reduce((sum, item) => sum + Number(item.net_income || 0), 0)),
+    };
     // 按下单时刻聚合，固定补齐 00:00–23:00，便于跨日、周、月观察高峰时段。
     const hourlyRows = db.queryAll(`
       SELECT substr(order_time, 12, 2) as hour,
@@ -1634,7 +1981,8 @@ app.get('/api/dish-sales/analytics', (req, res) => {
       const key = String(hour).padStart(2, '0');
       return { hour, period: `${key}:00`, order_count: hourlyMap.get(key) || 0 };
     });
-    res.json({ ok: true, summary, top: rows, total, page: pg, page_size: psize, hourly_trend });
+    const pageItems = items.slice((pg - 1) * psize, pg * psize);
+    res.json({ ok: true, summary, top: pageItems, total, page: pg, page_size: psize, hourly_trend });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1674,6 +2022,103 @@ app.get('/api/dish-sales/stats', (req, res) => {
     `);
     res.json({ ok: true, stats: row });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== 菜品核算（禽类消耗反推）=====
+// 挂在「菜品管理」下的临时位置，功能打通后整体迁往「成本核算」：
+// 迁移时只需改前端 tab id 前缀与路由 path，本组接口路径改为 /api/cost-accounting/poultry-* 即可，业务逻辑零改动。
+app.get('/api/poultry/species', (req, res) => {
+  try { res.json({ ok: true, birds: poultryAccounting.listBirds(), animals: poultryAccounting.ANIMALS }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/poultry/species', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.createBird(req.body) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/poultry/species/:id', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.updateBird(Number(req.params.id), req.body) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/poultry/species/:id', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.deleteBird(Number(req.params.id)) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/poultry/yields', (req, res) => {
+  try { res.json({ ok: true, yields: poultryAccounting.listYields(Number(req.query.bird_id) || 0) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/poultry/yields/:birdId', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.saveYields(Number(req.params.birdId), req.body?.rows) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/poultry/yields/:id', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.deleteYield(Number(req.params.id)) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/poultry/dish-usage', (req, res) => {
+  try {
+    const menuItemId = Number(req.query.menu_item_id) || 0;
+    if (menuItemId) return res.json({ ok: true, ...poultryAccounting.listUsageByMenu(menuItemId) });
+    res.json({ ok: true, ...poultryAccounting.listUsageOverview(req.query) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.put('/api/poultry/dish-usage/:menuItemId', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.saveUsageForMenu(Number(req.params.menuItemId), req.body?.rows) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+// 批量关联：按分组勾选多个菜品，一次套用同一套「部位 × 每份耗用」
+app.post('/api/poultry/dish-usage/batch', (req, res) => {
+  try { res.json(poultryAccounting.batchSaveUsage(req.body)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/poultry/dish-usage/configured', (req, res) => {
+  try { res.json({ ok: true, items: poultryAccounting.listConfiguredMenus() }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/poultry/accounting', (req, res) => {
+  try { res.json(poultryAccounting.calculate(req.query)); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/poultry/accounting/purchase-comparison', (req, res) => {
+  try { res.json(poultryAccounting.purchaseComparison(req.query)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/poultry/purchases', (req, res) => {
+  try { res.json({ ok: true, purchases: poultryAccounting.listPurchases(req.query) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/poultry/purchases', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.savePurchase(req.body) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/poultry/purchases/:id', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.deletePurchase(Number(req.params.id)) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.get('/api/poultry/template', (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      file_name: '菜品核算-禽类出成与耗用模板.xlsx',
+      data: poultryAccounting.buildTemplateWorkbook().toString('base64'),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/poultry/import', (req, res) => {
+  try {
+    const { filename, data } = req.body || {};
+    if (!data) return res.status(400).json({ error: '缺少文件数据' });
+    const buffer = Buffer.from(String(data).replace(/^data:[^,]+,/, ''), 'base64');
+    if (!buffer.length) return res.status(400).json({ error: '文件内容为空' });
+    const result = poultryAccounting.importWorkbook(buffer);
+    console.log(`[poultry import] ${filename || '未命名.xlsx'}: 禽类 ${result.birds} / 出成 ${result.yields} / 耗用 ${result.usage} / 异常 ${result.error_count}`);
+    res.json({ ok: true, ...result, filename: filename || '' });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // 模板列表
@@ -1993,12 +2438,47 @@ app.post('/api/bookkeeping/quick-entry/preview', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * 记账重复检测：同店、同日、同大类、同小类、金额一致的已存在记录视为重复。
+ * rows: [{ store_id, date, category_name, subcategory_name, amount }]
+ * 返回去重后的重复样本 [{date, store_name, category_name, subcategory_name, amount}]
+ */
+function findBookkeepingDuplicates(db, rows) {
+  const seen = new Set();
+  const duplicates = [];
+  (rows || []).forEach(row => {
+    if (!row.store_id || !row.date) return;
+    const amount = Number(row.amount) || 0;
+    const cat = String(row.category_name || '').trim();
+    const sub = String(row.subcategory_name || '').trim();
+    const key = `${row.store_id}|${row.date}|${cat}|${sub}|${amount.toFixed(2)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const hit = db.queryOne(`SELECT date, store_name, category_name, subcategory_name, amount
+      FROM bookkeeping_entries
+      WHERE store_id=? AND date=? AND category_name=? AND subcategory_name=? AND ABS(amount-?)<0.005
+      LIMIT 1`, [row.store_id, row.date, cat, sub, amount]);
+    if (hit) duplicates.push({ date: hit.date, store_name: hit.store_name, category_name: hit.category_name, subcategory_name: hit.subcategory_name, amount: Number(hit.amount) });
+  });
+  return duplicates;
+}
+
 app.post('/api/bookkeeping/quick-entry/commit', (req, res) => {
   try {
     const date = String(req.body.date || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: '请选择归属日期' });
     const { rows, errors } = resolveQuickBookkeepingRows(req, req.body.text);
     if (errors.length) return res.status(400).json({ error: '数据校验未通过，请先修正后重新解析', errors });
+    // 去重校验：与已有记录重复时提示（force=true 放行）
+    if (!req.body.force) {
+      const duplicates = findBookkeepingDuplicates(db, rows.map(row => ({ ...row, date })));
+      if (duplicates.length) {
+        return res.status(409).json({
+          error: `检测到 ${duplicates.length} 条与已有记账重复的记录（同店/同日/同分类/同金额），请确认是否仍要录入`,
+          code: 'DUPLICATE_BOOKKEEPING', duplicates,
+        });
+      }
+    }
     const categories = db.queryAll('SELECT * FROM bookkeeping_categories');
     const categoryMap = new Map(categories.map(item => [normalizeQuickBookkeepingName(item.name), item]));
     const subcategoryMap = new Map();
@@ -2042,6 +2522,20 @@ app.post('/api/bookkeeping/entries', (req, res) => {
     if (!store_id) return res.status(400).json({ error: '您的账号未绑定门店，无法记账' });
     if (!date) return res.status(400).json({ error: '请选择日期' });
     const amt = Number(amount) || 0;
+    // 去重校验：与已有记录重复时提示（force=true 放行）
+    const catName = String(category_name || '').trim()
+      || (category_id ? db.queryOne('SELECT name FROM bookkeeping_categories WHERE id=?', [category_id])?.name : '') || '';
+    const subName = String(subcategory_name || '').trim()
+      || (subcategory_id ? db.queryOne('SELECT name FROM bookkeeping_subcategories WHERE id=?', [subcategory_id])?.name : '') || '';
+    if (!req.body.force) {
+      const duplicates = findBookkeepingDuplicates(db, [{ store_id, date, category_name: catName, subcategory_name: subName, amount: amt }]);
+      if (duplicates.length) {
+        return res.status(409).json({
+          error: '该记录与已有记账重复（同店/同日/同分类/同金额），请确认是否仍要录入',
+          code: 'DUPLICATE_BOOKKEEPING', duplicates,
+        });
+      }
+    }
     const id = db.insert(
       'INSERT INTO bookkeeping_entries (store_id,store_name,user_id,user_name,date,category_id,category_name,subcategory_id,subcategory_name,amount,images,remark) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
       [store_id, store_name, req.user.id, req.user.display_name || req.user.username, date,
@@ -2060,6 +2554,40 @@ app.delete('/api/bookkeeping/entries/:id', (req, res) => {
     db.run(`DELETE FROM bookkeeping_entries WHERE id=?${where}`, params);
     db.save();
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 批量删除（多选 ids）
+app.post('/api/bookkeeping/entries/batch-delete', (req, res) => {
+  try {
+    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+      .map(Number).filter(id => Number.isInteger(id) && id > 0);
+    if (!ids.length) return res.status(400).json({ error: '请选择要删除的记录' });
+    const { store_id } = getBookkeepingStore(req);
+    let sql = `DELETE FROM bookkeeping_entries WHERE id IN (${ids.map(() => '?').join(',')})`;
+    const params = [...ids];
+    if (store_id) { sql += ' AND store_id=?'; params.push(store_id); }
+    const deleted = db.run(sql, params);
+    db.save();
+    res.json({ ok: true, deleted });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 按日期区间清除（如删除整月数据）
+app.post('/api/bookkeeping/entries/purge', (req, res) => {
+  try {
+    const date_from = String(req.body?.date_from || '').trim();
+    const date_to = String(req.body?.date_to || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date_from) || !/^\d{4}-\d{2}-\d{2}$/.test(date_to)) {
+      return res.status(400).json({ error: '请提供合法的 date_from / date_to' });
+    }
+    const { store_id } = getBookkeepingStore(req);
+    let sql = 'DELETE FROM bookkeeping_entries WHERE date>=? AND date<=?';
+    const params = [date_from, date_to];
+    if (store_id) { sql += ' AND store_id=?'; params.push(store_id); }
+    const deleted = db.run(sql, params);
+    db.save();
+    res.json({ ok: true, deleted, date_from, date_to });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2391,7 +2919,7 @@ function buildMonthlyDashboardGroups(monthRows, dayRows, type, options = {}) {
     if ((isExpense && raw >= 0) || (!isExpense && raw <= 0)) return;
     if (!isExpense && isStored && !isStoredValue(row)) return;
     if (!isExpense && !isStored && isStoredValue(row)) return;
-    if (isExpense && options.excludeRow?.(row)) return;
+    if (options.excludeRow?.(row)) return;
     const category = row.category_name || '未分类';
     const subcategory = row.subcategory_name || '未分类';
     const key = `${category}\u0000${subcategory}`;
@@ -2464,6 +2992,128 @@ function fixedCostTotals(storeId) {
   }, { rent: 0, utilities: 0 });
 }
 
+function isBookkeepingSalesRevenue(row) {
+  const text = `${row.category_name || ''} ${row.subcategory_name || ''}`;
+  return /销售收入|堂食|外带|自提|美团外卖|淘宝闪购|京东(?:外卖|秒送)|抖音团购|美团.*团购|大众点评/.test(text);
+}
+
+function isBookkeepingPlatformFee(row) {
+  const text = `${row.category_name || ''} ${row.subcategory_name || ''}`;
+  return /平台.*费|服务费|佣金|推广费|配送费|保障.*费|履约.*费/.test(text);
+}
+
+function appendDashboardVirtualGroup(rows, category, subcategory, dailyAmount, cumulativeAmount) {
+  if (!dailyAmount && !cumulativeAmount) return rows;
+  const child = { category, subcategory, daily_amount: dailyAmount, cumulative_amount: cumulativeAmount, is_group: false, virtual: true };
+  const group = { category, subcategory: '', daily_amount: dailyAmount, cumulative_amount: cumulativeAmount, is_group: true, virtual: true };
+  return [group, child, ...rows];
+}
+
+// 收入构成不能只显示一个“真实数据销售收入”汇总。这里保留记账本口径下
+// 用户关心的收入字段，并以当前选择的收银机/第三方来源填充对应金额。
+const SALES_COMPOSITION_CHANNELS = [
+  { key: 'store_sales', label: '店内销售', note: '收银机' },
+  { key: 'pickup', label: '自提销售', note: '收银机' },
+  { key: 'meituan_delivery', label: '美团外卖' },
+  { key: 'taobao_flash', label: '淘宝闪购' },
+  { key: 'jd_delivery', label: '京东秒送' },
+  { key: 'douyin_group', label: '抖音团购' },
+  { key: 'meituan_group', label: '美团/大众点评团购' },
+];
+const GROUP_BUY_COMPOSITION_CHANNELS = new Set(['douyin_group', 'meituan_group']);
+
+function revenueSourceLabel(source) {
+  if (source === 'platform') return '第三方数据';
+  if (source === 'mixed') return '混合来源';
+  return '收银机数据';
+}
+
+function buildResolvedIncomeComposition(monthRows, dayRows, resolvedRows, cutoff, revenuePolicy) {
+  // 非销售类收入仍然完全来自记账本，避免真实数据视角吞掉其他经营收入。
+  const otherIncomeRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'income', { excludeRow: isBookkeepingSalesRevenue });
+  const amounts = new Map(SALES_COMPOSITION_CHANNELS.map(item => [item.key, {
+    daily_amount: 0, cumulative_amount: 0, sources: new Set(),
+  }]));
+  const groupStates = new Map([...GROUP_BUY_COMPOSITION_CHANNELS].map(key => [key, {
+    requested_platform: revenuePolicy.sourceFor(key) === 'platform', platform_applied: false, fallback_to_pos: false,
+  }]));
+  // 只有“该团购选择第三方且第三方记录实际可用”时，解析器才会从店内销售
+  // 扣掉对应收银机团购金额并加入第三方金额。收银机来源或回退收银机时都不拆分。
+  resolvedRows.forEach(row => {
+    const state = groupStates.get(row.channel);
+    if (!state) return;
+    if (row.source_used === 'platform' && !row.exclude_from_sales) state.platform_applied = true;
+    if (state.requested_platform && row.source_used !== 'platform') state.fallback_to_pos = true;
+  });
+  resolvedRows.filter(row => !row.exclude_from_sales).forEach(row => {
+    const item = amounts.get(row.channel);
+    if (!item) return;
+    const income = Number(row.income || 0);
+    item.cumulative_amount += income;
+    if (row.biz_date === cutoff) item.daily_amount += income;
+    item.sources.add(row.source_used === 'platform' ? 'platform' : 'pos');
+  });
+  const activeGroupStates = SALES_COMPOSITION_CHANNELS
+    .filter(meta => GROUP_BUY_COMPOSITION_CHANNELS.has(meta.key))
+    .map(meta => ({ ...meta, ...groupStates.get(meta.key) }));
+  const removedGroups = activeGroupStates.filter(item => item.platform_applied && !item.fallback_to_pos);
+  const partiallyReplacedGroups = activeGroupStates.filter(item => item.platform_applied && item.fallback_to_pos);
+  const retainedGroups = activeGroupStates.filter(item => !item.platform_applied || item.fallback_to_pos);
+  // 每次请求单独生成店内销售标签，不能改写全局渠道配置。
+  const storeSalesMeta = { ...SALES_COMPOSITION_CHANNELS[0] };
+  if (removedGroups.length && !retainedGroups.length) {
+    storeSalesMeta.label = '纯堂食外带';
+    storeSalesMeta.note = '已剔除第三方团购';
+  } else if (removedGroups.length || partiallyReplacedGroups.length) {
+    storeSalesMeta.label = '店内销售（团购部分替换）';
+    const removedNames = [...removedGroups, ...partiallyReplacedGroups].map(item => item.label).join('、');
+    const retainedNames = retainedGroups.map(item => item.label).join('、');
+    storeSalesMeta.note = retainedNames ? `已替换${removedNames}；仍含${retainedNames}` : `已替换${removedNames}`;
+  } else if (activeGroupStates.some(item => item.requested_platform)) {
+    storeSalesMeta.label = '店内销售（团购待拆分）';
+    storeSalesMeta.note = '第三方团购记录未就绪';
+  } else {
+    storeSalesMeta.label = '店内销售（含收银机团购）';
+    storeSalesMeta.note = '收银机数据';
+  }
+  const displayChannels = SALES_COMPOSITION_CHANNELS
+    .filter(meta => !GROUP_BUY_COMPOSITION_CHANNELS.has(meta.key) || groupStates.get(meta.key).platform_applied)
+    .map(meta => meta.key === 'store_sales' ? storeSalesMeta : meta);
+  const children = displayChannels.map(meta => {
+    const amount = amounts.get(meta.key);
+    const source = amount.sources.size > 1 ? 'mixed' : (amount.sources.values().next().value || 'pos');
+    return {
+      category: '销售收入',
+      subcategory: meta.label,
+      daily_amount: amount.daily_amount,
+      cumulative_amount: amount.cumulative_amount,
+      source_label: meta.note || revenueSourceLabel(source),
+      source_used: source,
+      is_group: false,
+      virtual: true,
+    };
+  });
+  const dailyAmount = children.reduce((sum, item) => sum + Number(item.daily_amount || 0), 0);
+  const cumulativeAmount = children.reduce((sum, item) => sum + Number(item.cumulative_amount || 0), 0);
+  const salesGroup = {
+    category: '销售收入', subcategory: '', daily_amount: dailyAmount, cumulative_amount: cumulativeAmount,
+    is_group: true, virtual: true,
+  };
+  return [salesGroup, ...children, ...otherIncomeRows];
+}
+
+function buildStoredValueComposition(monthRows, dayRows) {
+  const children = buildMonthlyDashboardGroups(monthRows, dayRows, 'stored').filter(row => !row.is_group)
+    .map(row => ({ ...row, category: '会员储值', is_group: false }));
+  if (!children.length) return [];
+  return [{
+    category: '会员储值', subcategory: '',
+    daily_amount: children.reduce((sum, row) => sum + Number(row.daily_amount || 0), 0),
+    cumulative_amount: children.reduce((sum, row) => sum + Number(row.cumulative_amount || 0), 0),
+    is_group: true,
+  }, ...children];
+}
+
 app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
   try {
     const { month, as_of, store_id } = req.query;
@@ -2487,6 +3137,25 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       where.push(`${field} IN (${scopedStoreIds.map(() => '?').join(',')})`);
       params.push(...scopedStoreIds);
     };
+    const revenueDataView = String(req.query.data_view || 'real') === 'cashier' ? 'cashier' : 'real';
+    const isCashierView = revenueDataView === 'cashier';
+    const resolvedRevenue = businessAnalytics.getResolvedRevenueByDate(db, {
+      date_from: period.start, date_to: period.cutoff, store_ids: scopedStoreIds.join(','),
+      data_view: revenueDataView, source_overrides: req.query.source_overrides || '',
+    });
+    const resolvedSalesByDate = new Map();
+    resolvedRevenue.rows.filter(row => !row.exclude_from_sales).forEach(row => {
+      const item = resolvedSalesByDate.get(row.biz_date) || { income: 0, settled: 0, fees: 0, gross: 0, orders: 0 };
+      item.income += Number(row.income || 0);
+      item.settled += Number(row.settled || 0);
+      item.fees += Number(row.resolved_fees || 0);
+      item.gross += Number(row.gross || 0);
+      item.orders += Number(row.orders || 0);
+      resolvedSalesByDate.set(row.biz_date, item);
+    });
+    const resolvedSalesTotals = [...resolvedSalesByDate.values()].reduce((sum, row) => ({
+      income: sum.income + row.income, settled: sum.settled + row.settled, fees: sum.fees + row.fees, gross: sum.gross + row.gross, orders: sum.orders + row.orders,
+    }), { income: 0, settled: 0, fees: 0, gross: 0, orders: 0 });
     const where = ['date>=?', 'date<=?'];
     const params = [period.start, period.cutoff];
     appendStoreScope(where, params);
@@ -2570,23 +3239,35 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       if (!profitByDate.has(row.date)) profitByDate.set(row.date, { income: 0, expense: 0 });
       const target = profitByDate.get(row.date);
       const amount = Number(row.amount || 0);
-      if (amount > 0 && !isStoredValue(row)) target.income += amount;
-      if (amount < 0 && !recurringMatcher(row)) target.expense -= amount;
+      // 收银机视角直接用记账本口径：销售类收入与平台费用都保留在账本里；
+      // 真实数据视角才从账本剔除（由平台解析/虚拟分组替代展示）。
+      if (amount > 0 && !isStoredValue(row) && (isCashierView || !isBookkeepingSalesRevenue(row))) target.income += amount;
+      if (amount < 0 && !recurringMatcher(row) && (isCashierView || !isBookkeepingPlatformFee(row))) target.expense -= amount;
     });
     const dailyProfitSeries = [];
     let cumulativeProfit = 0;
     for (let day = 1; day <= period.elapsed_days; day++) {
       const date = `${String(month)}-${String(day).padStart(2, '0')}`;
       const row = profitByDate.get(date) || {};
-      const income = Number(row.income || 0);
-      const expense = Number(row.expense || 0) + (view === 'accrual' ? recurringCosts.reduce((sum, item) => sum + Number(item.daily_amount || 0), 0) : 0);
+      const sales = isCashierView ? {} : (resolvedSalesByDate.get(date) || {});
+      const income = Number(row.income || 0) + Number(sales.income || 0);
+      const expense = Number(row.expense || 0) + Number(sales.fees || 0) + (view === 'accrual' ? recurringCosts.reduce((sum, item) => sum + Number(item.daily_amount || 0), 0) : 0);
       const dailyNet = income - expense;
       cumulativeProfit += dailyNet;
       dailyProfitSeries.push({ date, day, income, expense, daily_net: dailyNet, cumulative_net: cumulativeProfit });
     }
-    const incomeRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'income');
-    const expenseRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'expense', { excludeRow: recurringMatcher, accrualItems });
-    const storedValueRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'stored');
+    const ledgerIncomeTotal = monthRows.reduce((sum, row) => Number(row.amount || 0) > 0 && !isStoredValue(row) ? sum + Number(row.amount) : sum, 0);
+    const ledgerFeeTotal = monthRows.reduce((sum, row) => Number(row.amount || 0) < 0 && isBookkeepingPlatformFee(row) ? sum - Number(row.amount) : sum, 0);
+    const incomeRows = isCashierView
+      ? buildMonthlyDashboardGroups(monthRows, dayRows, 'income')
+      : buildResolvedIncomeComposition(monthRows, dayRows, resolvedRevenue.rows, period.cutoff, resolvedRevenue.policy);
+    const expenseRows = isCashierView
+      ? buildMonthlyDashboardGroups(monthRows, dayRows, 'expense', { excludeRow: recurringMatcher, accrualItems })
+      : appendDashboardVirtualGroup(
+          buildMonthlyDashboardGroups(monthRows, dayRows, 'expense', { excludeRow: row => recurringMatcher(row) || isBookkeepingPlatformFee(row), accrualItems }),
+          '平台费用', '第三方平台费用', Number(resolvedSalesByDate.get(period.cutoff)?.fees || 0), Number(resolvedSalesTotals.fees || 0)
+        );
+    const storedValueRows = buildStoredValueComposition(monthRows, dayRows);
     const totals = (rows, key) => rows.filter(row => row.is_group).reduce((sum, row) => sum + Number(row[key] || 0), 0);
     const dailyIncome = totals(incomeRows, 'daily_amount');
     const cumulativeIncome = totals(incomeRows, 'cumulative_amount');
@@ -2606,6 +3287,15 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       store_name: storeName,
       period,
       view,
+      revenue_source: {
+        view: revenueDataView,
+        overrides: isCashierView ? {} : resolvedRevenue.policy.overrides,
+        gross_amount: isCashierView ? Math.round(ledgerIncomeTotal * 100) / 100 : resolvedSalesTotals.gross,
+        income_amount: isCashierView ? Math.round(ledgerIncomeTotal * 100) / 100 : resolvedSalesTotals.income,
+        settled_amount: isCashierView ? Math.round(ledgerIncomeTotal * 100) / 100 : resolvedSalesTotals.settled,
+        platform_fee_amount: isCashierView ? Math.round(ledgerFeeTotal * 100) / 100 : resolvedSalesTotals.fees,
+        order_count: isCashierView ? 0 : resolvedSalesTotals.orders,
+      },
       cost_sources: Object.fromEntries(Object.entries(costSources).map(([key, source]) => [key, { key: source, ...sourceMetaByKey[source] }])),
       wage,
       accrual_costs: recurringCosts.map(item => ({
@@ -2654,12 +3344,118 @@ app.get('/api/business-analytics/views/:scope', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 美团外卖经营指标（曝光/入店/下单/转化率）：求和字段直接合计，转化率按加权口径重算
+app.get('/api/business-analytics/meituan-operation', (req, res) => {
+  try {
+    res.json(businessAnalytics.getMeituanOperation(db, req.query));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/business-analytics/products/:scope', (req, res) => {
   try {
     const scope = req.params.scope;
     if (!['overview','group-buy','delivery'].includes(scope)) return res.status(404).json({ error: '分析视角不存在' });
     res.json({ ok: true, ...businessAnalytics.getProductAnalytics(db, scope, req.query) });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 规格拆分配置（可编辑数据，成本实时取自关联菜品 menu_items.cost）
+app.get('/api/business-analytics/spec-links', (req, res) => {
+  try {
+    const platform = String(req.query.platform || '').trim() || '美团外卖';
+    const name = String(req.query.external_product_name || '').trim();
+    let sql = `SELECT sl.id, sl.platform, sl.external_product_name, sl.menu_item_id, sl.platform_price, sl.enabled,
+        m.name AS menu_name, m.spec AS menu_spec, COALESCE(m.cost, 0) AS cost
+      FROM business_product_spec_links sl LEFT JOIN menu_items m ON m.id = sl.menu_item_id
+      WHERE sl.platform=?`;
+    const params = [platform];
+    if (name) { sql += ' AND sl.external_product_name=?'; params.push(name); }
+    sql += ' ORDER BY sl.external_product_name, sl.sort_order, sl.platform_price';
+    res.json({ ok: true, links: db.queryAll(sql, params) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/business-analytics/spec-links', (req, res) => {
+  try {
+    const platform = String(req.body.platform || '').trim();
+    const name = String(req.body.external_product_name || '').trim();
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!platform || !name) return res.status(400).json({ error: '请提供平台和平台商品名' });
+    const clean = items.map(item => ({ menu_item_id: Number(item.menu_item_id), platform_price: Number(item.platform_price) }))
+      .filter(item => Number.isInteger(item.menu_item_id) && item.menu_item_id > 0 && Number.isFinite(item.platform_price) && item.platform_price > 0);
+    if (!clean.length) return res.status(400).json({ error: '请至少配置一个规格（本地SKU + 平台售价）' });
+    if (new Set(clean.map(item => item.menu_item_id)).size !== clean.length) return res.status(400).json({ error: '同一个本地规格 SKU 只能配置一次，请合并或删除重复行' });
+    const blockedEmployeeMeal = db.queryOne(`SELECT id FROM menu_items WHERE id IN (${clean.map(() => '?').join(',')}) AND INSTR(name,'员工餐')>0`, clean.map(item => item.menu_item_id));
+    if (blockedEmployeeMeal) return res.status(400).json({ error: '员工餐不参与外卖和团购菜品绑定' });
+    db.run('BEGIN');
+    try {
+      db.run('DELETE FROM business_product_spec_links WHERE platform=? AND external_product_name=?', [platform, name]);
+      // 规格拆分成为唯一成本口径，移除原单品绑定，避免同一平台商品出现两套关联。
+      db.run('DELETE FROM business_product_mappings WHERE platform=? AND external_product_name=?', [platform, name]);
+      clean.forEach((item, index) => {
+        db.insert('INSERT INTO business_product_spec_links (platform,external_product_name,menu_item_id,platform_price,sort_order,enabled) VALUES (?,?,?,?,?,1)',
+          [platform, name, item.menu_item_id, item.platform_price, index + 1]);
+      });
+      db.run('COMMIT');
+    } catch (error) { try { db.run('ROLLBACK'); } catch {} throw error; }
+    db.save();
+    res.json({ ok: true, saved: clean.length });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 取消规格拆分：只删除规格关系，不删除原始销量、平台商品或本地菜品档案。
+app.delete('/api/business-analytics/spec-links', (req, res) => {
+  try {
+    const platform = String(req.query.platform || '').trim();
+    const name = String(req.query.external_product_name || '').trim();
+    if (!platform || !name) return res.status(400).json({ error: '请提供平台和平台商品名' });
+    const removed = db.run('DELETE FROM business_product_spec_links WHERE platform=? AND external_product_name=?', [platform, name]);
+    if (!removed) return res.status(404).json({ error: '该商品没有可取消的规格拆分配置' });
+    db.save();
+    res.json({ ok: true, removed });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 日级规格人工确认：仅在自动反解多解/无解时使用；保存后优先于自动计算。
+app.get('/api/business-analytics/spec-overrides', (req, res) => {
+  try {
+    const platform = String(req.query.platform || '').trim();
+    const productName = String(req.query.external_product_name || '').trim();
+    const storeId = Number(req.query.store_id);
+    const bizDate = String(req.query.biz_date || '').trim();
+    if (!platform || !productName || !storeId || !bizDate) return res.status(400).json({ error: '请提供平台、商品、门店和日期' });
+    const rows = db.queryAll(`SELECT o.menu_item_id,o.quantity,m.name AS menu_name,m.spec AS menu_spec,COALESCE(m.cost,0) AS unit_cost
+      FROM business_product_spec_overrides o LEFT JOIN menu_items m ON m.id=o.menu_item_id
+      WHERE o.platform=? AND o.external_product_name=? AND o.store_id=? AND o.biz_date=?
+      ORDER BY o.menu_item_id`, [platform, productName, storeId, bizDate]);
+    res.json({ ok: true, overrides: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/business-analytics/spec-overrides', (req, res) => {
+  try {
+    const platform = String(req.body.platform || '').trim();
+    const productName = String(req.body.external_product_name || '').trim();
+    const storeId = Number(req.body.store_id);
+    const bizDate = String(req.body.biz_date || '').trim();
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!platform || !productName || !Number.isInteger(storeId) || storeId <= 0 || !bizDate) return res.status(400).json({ error: '请提供平台、商品、门店和日期' });
+    const clean = items.map(item => ({ menu_item_id: Number(item.menu_item_id), quantity: Math.round(Number(item.quantity)) }))
+      .filter(item => Number.isInteger(item.menu_item_id) && item.menu_item_id > 0 && Number.isInteger(item.quantity) && item.quantity >= 0);
+    if (!clean.length) return res.status(400).json({ error: '请至少填写一个规格数量' });
+    const configured = db.queryAll('SELECT menu_item_id FROM business_product_spec_links WHERE platform=? AND external_product_name=? AND enabled=1', [platform, productName]).map(row => Number(row.menu_item_id));
+    if (!configured.length) return res.status(400).json({ error: '请先配置该商品的规格 SKU 与平台售价' });
+    if (clean.some(item => !configured.includes(item.menu_item_id))) return res.status(400).json({ error: '人工确认只能填写已配置的规格 SKU' });
+    db.run('BEGIN');
+    try {
+      db.run('DELETE FROM business_product_spec_overrides WHERE platform=? AND external_product_name=? AND store_id=? AND biz_date=?', [platform, productName, storeId, bizDate]);
+      clean.filter(item => item.quantity > 0).forEach(item => db.insert(`INSERT INTO business_product_spec_overrides
+        (platform,store_id,biz_date,external_product_name,menu_item_id,quantity) VALUES (?,?,?,?,?,?)`, [platform, storeId, bizDate, productName, item.menu_item_id, item.quantity]));
+      db.run('COMMIT');
+    } catch (error) { try { db.run('ROLLBACK'); } catch {} throw error; }
+    db.save();
+    res.json({ ok: true, saved: clean.filter(item => item.quantity > 0).length });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.get('/api/business-analytics/mappings/:scope', (req, res) => {
@@ -2675,6 +3471,11 @@ app.put('/api/business-analytics/mappings', (req, res) => {
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+app.put('/api/business-analytics/pos-mappings', (req, res) => {
+  try { res.json(businessAnalytics.savePosProductMapping(db, req.body || {})); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // 解绑：删除平台商品与本地菜品的映射
 app.delete('/api/business-analytics/mappings/:id', (req, res) => {
   try { res.json(businessAnalytics.deleteProductMapping(db, req.params.id)); }
@@ -2686,8 +3487,9 @@ app.post('/api/business-analytics/mappings/batch', (req, res) => {
   try {
     const { items, menu_item_id } = req.body;
     const menuId = Number(menu_item_id);
-    const menu = db.queryOne('SELECT id FROM menu_items WHERE id=?', [menuId]);
+    const menu = db.queryOne('SELECT id,name FROM menu_items WHERE id=?', [menuId]);
     if (!menu) return res.status(400).json({ error: '本地菜品不存在' });
+    if (String(menu.name || '').includes('员工餐')) return res.status(400).json({ error: '员工餐不参与外卖和团购菜品绑定' });
     if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: '请选择要绑定的商品' });
     const scope = String(req.body?.scope || '').trim();
     const group = scope === 'delivery' ? 'delivery' : 'group_buy';
@@ -2709,7 +3511,97 @@ app.post('/api/business-analytics/mappings/batch', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// 一键绑定：未绑定的平台商品按名称自动匹配本地菜品；同名多规格（平台无规格信息）时跳过避免误绑
+// 绑定名称标准化：忽略平台的展示符号、常见营销标签与空格，但保留菜品主体和规格。
+function productBindingNameKey(value) {
+  return String(value || '').toLowerCase()
+    // 【太公三宝饭】是菜品主名，不能和【招牌】这类营销标签一样整体删除。
+    .replace(/[【\[](?:新客专享|外卖专享|限时特惠|热销推荐|招牌|人气|爆款|新品)[】\]]/g, '')
+    .replace(/[【】\[\]]/g, '')
+    .replace(/(?:新客专享|外卖专享|限时特惠|热销推荐|招牌|人气|爆款|新品)/g, '')
+    .replace(/[\s·•_—\-－，,。.!！:：/\\]/g, '')
+    .trim();
+}
+
+// 外卖名称经常把赠品、是否配饭写在主菜名后面。这里仅剥离明确不会改变
+// 主菜身份的信息；不能识别或可能对应多规格的名称仍交由人工处理。
+function deliveryBindingNameKey(value) {
+  let text = String(value || '').trim();
+  const noRice = /不含(?:米饭|白饭)/.test(text);
+  // “XXX + 例汤/靓汤”中的汤为赠品，不应影响主菜绑定。
+  text = text
+    .replace(/[+＋]\s*(?:例汤|靓汤)(?=\s*(?:[（(].*[）)])?\s*$)/g, '')
+    .replace(/[（(]\s*(?:含)?(?:例汤|靓汤)\s*[）)]/g, '')
+    .replace(/不含(?:米饭|白饭)/g, '')
+    .trim();
+  // 平台的“烧肉/例（不含米饭）”和本地的“烧肉例牌”是同一售卖形态。
+  if (noRice) text = text.replace(/(?:[/／\s])?例(?=\s*(?:[（(].*[）)])?\s*$)/, '例牌');
+  return productBindingNameKey(text);
+}
+
+// 这三类在本地存在多规格/组合配置，单品自动绑定会绕开规格选择，必须保留人工处理。
+function isProtectedDeliveryMultiSpecProduct(value) {
+  const text = String(value || '');
+  return /太公烧鹅|烧鸭|咸鸡|咸香鸡|咸香靓鸡/.test(text);
+}
+
+// 组合套餐、双拼和“濑粉/面”这类仍需选择内容或规格，不能因为名称里包含一个菜名就自动绑定。
+function isDeliveryCompositeProduct(value) {
+  const text = String(value || '')
+    .replace(/[+＋]\s*(?:例汤|靓汤)(?=\s*(?:[（(].*[）)])?\s*$)/g, '');
+  return /(?:套餐|双拼|三拼|自选|二选一|濑粉\s*[/／]|干捞面|[+＋])/.test(text);
+}
+
+function productBindingSignature(binding) {
+  if (binding.type === 'spec') return `spec:${binding.items.map(item => `${item.menu_item_id}@${Number(item.platform_price)}`).sort().join('|')}`;
+  return `single:${binding.menu_item_id}`;
+}
+
+// 平台常在本地菜品主名之前/之后加三拼、超值、套餐等描述。主名长度至少 4，且在
+// 平台名称内唯一时，视为安全的“菜品系列”匹配；若同长度主名有多个，仍交给人工校正。
+function uniqueContainedMenuId(menus, platformNameKey) {
+  const candidates = (menus || []).filter(menu => {
+    const menuKey = productBindingNameKey(menu.name);
+    return menuKey.length >= 4 && platformNameKey.includes(menuKey);
+  });
+  const longest = Math.max(0, ...candidates.map(menu => productBindingNameKey(menu.name).length));
+  const ids = [...new Set(candidates.filter(menu => productBindingNameKey(menu.name).length === longest).map(menu => Number(menu.id)).filter(Boolean))];
+  return ids.length === 1 ? ids[0] : 0;
+}
+
+const PRODUCT_BINDING_SPECS = ['上庄', '下庄', '半只', '一只', '整只', '大份', '小份', '大盒', '小盒', '单人', '双人'];
+function productBindingSpecKey(value) {
+  const text = productBindingNameKey(value);
+  return PRODUCT_BINDING_SPECS.find(spec => text.includes(spec)) || '';
+}
+function productBindingDishCoreKey(value) {
+  return productBindingNameKey(value)
+    .replace(/(?:上庄|下庄|半只|一只|整只|大份|小份|大盒|小盒|单人|双人)/g, '')
+    .replace(/(?:金牌|现烤|招牌|太公|至尊|经典|超值|烧味)/g, '')
+    .replace(/(?:约)?\d+(?:g|克|斤|两|ml|毫升)/g, '')
+    .replace(/(?:不含|含)(?:米饭|白饭|靓汤|饮品|柠檬茶)/g, '')
+    .trim();
+}
+function uniqueDishAndSpecMenuId(menus, productName) {
+  const productSpec = productBindingSpecKey(productName);
+  const productCore = productBindingDishCoreKey(productName);
+  if (!productSpec || productCore.length < 2) return 0;
+  const ids = [...new Set((menus || []).filter(menu => productBindingSpecKey(menu.spec || '') === productSpec && productBindingDishCoreKey(menu.name) === productCore)
+    .map(menu => Number(menu.id)).filter(Boolean))];
+  return ids.length === 1 ? ids[0] : 0;
+}
+// 对“米饭”这类平台简写，允许从本地“白米饭 / 太公白米饭”中联想；只有唯一时自动绑定，
+// 多个候选则带入人工校正，不会猜测。
+function shortCoreMenuCandidates(menus, productName) {
+  const core = productBindingDishCoreKey(productName);
+  if (!['米饭', '白饭'].includes(core)) return [];
+  return (menus || []).filter(menu => productBindingDishCoreKey(menu.name).includes('米饭'));
+}
+function uniqueShortCoreMenuId(menus, productName) {
+  const ids = [...new Set(shortCoreMenuCandidates(menus, productName).map(menu => Number(menu.id)).filter(Boolean))];
+  return ids.length === 1 ? ids[0] : 0;
+}
+
+// 一键绑定：优先复用其他平台的相同菜品绑定，其次匹配本地菜品；只有候选唯一时才自动落库。
 app.post('/api/business-analytics/mappings/auto-bind', (req, res) => {
   try {
     const scope = String(req.body?.scope || '').trim();
@@ -2724,29 +3616,299 @@ app.post('/api/business-analytics/mappings/auto-bind', (req, res) => {
       WHERE p.channel IN (${channels.map(() => '?').join(',')}) AND m.id IS NULL
       GROUP BY p.platform, p.product_name
     `, channels);
-    const menus = db.queryAll("SELECT id,name,category FROM menu_items WHERE status='在售'");
-    const byName = new Map();
+    const menus = db.queryAll("SELECT id,name,category,spec FROM menu_items WHERE status='在售' AND INSTR(name,'员工餐')=0");
+    const byName = new Map(), byNormalizedName = new Map();
     menus.forEach(m => {
-      const list = byName.get(m.name);
-      if (list) list.push(m); else byName.set(m.name, [m]);
+      const append = (map, key) => { if (!key) return; const list = map.get(key); if (list) list.push(m); else map.set(key, [m]); };
+      append(byName, String(m.name || '').trim());
+      append(byNormalizedName, productBindingNameKey(m.name));
     });
     const group = scope === 'delivery' ? 'delivery' : 'group_buy';
+    const existingMappings = db.queryAll(`SELECT platform,external_product_name,menu_item_id FROM business_product_mappings
+      WHERE platform IN (${channels.map(() => '?').join(',')})`, channels);
+    const existingSpecLinks = db.queryAll(`SELECT platform,external_product_name,menu_item_id,platform_price,sort_order
+      FROM business_product_spec_links WHERE enabled=1 AND platform IN (${channels.map(() => '?').join(',')})
+      ORDER BY platform,external_product_name,sort_order,id`, channels);
+    const reusableExact = new Map(), reusableNormalized = new Map();
+    const appendReusable = (map, key, binding) => {
+      if (!key) return;
+      const signatures = map.get(key) || new Map();
+      signatures.set(productBindingSignature(binding), binding);
+      map.set(key, signatures);
+    };
+    existingMappings.forEach(row => {
+      const binding = { type: 'single', menu_item_id: Number(row.menu_item_id) };
+      appendReusable(reusableExact, String(row.external_product_name || '').trim(), binding);
+      appendReusable(reusableNormalized, productBindingNameKey(row.external_product_name), binding);
+    });
+    const specsByProduct = new Map();
+    existingSpecLinks.forEach(row => {
+      const key = `${row.platform}|${row.external_product_name}`;
+      const item = specsByProduct.get(key) || { platform: row.platform, name: String(row.external_product_name || '').trim(), items: [] };
+      item.items.push({ menu_item_id: Number(row.menu_item_id), platform_price: Number(row.platform_price), sort_order: Number(row.sort_order) });
+      specsByProduct.set(key, item);
+    });
+    specsByProduct.forEach(item => {
+      const binding = { type: 'spec', items: item.items };
+      appendReusable(reusableExact, item.name, binding);
+      appendReusable(reusableNormalized, productBindingNameKey(item.name), binding);
+    });
+    const uniqueMenu = candidates => {
+      const ids = [...new Set((candidates || []).map(item => Number(item.id)).filter(Boolean))];
+      return ids.length === 1 ? ids[0] : 0;
+    };
+    const bind = (platform, productName, binding) => {
+      db.run('DELETE FROM business_product_spec_links WHERE platform=? AND external_product_name=?', [platform, productName]);
+      if (binding.type === 'spec') {
+        db.run('DELETE FROM business_product_mappings WHERE platform=? AND external_product_name=?', [platform, productName]);
+        binding.items.forEach((item, index) => db.insert(`INSERT INTO business_product_spec_links
+          (platform,external_product_name,menu_item_id,platform_price,sort_order,enabled) VALUES (?,?,?,?,?,1)`,
+          [platform, productName, item.menu_item_id, item.platform_price, index + 1]));
+      } else {
+        db.run(`INSERT INTO business_product_mappings (platform, channel_group, external_product_name, menu_item_id)
+          VALUES (?,?,?,?) ON CONFLICT(platform, external_product_name)
+          DO UPDATE SET channel_group=excluded.channel_group, menu_item_id=excluded.menu_item_id, updated_at=datetime('now','localtime')`,
+          [platform, group, productName, binding.menu_item_id]);
+      }
+    };
     let bound = 0, skipped = 0;
-    const reasons = { no_name_match: 0, ambiguous_name: 0 };
+    const reasons = { no_name_match: 0, ambiguous_name: 0, cross_platform_reused: 0, exact_name: 0, normalized_name: 0, intelligent_match: 0 };
     db.run('BEGIN');
-    for (const r of rows) {
-      const candidates = byName.get(String(r.product_name || '').trim()) || [];
-      if (!candidates.length) { reasons.no_name_match++; skipped++; continue; }
-      if (candidates.length > 1) { reasons.ambiguous_name++; skipped++; continue; }
-      db.run(`INSERT INTO business_product_mappings (platform, channel_group, external_product_name, menu_item_id)
-        VALUES (?,?,?,?) ON CONFLICT(platform, external_product_name)
-        DO UPDATE SET channel_group=excluded.channel_group, menu_item_id=excluded.menu_item_id, updated_at=datetime('now','localtime')`,
-        [r.platform, group, String(r.product_name || '').trim(), candidates[0].id]);
-      bound++;
+    try {
+      for (const r of rows) {
+        const name = String(r.product_name || '').trim();
+        const normalizedName = productBindingNameKey(name);
+        const reuse = reusableExact.get(name) || reusableNormalized.get(normalizedName);
+        if (reuse && reuse.size === 1) {
+          bind(r.platform, name, [...reuse.values()][0]);
+          bound++; reasons.cross_platform_reused++; continue;
+        }
+        if (reuse && reuse.size > 1) { reasons.ambiguous_name++; skipped++; continue; }
+        const exactMenuId = uniqueMenu(byName.get(name));
+        if (exactMenuId) { bind(r.platform, name, { type: 'single', menu_item_id: exactMenuId }); bound++; reasons.exact_name++; continue; }
+        const normalizedMenuId = uniqueMenu(byNormalizedName.get(normalizedName));
+        if (normalizedMenuId) { bind(r.platform, name, { type: 'single', menu_item_id: normalizedMenuId }); bound++; reasons.normalized_name++; continue; }
+        const dishAndSpecMenuId = uniqueDishAndSpecMenuId(menus, name);
+        if (dishAndSpecMenuId) { bind(r.platform, name, { type: 'single', menu_item_id: dishAndSpecMenuId }); bound++; reasons.intelligent_match++; continue; }
+        const shortCoreMenuId = uniqueShortCoreMenuId(menus, name);
+        if (shortCoreMenuId) { bind(r.platform, name, { type: 'single', menu_item_id: shortCoreMenuId }); bound++; reasons.intelligent_match++; continue; }
+        const containedMenuId = uniqueContainedMenuId(menus, normalizedName);
+        if (containedMenuId) { bind(r.platform, name, { type: 'single', menu_item_id: containedMenuId }); bound++; reasons.intelligent_match++; continue; }
+        // 最后一层只允许“一个名称完整包含另一个名称”的唯一候选，且短名称至少 4 个字符。
+        const fuzzyCandidates = menus.filter(menu => {
+          const menuKey = productBindingNameKey(menu.name);
+          const shortKey = menuKey.length <= normalizedName.length ? menuKey : normalizedName;
+          const longKey = menuKey.length > normalizedName.length ? menuKey : normalizedName;
+          return shortKey.length >= 4 && longKey.includes(shortKey) && longKey.length - shortKey.length <= 6;
+        });
+        const fuzzyMenuId = uniqueMenu(fuzzyCandidates);
+        if (fuzzyMenuId) { bind(r.platform, name, { type: 'single', menu_item_id: fuzzyMenuId }); bound++; reasons.intelligent_match++; continue; }
+        if (fuzzyCandidates.length || (byName.get(name) || []).length || (byNormalizedName.get(normalizedName) || []).length) reasons.ambiguous_name++;
+        else reasons.no_name_match++;
+        skipped++;
+      }
+      db.run('COMMIT');
+    } catch (error) {
+      try { db.run('ROLLBACK'); } catch {}
+      throw error;
     }
-    db.run('COMMIT');
     db.save();
     res.json({ ok: true, bound, skipped, reasons });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 智能绑定的预览/执行两阶段流程。预览绝不写库：有多个合理候选、或跨平台已有不同
+// 绑定时交由使用者校正，避免“一键绑定”把成本归到错误菜品。
+function buildBusinessAutoBindingPlan(scopeValue) {
+  const scope = String(scopeValue || '').trim();
+  const channels = scope === 'delivery'
+    ? ['meituan_delivery', 'taobao_flash', 'jd_delivery']
+    : ['meituan_group', 'douyin_group', 'free_trial'];
+  const group = scope === 'delivery' ? 'delivery' : 'group_buy';
+  const rows = db.queryAll(`SELECT p.platform,p.product_name FROM business_product_sales p
+    LEFT JOIN business_product_mappings m ON m.platform=p.platform AND m.external_product_name=p.product_name
+    LEFT JOIN business_product_spec_links s ON s.platform=p.platform AND s.external_product_name=p.product_name AND s.enabled=1
+    WHERE p.channel IN (${channels.map(() => '?').join(',')}) AND m.id IS NULL AND s.id IS NULL
+    GROUP BY p.platform,p.product_name`, channels);
+  const menus = db.queryAll("SELECT id,name,category,spec FROM menu_items WHERE status='在售' AND INSTR(name,'员工餐')=0 AND INSTR(category,'员工餐')=0 AND INSTR(category,'团购')=0 ORDER BY category,name,spec");
+  const menuById = new Map(menus.map(menu => [Number(menu.id), menu]));
+  const byName = new Map(), byKey = new Map(), byDeliveryKey = new Map();
+  const add = (map, key, value) => {
+    if (!key) return;
+    const list = map.get(key) || [];
+    list.push(value);
+    map.set(key, list);
+  };
+  menus.forEach(menu => {
+    add(byName, String(menu.name || '').trim(), menu);
+    add(byKey, productBindingNameKey(menu.name), menu);
+    add(byDeliveryKey, deliveryBindingNameKey(menu.name), menu);
+  });
+
+  const existingMappings = db.queryAll(`SELECT platform,external_product_name,menu_item_id FROM business_product_mappings
+    WHERE platform IN (${channels.map(() => '?').join(',')})`, channels);
+  const existingSpecs = db.queryAll(`SELECT platform,external_product_name,menu_item_id,platform_price,sort_order FROM business_product_spec_links
+    WHERE enabled=1 AND platform IN (${channels.map(() => '?').join(',')}) ORDER BY platform,external_product_name,sort_order,id`, channels);
+  const reusableExact = new Map(), reusableKey = new Map();
+  const addReuse = (map, key, binding) => {
+    if (!key) return;
+    const signatures = map.get(key) || new Map();
+    signatures.set(productBindingSignature(binding), binding);
+    map.set(key, signatures);
+  };
+  existingMappings.forEach(row => {
+    const binding = { type: 'single', menu_item_id: Number(row.menu_item_id) };
+    addReuse(reusableExact, String(row.external_product_name || '').trim(), binding);
+    addReuse(reusableKey, productBindingNameKey(row.external_product_name), binding);
+  });
+  const specGroups = new Map();
+  existingSpecs.forEach(row => {
+    const key = `${row.platform}|${row.external_product_name}`;
+    const value = specGroups.get(key) || { name: String(row.external_product_name || '').trim(), items: [] };
+    value.items.push({ menu_item_id: Number(row.menu_item_id), platform_price: Number(row.platform_price), sort_order: Number(row.sort_order) });
+    specGroups.set(key, value);
+  });
+  specGroups.forEach(value => {
+    const binding = { type: 'spec', items: value.items };
+    addReuse(reusableExact, value.name, binding);
+    addReuse(reusableKey, productBindingNameKey(value.name), binding);
+  });
+  const uniqueId = list => {
+    const ids = [...new Set((list || []).map(x => Number(x.id)).filter(Boolean))];
+    return ids.length === 1 ? ids[0] : 0;
+  };
+  const candidateMenus = (lists, reuse) => {
+    const result = new Map();
+    (lists || []).flat().forEach(menu => { if (menu?.id) result.set(Number(menu.id), menu); });
+    if (reuse) reuse.forEach(binding => {
+      (binding.type === 'spec' ? binding.items : [binding]).forEach(item => {
+        const menu = menuById.get(Number(item.menu_item_id));
+        if (menu) result.set(Number(menu.id), menu);
+      });
+    });
+    return [...result.values()].map(menu => ({ id: Number(menu.id), name: menu.name, category: menu.category || '未分类', spec: menu.spec || '' }));
+  };
+  const autoItems = [], manualItems = [];
+  rows.forEach(row => {
+    const productName = String(row.product_name || '').trim();
+    // 多规格菜由规格绑定管理，不进入预关联或人工校正队列，避免单品映射覆盖规格方案。
+    if (scope === 'delivery' && isProtectedDeliveryMultiSpecProduct(productName)) return;
+    const key = scope === 'delivery' ? deliveryBindingNameKey(productName) : productBindingNameKey(productName);
+    const exact = byName.get(productName) || [];
+    const normalized = (scope === 'delivery' ? byDeliveryKey : byKey).get(key) || [];
+    const productSpec = productBindingSpecKey(productName);
+    const productCore = productBindingDishCoreKey(productName);
+    const dishAndSpec = productSpec && productCore.length >= 2
+      ? menus.filter(menu => productBindingSpecKey(menu.spec || '') === productSpec && productBindingDishCoreKey(menu.name) === productCore)
+      : [];
+    const shortCore = shortCoreMenuCandidates(menus, productName);
+    const contained = menus.filter(menu => {
+      const menuKey = productBindingNameKey(menu.name);
+      return menuKey.length >= 4 && key.includes(menuKey);
+    });
+    const fuzzy = menus.filter(menu => {
+      const menuKey = productBindingNameKey(menu.name);
+      const shortKey = menuKey.length <= key.length ? menuKey : key;
+      const longKey = menuKey.length > key.length ? menuKey : key;
+      return shortKey.length >= 4 && longKey.includes(shortKey) && longKey.length - shortKey.length <= 6;
+    });
+    const reuse = reusableExact.get(productName) || reusableKey.get(key);
+    const bind = (binding, strategy) => autoItems.push({ platform: row.platform, product_name: productName, binding, strategy });
+    if (scope === 'delivery' && isDeliveryCompositeProduct(productName)) {
+      const candidates = candidateMenus([exact, normalized, dishAndSpec, shortCore, contained, fuzzy], reuse);
+      if (candidates.length) manualItems.push({
+        key: `${row.platform}::${productName}`,
+        platform: row.platform,
+        product_name: productName,
+        reason: '组合菜品或多规格内容需要人工确认，不自动绑定',
+        candidates
+      });
+      return;
+    }
+    if (reuse?.size === 1) { bind([...reuse.values()][0], '复用其他平台同名绑定'); return; }
+    if (reuse?.size > 1) {
+      manualItems.push({ key: `${row.platform}::${productName}`, platform: row.platform, product_name: productName, reason: '其他平台存在不同绑定，请确认对应本地菜品', candidates: candidateMenus([exact, normalized, dishAndSpec, shortCore, contained, fuzzy], reuse) });
+      return;
+    }
+    const exactId = uniqueId(exact);
+    if (exactId) { bind({ type: 'single', menu_item_id: exactId }, '本地同名'); return; }
+    const normalizedId = uniqueId(normalized);
+    if (normalizedId) {
+      bind({ type: 'single', menu_item_id: normalizedId }, scope === 'delivery' && key !== productBindingNameKey(productName) ? '赠品/例牌规则匹配' : '规范化同名');
+      return;
+    }
+    const dishAndSpecId = uniqueId(dishAndSpec);
+    if (dishAndSpecId) { bind({ type: 'single', menu_item_id: dishAndSpecId }, '菜品词与规格联想'); return; }
+    const shortCoreId = uniqueId(shortCore);
+    if (shortCoreId) { bind({ type: 'single', menu_item_id: shortCoreId }, '简写菜品词联想'); return; }
+    const containedId = uniqueContainedMenuId(menus, key);
+    if (containedId) { bind({ type: 'single', menu_item_id: containedId }, '菜品主名包含匹配'); return; }
+    const fuzzyId = uniqueId(fuzzy);
+    if (fuzzyId) { bind({ type: 'single', menu_item_id: fuzzyId }, '智能名称识别'); return; }
+    const candidates = candidateMenus([exact, normalized, dishAndSpec, shortCore, contained, fuzzy]);
+    // 没有任何可靠联想的菜品不进入本次人工校正，仍保留在主列表中供单独处理。
+    if (!candidates.length) return;
+    manualItems.push({
+      key: `${row.platform}::${productName}`,
+      platform: row.platform,
+      product_name: productName,
+      reason: '找到多个可能的本地菜品，请人工校正',
+      candidates
+    });
+  });
+  return { scope, group, channels, menus, menuById, autoItems, manualItems };
+}
+
+function applyBusinessAutoBinding(group, platform, productName, binding) {
+  db.run('DELETE FROM business_product_spec_links WHERE platform=? AND external_product_name=?', [platform, productName]);
+  if (binding.type === 'spec') {
+    db.run('DELETE FROM business_product_mappings WHERE platform=? AND external_product_name=?', [platform, productName]);
+    binding.items.forEach((item, index) => db.insert(`INSERT INTO business_product_spec_links
+      (platform,external_product_name,menu_item_id,platform_price,sort_order,enabled) VALUES (?,?,?,?,?,1)`,
+      [platform, productName, item.menu_item_id, item.platform_price, index + 1]));
+  } else {
+    db.run(`INSERT INTO business_product_mappings (platform,channel_group,external_product_name,menu_item_id)
+      VALUES (?,?,?,?) ON CONFLICT(platform,external_product_name) DO UPDATE SET channel_group=excluded.channel_group,menu_item_id=excluded.menu_item_id,updated_at=datetime('now','localtime')`,
+      [platform, group, productName, binding.menu_item_id]);
+  }
+}
+
+app.post('/api/business-analytics/mappings/auto-bind/preview', (req, res) => {
+  try {
+    const plan = buildBusinessAutoBindingPlan(req.body?.scope);
+    const safeItems = plan.autoItems.map(item => {
+      const menuIds = item.binding.type === 'spec' ? item.binding.items.map(link => link.menu_item_id) : [item.binding.menu_item_id];
+      const targets = menuIds.map(id => plan.menuById.get(Number(id))).filter(Boolean)
+        .map(menu => `${menu.name}${menu.spec ? ` · ${menu.spec}` : ''}`);
+      return { platform: item.platform, product_name: item.product_name, strategy: item.strategy, target: targets.join('、') || '规格方案' };
+    });
+    res.json({ ok: true, auto_count: plan.autoItems.length, auto_items: safeItems, manual_items: plan.manualItems, menu_items: plan.menus.map(m => ({ id: Number(m.id), name: m.name, category: m.category || '未分类', spec: m.spec || '' })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/business-analytics/mappings/auto-bind/execute', (req, res) => {
+  try {
+    const plan = buildBusinessAutoBindingPlan(req.body?.scope);
+    const manualByKey = new Map(plan.manualItems.map(item => [item.key, item]));
+    const corrections = Array.isArray(req.body?.corrections) ? req.body.corrections : [];
+    let autoBound = 0, corrected = 0, skipped = 0;
+    db.run('BEGIN');
+    try {
+      plan.autoItems.forEach(item => { applyBusinessAutoBinding(plan.group, item.platform, item.product_name, item.binding); autoBound++; });
+      corrections.forEach(correction => {
+        const key = `${String(correction?.platform || '').trim()}::${String(correction?.product_name || '').trim()}`;
+        const item = manualByKey.get(key);
+        if (!item) return;
+        const menuId = Number(correction?.menu_item_id);
+        if (menuId && plan.menuById.has(menuId)) {
+          applyBusinessAutoBinding(plan.group, item.platform, item.product_name, { type: 'single', menu_item_id: menuId });
+          corrected++;
+        } else skipped++;
+      });
+      db.run('COMMIT');
+    } catch (error) { try { db.run('ROLLBACK'); } catch {} throw error; }
+    db.save();
+    res.json({ ok: true, bound: autoBound + corrected, auto_bound: autoBound, corrected, skipped });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2775,12 +3937,62 @@ app.post('/api/business-analytics/import/meituan-delivery', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// 美团团购“收益明细”：按收益时间结算，售价/费用/商家应得与菜品销量同步入库。
+app.post('/api/business-analytics/import/meituan-group-buy', (req, res) => {
+  try {
+    const result = businessAnalytics.importMeituanGroupBuyWorkbook(db, req.body || {}, req.user);
+    res.status(201).json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 抖音团购“分账明细-正向/退款-团购”：两张表必须成对上传，按核销时间和订单编号抵销。
+// 美团团购“门店基础数据”：经营、流量、评分独立入库；实际到账从已导入收益明细日账读取。
+app.post('/api/business-analytics/import/meituan-group-operation', (req, res) => {
+  try {
+    const result = businessAnalytics.importMeituanGroupOperationWorkbook(db, req.body || {}, req.user);
+    res.status(201).json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/business-analytics/import/douyin-group-buy', (req, res) => {
+  try {
+    const result = businessAnalytics.importDouyinGroupBuyWorkbook(db, req.body || {}, req.user);
+    res.status(201).json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 京东“全部门店营业额收入单量 / 商品销量”报表：严格按第三方平台档案的京东外卖门店 ID 关联。
+app.post('/api/business-analytics/import/jd-delivery', (req, res) => {
+  try {
+    const result = businessAnalytics.importJdDeliveryWorkbook(db, req.body || {}, req.user);
+    res.status(201).json({ ok: true, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // 淘宝闪购“全部门店营业额收入单量”报表：与美团同口径，按淘宝闪购平台门店 ID 关联。
 app.post('/api/business-analytics/import/taobao-flash', (req, res) => {
   try {
     const result = businessAnalytics.importTaobaoFlashWorkbook(db, req.body || {}, req.user);
     res.status(201).json({ ok: true, ...result });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 全平台通用导入记录：用于导入页追溯文件、数据归属和覆盖日期。
+app.get('/api/business-analytics/import-batches', (req, res) => {
+  try {
+    const platform = String(req.query.platform || '').trim();
+    const sourceType = String(req.query.source_type || '').trim();
+    const pageSize = Math.min(100, Math.max(10, Number(req.query.page_size || req.query.limit) || 20));
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const clauses = [];
+    const values = [];
+    if (platform) { clauses.push('platform=?'); values.push(platform); }
+    if (sourceType) { clauses.push('source_type=?'); values.push(sourceType); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const total = Number(db.queryOne(`SELECT COUNT(*) AS total FROM business_import_batches ${where}`, values)?.total || 0);
+    const batches = db.queryAll(`SELECT id,source_type,platform,file_name,row_count,date_from,date_to,imported_by_name,created_at
+      FROM business_import_batches ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...values, pageSize, (page - 1) * pageSize]);
+    res.json({ ok: true, batches, total, page, page_size: pageSize });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/business-analytics/template', (req, res) => {
@@ -2978,28 +4190,25 @@ app.get('/api/bot/status', (_req, res) => {
 
 // ===== 启动 =====
 (async () => {
-  // 启动智能机器人长连接
-  wecomBot.start().catch(err => console.error('[wecom-bot] 启动失败:', err.message));
+  // 本地调试可通过 DISABLE_WECOM_BOT=1 停用机器人长连接，避免外部连接干扰页面服务。
+  if (process.env.DISABLE_WECOM_BOT !== '1') wecomBot.start().catch(err => console.error('[wecom-bot] 启动失败:', err.message));
   setupConsoleEncoding();
   await db.init();
   db.seed();
+  // 历史京东门店经营日报早期仅写入外卖运营看板；启动时回填为平台营业记录，
+  // 让总数据视角和外卖视角使用一致的第三方来源。
+  businessAnalytics.rebuildJdRevenueFromOperation(db);
 
-  // 确保 admin 和 agent 用户存在并密码正确（兼容旧数据库）
+  // 确保 admin 用户存在且密码正确（兼容旧数据库）；
+  // 不再自动补种 agent 等测试账号——人员管理以实际维护的账号为准。
   (function ensureUsers() {
     const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
     const adminHash = md5('admin123');
-    const agentHash = md5('agent123');
     const admin = db.queryOne("SELECT * FROM users WHERE username='admin'");
     if (!admin) {
       db.insert("INSERT INTO users (username,password_hash,role,display_name) VALUES ('admin',?,'管理员','系统管理员')", [adminHash]);
     } else if (admin.password_hash !== adminHash || admin.role !== '管理员') {
       db.run("UPDATE users SET password_hash=?, role='管理员', display_name='系统管理员' WHERE username='admin'", [adminHash]);
-    }
-    const agent = db.queryOne("SELECT * FROM users WHERE username='agent'");
-    if (!agent) {
-      db.insert("INSERT INTO users (username,password_hash,role,display_name) VALUES ('agent',?,'专员','数据专员')", [agentHash]);
-    } else if (agent.password_hash !== agentHash || agent.role !== '专员') {
-      db.run("UPDATE users SET password_hash=?, role='专员', display_name='数据专员' WHERE username='agent'", [agentHash]);
     }
     db.save();
   })();

@@ -12,10 +12,6 @@
       />
     </template>
     <div class="store-region-panel">
-      <div v-if="showSelectionActions && multiple" class="tree-actions">
-        <el-button link type="primary" size="small" @click="selectAllStores">全选门店</el-button>
-        <el-button v-if="hasSelection" link size="small" @click="clearSelection">清空</el-button>
-      </div>
       <el-input v-if="filterable" v-model="filterText" clearable size="small" placeholder="搜索区域或门店" class="tree-filter" />
       <p v-if="showHint" class="tree-hint">点击区域左侧箭头展开或收起；{{ multiple ? '勾选区域可带入其下全部门店。' : '仅末级门店可被选中。' }}</p>
       <el-tree
@@ -41,6 +37,10 @@
         </template>
       </el-tree>
       <el-empty v-if="!treeData.length" :image-size="54" description="暂无可选门店" />
+      <div v-if="multiple" class="tree-actions">
+        <el-button link type="primary" size="small" @click="selectAllStores">全选门店</el-button>
+        <el-button link size="small" :disabled="!hasSelection" @click="clearSelection">清空</el-button>
+      </div>
     </div>
   </el-popover>
 </template>
@@ -85,10 +85,14 @@ function makeRegionNode(region) {
   const children = directChildren(region.id)
   const storeIds = leafStoreIds(region.id)
   const node = { key: `region-${region.id}`, kind: 'region', label: region.name, storeCount: storeIds.size, children: [] }
+  // 正常从当前页面提供的门店列表取名称；列表按页加载或刚新建门店时，
+  // 则回退到区域接口自带的成员名称，避免“显示 1 家却没有门店行”。
+  const directStores = props.stores.filter(store => storeIds.has(Number(store.id)))
+  const knownStoreIds = new Set(directStores.map(store => Number(store.id)))
+  const fallbackStores = (region.stores || []).filter(store => !knownStoreIds.has(Number(store.id)))
   node.children = children.length
     ? children.map(makeRegionNode)
-    : props.stores
-      .filter(store => storeIds.has(Number(store.id)))
+    : [...directStores, ...fallbackStores]
       .map(store => ({ key: `store-${store.id}`, kind: 'store', label: store.store_name, storeId: Number(store.id), leaf: true }))
   return node
 }
@@ -108,7 +112,15 @@ const treeData = computed(() => {
   }
   return nodes
 })
-const defaultExpandedKeys = computed(() => treeData.value.map(node => node.key))
+function singleStoreLeafRegionKeys(nodes) {
+  return nodes.flatMap(node => {
+    const children = node.children || []
+    const ownKey = children.length === 1 && children[0].kind === 'store' ? [node.key] : []
+    return [...ownKey, ...singleStoreLeafRegionKeys(children.filter(child => child.kind !== 'store'))]
+  })
+}
+// 顶层区域默认展开；只有 1 家门店的末级区域也直接展开，避免门店被藏在一层空白感很强的折叠中。
+const defaultExpandedKeys = computed(() => [...new Set([...treeData.value.map(node => node.key), ...singleStoreLeafRegionKeys(treeData.value)])])
 const selectedStoreIds = computed(() => {
   const raw = props.multiple ? (Array.isArray(props.modelValue) ? props.modelValue : []) : [props.modelValue]
   return raw.map(Number).filter(Number.isFinite)
@@ -165,7 +177,7 @@ onMounted(async () => {
 <style scoped>
 .store-region-select { min-width: 200px; }
 .store-region-panel { min-width: 250px; }
-.tree-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-height: 24px; margin: -2px 0 6px; }
+.tree-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; margin: 7px 0 0; padding: 7px 2px 0; border-top: 1px solid #e8eef5; }
 .tree-actions :deep(.el-button) { margin: 0; font-size: 12px; }
 .tree-filter { margin-bottom: 8px; }
 .tree-hint { margin: 0 0 8px; color: #8795a9; font-size: 12px; line-height: 1.55; }

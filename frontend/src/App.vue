@@ -1,6 +1,6 @@
 <template>
   <LoginView v-if="isLoginPage" />
-  <div v-else :class="['app-layout', { 'is-compact': responsiveCollapsed }]">
+  <div v-else :class="['app-layout enterprise-theme', { 'is-compact': responsiveCollapsed }]">
     <!-- 侧边栏 -->
     <aside :class="['app-sidebar', { 'is-collapsed': isSidebarCollapsed }]">
       <div class="sidebar-brand">
@@ -45,6 +45,15 @@
             <template #title><span>门店管理</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
           <el-menu-item
+            index="store-preparation-group"
+            @mouseenter="showPopup('store-preparation', $event)"
+            @mouseleave="scheduleHidePopup"
+            :class="{ 'is-popup-open': popupMenu.group === 'store-preparation', 'is-active': store.activeTabId?.startsWith('store-preparation-') }"
+          >
+            <el-icon><Box /></el-icon>
+            <template #title><span>筹建门店</span><span class="nav-arrow">›</span></template>
+          </el-menu-item>
+          <el-menu-item
             index="menu-management-group"
             @mouseenter="showPopup('menu-management', $event)"
             @mouseleave="scheduleHidePopup"
@@ -70,7 +79,7 @@
             :class="{ 'is-popup-open': popupMenu.group === 'staff-management', 'is-active': store.activeTabId?.startsWith('staff-management-') }"
           >
             <el-icon><Avatar /></el-icon>
-            <template #title><span>员工管理</span><span class="nav-arrow">›</span></template>
+            <template #title><span>人事专区</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
 
           <div class="sidebar-section-label">运营工具</div>
@@ -192,7 +201,7 @@
         </div>
       </div>
 
-      <div class="content-area">
+      <div ref="contentAreaRef" class="content-area">
         <router-view v-slot="{ Component, route }">
           <KeepAlive :max="30">
             <component v-if="isSpecialRoute && Component" :is="Component" :key="route.name || route.path" />
@@ -207,7 +216,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { SwitchButton } from '@element-plus/icons-vue'
 import { useAppStore } from '@/stores/app'
@@ -236,6 +245,7 @@ import MenuOverview from '@/views/menu/MenuOverview.vue'
 import MenuCategory from '@/views/menu/MenuCategory.vue'
 import MenuCost from '@/views/menu/MenuCost.vue'
 import MenuExpiry from '@/views/menu/MenuExpiry.vue'
+import MenuAccounting from '@/views/menu/MenuAccounting.vue'
 import MenuTemplate from '@/views/menu/MenuTemplate.vue'
 import DailyCost from '@/views/cost/DailyCost.vue'
 import WeeklyCost from '@/views/cost/WeeklyCost.vue'
@@ -243,6 +253,9 @@ import MonthlyCost from '@/views/cost/MonthlyCost.vue'
 import StaffManager from '@/views/staff/StaffManager.vue'
 import StaffClerk from '@/views/staff/StaffClerk.vue'
 import StaffTest from '@/views/staff/StaffTest.vue'
+import StaffEmployees from '@/views/staff/StaffEmployees.vue'
+import StaffStoreManagement from '@/views/staff/StaffStoreManagement.vue'
+import SalaryPlaceholder from '@/views/staff/SalaryPlaceholder.vue'
 import BookkeepingEntry from '@/views/bookkeeping/BookkeepingEntry.vue'
 import BookkeepingCategories from '@/views/bookkeeping/BookkeepingCategories.vue'
 import BookkeepingRecords from '@/views/bookkeeping/BookkeepingRecords.vue'
@@ -273,12 +286,16 @@ const COMPONENT_MAP = {
   'menu-management-template': MenuTemplate,
   'menu-management-cost': MenuCost,
   'menu-management-expiry': MenuExpiry,
+  'menu-management-accounting': MenuAccounting,
   'cost-accounting-daily': DailyCost,
   'cost-accounting-weekly': WeeklyCost,
   'cost-accounting-monthly': MonthlyCost,
   'staff-management-manager': StaffManager,
   'staff-management-clerk': StaffClerk,
   'staff-management-test': StaffTest,
+  'staff-management-employees': StaffEmployees,
+  'staff-management-store': StaffStoreManagement,
+  'staff-management-salary': SalaryPlaceholder,
   'bookkeeping-entry': BookkeepingEntry,
   'bookkeeping-categories': BookkeepingCategories,
   'bookkeeping-records': BookkeepingRecords,
@@ -291,9 +308,8 @@ const POPUP_CONFIG = {
       {
         title: '总数据视角',
         items: [
-          { index: 'analysis-total-brand', label: '全门店汇总' },
-          { index: 'analysis-total-store', label: '单店数据' },
-          { index: 'analysis-total-custom', label: '自选门店汇总' },
+          { index: 'analysis-total-brand', label: '品牌视角' },
+          { index: 'analysis-total-store', label: '门店视角' },
           { index: 'analysis-total-monthly-dashboard', label: '月经营数据看板' },
           { index: 'analysis-total-binding', label: '堂食菜品绑定' },
         ],
@@ -301,22 +317,18 @@ const POPUP_CONFIG = {
       {
         title: '团购视角',
         items: [
-          { index: 'analysis-group-meituan', label: '美团团购' },
-          { index: 'analysis-group-douyin', label: '抖音团购' },
-          { index: 'analysis-group-free-trial', label: '美团免费试' },
-          { index: 'analysis-group-brand', label: '品牌团购汇总' },
-          { index: 'analysis-group-store', label: '门店团购汇总' },
+          { index: 'analysis-group-platform', label: '平台视角' },
+          { index: 'analysis-group-brand', label: '品牌视角' },
+          { index: 'analysis-group-store', label: '门店视角' },
           { index: 'analysis-group-binding', label: '团购菜品绑定' },
         ],
       },
       {
         title: '外卖视角',
         items: [
-          { index: 'analysis-delivery-meituan', label: '美团外卖' },
-          { index: 'analysis-delivery-taobao', label: '淘宝闪购' },
-          { index: 'analysis-delivery-jd', label: '京东外卖' },
-          { index: 'analysis-delivery-brand', label: '品牌外卖汇总' },
-          { index: 'analysis-delivery-store', label: '门店外卖汇总' },
+          { index: 'analysis-delivery-platform', label: '平台视角' },
+          { index: 'analysis-delivery-brand', label: '品牌视角' },
+          { index: 'analysis-delivery-store', label: '门店视角' },
           { index: 'analysis-delivery-binding', label: '外卖菜品绑定' },
         ],
       },
@@ -349,6 +361,11 @@ const POPUP_CONFIG = {
       },
     ],
   },
+  'store-preparation': {
+    sections: [
+      { title: '门店渲染', items: [{ index: 'store-preparation-3d', label: '门店渲染' }] },
+    ],
+  },
   'menu-management': {
     sections: [
       {
@@ -359,6 +376,7 @@ const POPUP_CONFIG = {
           { index: 'menu-management-template', label: '菜品模板' },
           { index: 'menu-management-cost', label: '菜品成本' },
           { index: 'menu-management-expiry', label: '效期管理' },
+          { index: 'menu-management-accounting', label: '菜品核算' },
         ],
       },
     ],
@@ -378,11 +396,11 @@ const POPUP_CONFIG = {
   'staff-management': {
     sections: [
       {
-        title: '人员管理',
+        title: '人事管理',
         items: [
-          { index: 'staff-management-manager', label: '店长管理' },
-          { index: 'staff-management-clerk', label: '店员管理' },
-          { index: 'staff-management-test', label: '测试数据' },
+          { index: 'staff-management-employees', label: '员工管理' },
+          { index: 'staff-management-store', label: '门店管理' },
+          { index: 'staff-management-salary', label: '工资表制作' },
         ],
       },
     ],
@@ -419,6 +437,7 @@ const POPUP_CONFIG = {
 
 const store = useAppStore()
 const router = useRouter()
+const contentAreaRef = ref(null)
 const auth = useAuthStore()
 const currentView = shallowRef(DashboardView)
 // 笔记本的可用内容宽度通常不足以同时容纳完整侧栏与数据表。
@@ -445,7 +464,31 @@ const isCollabRoute = computed(() => router.currentRoute.value.path.startsWith('
 const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path === '/analysis' || router.currentRoute.value.path.startsWith('/analysis/'))
 const isDataImportRoute = computed(() => router.currentRoute.value.path.startsWith('/data-import/'))
 const isEnterpriseSettingsRoute = computed(() => router.currentRoute.value.path.startsWith('/enterprise-settings'))
-const isSpecialRoute = computed(() => isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value)
+const isStore3dRoute = computed(() => router.currentRoute.value.path === '/store-3d')
+const isStaffManagementRoute = computed(() => router.currentRoute.value.path.startsWith('/staff-management/'))
+const workspaceRouteTabId = computed(() => {
+  const route = router.currentRoute.value
+  const section = String(route.params?.section || '').trim()
+  const prefix = {
+    'workspace-store-management': 'store-management',
+    'workspace-menu-management': 'menu-management',
+    'workspace-cost-accounting': 'cost-accounting',
+    'workspace-bookkeeping': 'bookkeeping',
+  }[route.name]
+  if (prefix && section) return `${prefix}-${section}`
+  return {
+    'workspace-pipeline': 'pipeline',
+    'workspace-ai-assistant': 'ai-assistant',
+    'workspace-user-management': 'user-management',
+    'workspace-settings': 'settings',
+    // 挂在工作台下的独立静态路由（不是 :section 通配），刷新/直接访问时必须能反查回标签 id，
+    // 否则地址栏正确但内容区落到数据概括。新增这类页面记得同步登记。
+    'menu-management-category': 'menu-management-category',
+    'menu-management-accounting': 'menu-management-accounting',
+  }[route.name] || ''
+})
+const isWorkspaceRoute = computed(() => Boolean(workspaceRouteTabId.value))
+const isSpecialRoute = computed(() => isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value)
 const businessRouteTabId = computed(() => router.currentRoute.value.meta.analysisKey || 'analysis-total-brand')
 const dataImportRouteTabId = computed(() => ({
   pos: 'data-import-pos',
@@ -453,6 +496,7 @@ const dataImportRouteTabId = computed(() => ({
   delivery: 'data-import-delivery',
   legacy: 'data-import-legacy',
 }[router.currentRoute.value.meta.importMode] || 'data-import-pos'))
+const staffRouteTabId = computed(() => router.currentRoute.value.path.endsWith('/store-management') ? 'staff-management-store' : 'staff-management-employees')
 const pageTitle = computed(() => {
   if (isCollabRoute.value) return '协同事项'
   if (isBusinessAnalyticsRoute.value) {
@@ -463,6 +507,9 @@ const pageTitle = computed(() => {
     return `数据导入 · ${label}`
   }
   if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
+  if (isStore3dRoute.value) return '筹建门店 · 门店渲染'
+  if (isStaffManagementRoute.value) return staffRouteTabId.value === 'staff-management-store' ? '人事专区 · 门店管理' : '人事专区 · 员工管理'
+  if (isWorkspaceRoute.value) return store.activeTab?.title || '工作台'
   return store.activeTab?.title || '数据概括'
 })
 const sidebarActive = computed(() => {
@@ -470,6 +517,8 @@ const sidebarActive = computed(() => {
   if (isBusinessAnalyticsRoute.value) return 'analysis-group'
   if (isDataImportRoute.value) return 'data-import-group'
   if (isEnterpriseSettingsRoute.value) return 'enterprise-settings'
+  if (isStore3dRoute.value) return 'store-preparation-group'
+  if (isStaffManagementRoute.value) return 'staff-management-group'
   return store.activeTabId
 })
 const userInitial = computed(() => {
@@ -518,10 +567,53 @@ function cancelHidePopup() {
 }
 
 async function leaveSpecialRoute() {
-  if (isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value) await router.replace('/')
+  if (isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value) await router.replace('/')
+}
+
+const WORKSPACE_TAB_ROUTES = {
+  dashboard: '/dashboard',
+  pipeline: '/pipeline',
+  'ai-assistant': '/ai-assistant',
+  'user-management': '/user-management',
+  settings: '/settings',
+  'store-management-info-basic': '/store-management/info-basic',
+  'store-management-info-circle': '/store-management/info-circle',
+  'store-management-info-platform': '/store-management/info-platform',
+  'store-management-info-config': '/store-management/info-config',
+  'store-management-region': '/store-management/region',
+  'store-management-map': '/store-management/map',
+  'store-management-fixed': '/store-management/fixed',
+  'store-management-operating': '/store-management/operating',
+  'menu-management-overview': '/menu-management/overview',
+  'menu-management-category': '/menu-management/category',
+  'menu-management-template': '/menu-management/template',
+  'menu-management-cost': '/menu-management/cost',
+  'menu-management-expiry': '/menu-management/expiry',
+  'menu-management-accounting': '/menu-management/accounting',
+  'cost-accounting-daily': '/cost-accounting/daily',
+  'cost-accounting-weekly': '/cost-accounting/weekly',
+  'cost-accounting-monthly': '/cost-accounting/monthly',
+  'bookkeeping-entry': '/bookkeeping/entry',
+  'bookkeeping-categories': '/bookkeeping/categories',
+  'bookkeeping-records': '/bookkeeping/records',
+}
+
+async function openWorkspaceTab(id) {
+  store.openTabFromId(id)
+  const routePath = WORKSPACE_TAB_ROUTES[id]
+  if (routePath) await router.push(routePath)
+  else await leaveSpecialRoute()
 }
 
 async function selectPopupItem(index) {
+  if (index === 'store-preparation-3d') {
+    store.openTabFromId(index)
+    await router.push('/store-3d')
+    popupMenu.visible = false
+    popupMenu.group = null
+    popupMenu.sections = []
+    return
+  }
   if (index.startsWith('analysis-')) {
     store.openTabFromId(index)
     const routePath = {
@@ -530,15 +622,17 @@ async function selectPopupItem(index) {
       'analysis-total-custom': '/analysis/total/custom',
       'analysis-total-monthly-dashboard': '/analysis/total/monthly-dashboard',
       'analysis-total-binding': '/analysis/total/binding',
-      'analysis-group-meituan': '/analysis/group-buy/platform/meituan',
-      'analysis-group-douyin': '/analysis/group-buy/platform/douyin',
-      'analysis-group-free-trial': '/analysis/group-buy/platform/free-trial',
+      'analysis-group-platform': '/analysis/group-buy/platform',
+      'analysis-group-meituan': '/analysis/group-buy/platform',
+      'analysis-group-douyin': '/analysis/group-buy/platform',
+      'analysis-group-free-trial': '/analysis/group-buy/platform',
       'analysis-group-brand': '/analysis/group-buy/brand',
       'analysis-group-store': '/analysis/group-buy/store',
       'analysis-group-binding': '/analysis/group-buy/binding',
-      'analysis-delivery-meituan': '/analysis/delivery/platform/meituan',
-      'analysis-delivery-taobao': '/analysis/delivery/platform/taobao',
-      'analysis-delivery-jd': '/analysis/delivery/platform/jd',
+      'analysis-delivery-platform': '/analysis/delivery/platform',
+      'analysis-delivery-meituan': '/analysis/delivery/platform',
+      'analysis-delivery-taobao': '/analysis/delivery/platform',
+      'analysis-delivery-jd': '/analysis/delivery/platform',
       'analysis-delivery-brand': '/analysis/delivery/brand',
       'analysis-delivery-store': '/analysis/delivery/store',
       'analysis-delivery-binding': '/analysis/delivery/binding',
@@ -563,8 +657,7 @@ async function selectPopupItem(index) {
     popupMenu.sections = []
     return
   }
-  await leaveSpecialRoute()
-  store.openTabFromId(index)
+  await openWorkspaceTab(index)
   popupMenu.visible = false
   popupMenu.group = null
   popupMenu.sections = []
@@ -583,11 +676,15 @@ async function handleMenuSelect(index) {
   }
   // 跳过分组菜单项
   if (index.endsWith('-group')) return
-  await leaveSpecialRoute()
-  store.openTabFromId(index)
+  await openWorkspaceTab(index)
 }
 
 async function selectTab(id) {
+  if (id === 'store-preparation-3d') {
+    store.activeTabId = id
+    await router.push('/store-3d')
+    return
+  }
   if (id === 'collab') {
     store.activeTabId = id
     await router.push('/collab/list')
@@ -606,15 +703,17 @@ async function selectTab(id) {
       'analysis-total-custom': '/analysis/total/custom',
       'analysis-total-monthly-dashboard': '/analysis/total/monthly-dashboard',
       'analysis-total-binding': '/analysis/total/binding',
-      'analysis-group-meituan': '/analysis/group-buy/platform/meituan',
-      'analysis-group-douyin': '/analysis/group-buy/platform/douyin',
-      'analysis-group-free-trial': '/analysis/group-buy/platform/free-trial',
+      'analysis-group-platform': '/analysis/group-buy/platform',
+      'analysis-group-meituan': '/analysis/group-buy/platform',
+      'analysis-group-douyin': '/analysis/group-buy/platform',
+      'analysis-group-free-trial': '/analysis/group-buy/platform',
       'analysis-group-brand': '/analysis/group-buy/brand',
       'analysis-group-store': '/analysis/group-buy/store',
       'analysis-group-binding': '/analysis/group-buy/binding',
-      'analysis-delivery-meituan': '/analysis/delivery/platform/meituan',
-      'analysis-delivery-taobao': '/analysis/delivery/platform/taobao',
-      'analysis-delivery-jd': '/analysis/delivery/platform/jd',
+      'analysis-delivery-platform': '/analysis/delivery/platform',
+      'analysis-delivery-meituan': '/analysis/delivery/platform',
+      'analysis-delivery-taobao': '/analysis/delivery/platform',
+      'analysis-delivery-jd': '/analysis/delivery/platform',
       'analysis-delivery-brand': '/analysis/delivery/brand',
       'analysis-delivery-store': '/analysis/delivery/store',
       'analysis-delivery-binding': '/analysis/delivery/binding',
@@ -633,8 +732,10 @@ async function selectTab(id) {
     await router.push(routePath)
     return
   }
-  await leaveSpecialRoute()
+  const routePath = WORKSPACE_TAB_ROUTES[id]
   store.activeTabId = id
+  if (routePath) await router.push(routePath)
+  else await leaveSpecialRoute()
 }
 
 async function closeTab(id) {
@@ -643,6 +744,8 @@ async function closeTab(id) {
   if (id.startsWith('analysis-') && isBusinessAnalyticsRoute.value) await router.push('/')
   if (id.startsWith('data-import-') && isDataImportRoute.value) await router.push('/')
   if (id === 'enterprise-settings' && isEnterpriseSettingsRoute.value) await router.push('/')
+  if (id === 'store-preparation-3d' && isStore3dRoute.value) await router.push('/')
+  if (WORKSPACE_TAB_ROUTES[id] && isWorkspaceRoute.value && workspaceRouteTabId.value === id) await router.push('/dashboard')
 }
 
 watch(() => store.activeTabId, (id) => {
@@ -665,8 +768,31 @@ watch(isDataImportRoute, (active) => {
 watch(isEnterpriseSettingsRoute, (active) => {
   if (active) store.openTabFromId('enterprise-settings')
 })
+watch(isStaffManagementRoute, (active) => {
+  if (active) store.openTabFromId(staffRouteTabId.value)
+})
+watch(isWorkspaceRoute, (active) => {
+  if (active) store.openTabFromId(workspaceRouteTabId.value)
+})
+watch(workspaceRouteTabId, (id) => {
+  if (id && isWorkspaceRoute.value) store.openTabFromId(id)
+})
+
+// 内容区是独立滚动容器。切换标签/路由时必须回到顶部，
+// 否则会沿用上一页的 scrollTop，新页面看起来像被裁切或空白。
+watch(() => router.currentRoute.value.fullPath, async () => {
+  await nextTick()
+  const area = contentAreaRef.value
+  if (area) area.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+})
+watch(isStore3dRoute, (active) => {
+  if (active) store.openTabFromId('store-preparation-3d')
+})
 watch(dataImportRouteTabId, (id) => {
   if (isDataImportRoute.value) store.openTabFromId(id)
+})
+watch(staffRouteTabId, (id) => {
+  if (isStaffManagementRoute.value) store.openTabFromId(id)
 })
 
 onMounted(async () => {
@@ -691,6 +817,9 @@ onMounted(async () => {
   else if (isBusinessAnalyticsRoute.value) store.openTabFromId(businessRouteTabId.value)
   else if (isDataImportRoute.value) store.openTabFromId(dataImportRouteTabId.value)
   else if (isEnterpriseSettingsRoute.value) store.openTabFromId('enterprise-settings')
+  else if (isStore3dRoute.value) store.openTabFromId('store-preparation-3d')
+  else if (isStaffManagementRoute.value) store.openTabFromId(staffRouteTabId.value)
+  else if (isWorkspaceRoute.value) store.openTabFromId(workspaceRouteTabId.value)
   else store.openTabFromId('dashboard')
 })
 

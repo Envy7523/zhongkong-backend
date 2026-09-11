@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '@/views/LoginView.vue'
+// 菜品绑定是高频关键页。直接随入口加载，避免旧标签页请求已失效的异步分包后只剩页面外壳。
+import ProductBinding from '@/views/analysis/ProductBinding.vue'
 
 const routes = [
   {
@@ -14,6 +16,12 @@ const routes = [
     // App.vue 负责渲染普通工作台标签；这里仅提供一个有效路由记录，
     // 让直接访问或刷新 /dashboard 时不会落入未匹配状态。
     component: { render: () => null },
+  },
+  {
+    path: '/store-3d',
+    name: 'store-3d',
+    component: () => import('@/views/store3d/index.vue'),
+    meta: { pageKey: 'store-3d', pageTitle: '筹建门店 · 门店渲染' },
   },
   {
     path: '/analysis',
@@ -33,7 +41,7 @@ const routes = [
   },
   {
     path: '/analysis/business/delivery',
-    redirect: '/analysis/delivery/store',
+    redirect: '/analysis/delivery/platform',
   },
   {
     path: '/analysis/business/group',
@@ -47,20 +55,16 @@ const routes = [
     path: '/analysis/total/brand',
     name: 'analysis-total-brand',
     component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-total-brand', analysisTitle: '总数据视角 · 全门店汇总', analysisScope: 'total', analysisMode: 'brand' },
+    meta: { analysisKey: 'analysis-total-brand', analysisTitle: '总数据视角 · 品牌视角', analysisScope: 'total', analysisMode: 'brand' },
   },
   {
     path: '/analysis/total/store',
     name: 'analysis-total-store',
     component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-total-store', analysisTitle: '总数据视角 · 单店数据', analysisScope: 'total', analysisMode: 'store' },
+    meta: { analysisKey: 'analysis-total-store', analysisTitle: '总数据视角 · 门店视角', analysisScope: 'total', analysisMode: 'store' },
   },
-  {
-    path: '/analysis/total/custom',
-    name: 'analysis-total-custom',
-    component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-total-custom', analysisTitle: '总数据视角 · 自选门店汇总', analysisScope: 'total', analysisMode: 'custom' },
-  },
+  // 保留旧链接，统一进入门店视角，避免收藏地址失效.
+  { path: '/analysis/total/custom', redirect: '/analysis/total/store' },
   {
     path: '/analysis/total/monthly-dashboard',
     name: 'analysis-total-monthly-dashboard',
@@ -76,54 +80,45 @@ const routes = [
   {
     path: '/analysis/group-buy/binding',
     name: 'analysis-group-binding',
-    component: () => import('@/views/analysis/ProductBinding.vue'),
+    component: ProductBinding,
     meta: { analysisKey: 'analysis-group-binding', analysisTitle: '团购菜品绑定', analysisScope: 'group-buy', analysisMode: 'binding' },
   },
   {
-    path: '/analysis/group-buy/platform/meituan', name: 'analysis-group-meituan', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-group-meituan', analysisTitle: '团购视角 · 美团团购', analysisScope: 'group-buy', analysisMode: 'platform', analysisPlatform: '美团团购' },
+    path: '/analysis/group-buy/platform', name: 'analysis-group-platform', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
+    meta: { analysisKey: 'analysis-group-platform', analysisTitle: '团购视角 · 平台视角', analysisScope: 'group-buy', analysisMode: 'platform' },
   },
-  {
-    path: '/analysis/group-buy/platform/douyin', name: 'analysis-group-douyin', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-group-douyin', analysisTitle: '团购视角 · 抖音团购', analysisScope: 'group-buy', analysisMode: 'platform', analysisPlatform: '抖音团购' },
-  },
-  {
-    path: '/analysis/group-buy/platform/free-trial', name: 'analysis-group-free-trial', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-group-free-trial', analysisTitle: '团购视角 · 美团免费试', analysisScope: 'group-buy', analysisMode: 'platform', analysisPlatform: '免费试' },
-  },
+  // 保留历史链接，统一进入新的团购平台视角。
+  { path: '/analysis/group-buy/platform/meituan', redirect: '/analysis/group-buy/platform' },
+  { path: '/analysis/group-buy/platform/douyin', redirect: '/analysis/group-buy/platform' },
+  { path: '/analysis/group-buy/platform/free-trial', redirect: '/analysis/group-buy/platform' },
   {
     path: '/analysis/group-buy/brand', name: 'analysis-group-brand', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-group-brand', analysisTitle: '品牌团购汇总', analysisScope: 'group-buy', analysisMode: 'brand' },
+    meta: { analysisKey: 'analysis-group-brand', analysisTitle: '团购视角 · 品牌视角', analysisScope: 'group-buy', analysisMode: 'brand' },
   },
   {
     path: '/analysis/group-buy/store', name: 'analysis-group-store', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-group-store', analysisTitle: '门店团购汇总', analysisScope: 'group-buy', analysisMode: 'store' },
-  },
-  {
+    meta: { analysisKey: 'analysis-group-store', analysisTitle: '团购视角 · 门店视角', analysisScope: 'group-buy', analysisMode: 'store' },
+  },  {
     path: '/analysis/delivery/binding',
     name: 'analysis-delivery-binding',
-    component: () => import('@/views/analysis/ProductBinding.vue'),
+    component: ProductBinding,
     meta: { analysisKey: 'analysis-delivery-binding', analysisTitle: '外卖菜品绑定', analysisScope: 'delivery', analysisMode: 'binding' },
   },
   {
-    path: '/analysis/delivery/platform/meituan', name: 'analysis-delivery-meituan', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-delivery-meituan', analysisTitle: '外卖视角 · 美团外卖', analysisScope: 'delivery', analysisMode: 'platform', analysisPlatform: '美团外卖' },
+    path: '/analysis/delivery/platform', name: 'analysis-delivery-platform', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
+    meta: { analysisKey: 'analysis-delivery-platform', analysisTitle: '外卖视角 · 平台视角', analysisScope: 'delivery', analysisMode: 'platform' },
   },
-  {
-    path: '/analysis/delivery/platform/taobao', name: 'analysis-delivery-taobao', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-delivery-taobao', analysisTitle: '外卖视角 · 淘宝闪购', analysisScope: 'delivery', analysisMode: 'platform', analysisPlatform: '淘宝闪购' },
-  },
-  {
-    path: '/analysis/delivery/platform/jd', name: 'analysis-delivery-jd', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-delivery-jd', analysisTitle: '外卖视角 · 京东外卖', analysisScope: 'delivery', analysisMode: 'platform', analysisPlatform: '京东外卖' },
-  },
+  // 保留旧的单平台链接，统一落到新的平台视角，避免已收藏地址失效。
+  { path: '/analysis/delivery/platform/meituan', redirect: '/analysis/delivery/platform' },
+  { path: '/analysis/delivery/platform/taobao', redirect: '/analysis/delivery/platform' },
+  { path: '/analysis/delivery/platform/jd', redirect: '/analysis/delivery/platform' },
   {
     path: '/analysis/delivery/brand', name: 'analysis-delivery-brand', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-delivery-brand', analysisTitle: '品牌外卖汇总', analysisScope: 'delivery', analysisMode: 'brand' },
+    meta: { analysisKey: 'analysis-delivery-brand', analysisTitle: '外卖视角 · 品牌视角', analysisScope: 'delivery', analysisMode: 'brand' },
   },
   {
     path: '/analysis/delivery/store', name: 'analysis-delivery-store', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
-    meta: { analysisKey: 'analysis-delivery-store', analysisTitle: '门店外卖汇总', analysisScope: 'delivery', analysisMode: 'store' },
+    meta: { analysisKey: 'analysis-delivery-store', analysisTitle: '外卖视角 · 门店视角', analysisScope: 'delivery', analysisMode: 'store' },
   },
   {
     path: '/data-import',
@@ -157,22 +152,49 @@ const routes = [
     path: '/store-management',
     redirect: '/store-management/info-basic',
   },
+  // 常规工作台页面同样使用真实子路由。页面仍由 App 的标签容器承载，
+  // 此路由记录用于地址栏、刷新恢复和链接分享。
+  { path: '/store-management/:section', name: 'workspace-store-management', component: { render: () => null } },
   {
     path: '/menu-management',
     redirect: '/menu-management/overview',
   },
+  { path: '/menu-management/:section', name: 'workspace-menu-management', component: { render: () => null } },
   {
     path: '/menu-management/category',
     name: 'menu-management-category',
     component: () => import('@/views/menu/MenuCategory.vue'),
   },
+  // 菜品核算：暂挂「菜品管理」下，功能打通后整体迁往「成本核算」（path 改为 /cost-accounting/accounting）。
+  {
+    path: '/menu-management/accounting',
+    name: 'menu-management-accounting',
+    component: () => import('@/views/menu/MenuAccounting.vue'),
+  },
   {
     path: '/cost-accounting',
     redirect: '/cost-accounting/daily',
   },
+  { path: '/cost-accounting/:section', name: 'workspace-cost-accounting', component: { render: () => null } },
+  { path: '/bookkeeping', redirect: '/bookkeeping/entry' },
+  { path: '/bookkeeping/:section', name: 'workspace-bookkeeping', component: { render: () => null } },
+  { path: '/pipeline', name: 'workspace-pipeline', component: { render: () => null } },
+  { path: '/ai-assistant', name: 'workspace-ai-assistant', component: { render: () => null } },
+  { path: '/user-management', name: 'workspace-user-management', component: { render: () => null } },
+  { path: '/settings', name: 'workspace-settings', component: { render: () => null } },
   {
     path: '/staff-management',
-    redirect: '/staff-management/manager',
+    redirect: '/staff-management/employees',
+  },
+  {
+    path: '/staff-management/store-management',
+    name: 'staff-management-store',
+    component: () => import('@/views/staff/StaffStoreManagement.vue'),
+  },
+  {
+    path: '/staff-management/employees',
+    name: 'staff-management-employees',
+    component: () => import('@/views/staff/StaffEmployees.vue'),
   },
   {
     path: '/collab',
@@ -211,6 +233,21 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+// 发布新构建后，旧标签页偶尔仍会请求上一版带哈希的异步模块。
+// 自动刷新一次恢复到最新入口，避免动态路由加载失败后只剩下工作台外壳。
+router.onError((error) => {
+  const message = String(error?.message || error || '')
+  const isStaleModule = /failed to fetch dynamically imported module|importing a module script failed|unable to preload css/i.test(message)
+  if (!isStaleModule || typeof window === 'undefined') return
+  const key = 'etaigong:module-reload-attempted'
+  if (window.sessionStorage.getItem(key)) return
+  window.sessionStorage.setItem(key, '1')
+  window.location.reload()
+})
+router.afterEach(() => {
+  if (typeof window !== 'undefined') window.sessionStorage.removeItem('etaigong:module-reload-attempted')
 })
 
 const TOKEN_KEY = 'etaigong_token'
