@@ -71,6 +71,8 @@ app.use(express.json({ limit: '50mb' }));
 // JWT 认证中间件（保护 /api/*，放行登录接口）
 app.use((req, res, next) => {
   if (req.path === '/api/auth/login' || req.path === '/api/bot/status' || req.path === '/api/geo/bound') return next();
+  // 小程序接口（/api/mp/*）使用独立 token 体系，由 lib/mp/router.js 自行鉴权
+  if (req.path.startsWith('/api/mp/')) return next();
   if (!req.path.startsWith('/api/')) return next();
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -90,6 +92,16 @@ app.use('/uploads/avatars', express.static(AVATAR_DIR, {
   immutable: true,
   fallthrough: false,
 }));
+
+// ===== 小程序接口层（/api/mp/*）与小程序上传的图片 =====
+// 营业数据直接复用 lib/business-analytics.js 的 getOverview，保证与 PC 后台同一口径
+const mpUploadDir = require('./lib/mp/upload').MP_UPLOAD_DIR;
+if (!fs.existsSync(mpUploadDir)) fs.mkdirSync(mpUploadDir, { recursive: true });
+app.use('/uploads/mp', express.static(mpUploadDir, { maxAge: '7d', fallthrough: false }));
+app.use('/api/mp', require('./lib/mp/router'));
+
+// ===== 数据库查看器（开发辅助工具，只读 + 标识符白名单）=====
+app.use('/api/db-viewer', require('./lib/db-viewer').router);
 
 // 静态文件：优先使用 Vue 前端构建产物，回退到旧版静态文件
 const vueDist = path.join(__dirname, 'frontend', 'dist');
@@ -1685,6 +1697,137 @@ function withDishMenuSku(menu = {}) {
     sku_price_summary: priceSummary || '价格未设置',
   };
 }
+// ===== 本地菜品智能识别（「堂食菜品绑定」与「菜品销量」共用，规则只维护这一处）=====
+// 背景：收银机品项名称本来就取自本地菜品库，绝大多数行应与本地菜品对得上，
+// 不能因为 dish_sales_mappings 里没有手工记录就要求用户「本地菜品绑本地菜品」。
+// 识别优先级：① 手工绑定 → ② 菜品编码=skuid（名称互校，防错归）→ ③ 名称+规格唯一 → ④ 名称唯一。
+// 菜名归一化去掉【】（）[] 与空白 —— 这解决了「【太公推介】金牌烧鸭拼叉烧单人餐」这类前后缀匹配不上的问题。
+function dishMenuKey(value) {
+  return String(value || '').replace(/[【】\[\]（）()\s]/g, '').trim();
+}
+
+/** 构建识别索引：一次性载入在售菜品（排除员工餐），可额外补入已下架但被手工绑定的菜品 */
+function buildDishMenuIndex(extraIds = []) {
+  const menus = db.queryAll(`SELECT id,name,category,method,spec,spec_unit,spec_weight,cost,skuid
+    FROM menu_items WHERE status='在售' AND INSTR(name,'员工餐')=0`).map(withDishMenuSku);
+  const menuById = new Map(menus.map(menu => [Number(menu.id), menu]));
+  // 手工绑定可能指向已下架菜品，也要查得到成本
+  const missing = [...new Set(extraIds.map(Number).filter(Boolean))].filter(id => !menuById.has(id));
+  if (missing.length) {
+    db.queryAll(`SELECT id,name,category,method,spec,spec_unit,spec_weight,cost,skuid FROM menu_items
+      WHERE id IN (${missing.map(() => '?').join(',')})`, missing)
+      .map(withDishMenuSku).forEach(menu => menuById.set(Number(menu.id), menu));
+  }
+  const menuBySkuid = new Map(menus.filter(menu => String(menu.skuid || '').trim()).map(menu => [String(menu.skuid).trim(), menu]));
+  const menusByName = new Map();
+  const menusByNameSpec = new Map();
+  menus.forEach(menu => {
+    const nameKey = dishMenuKey(menu.name);
+    menusByName.set(nameKey, [...(menusByName.get(nameKey) || []), menu]);
+    const specKey = `${nameKey}|${normalizeDishSpec(menu.spec)}`;
+    menusByNameSpec.set(specKey, [...(menusByNameSpec.get(specKey) || []), menu]);
+  });
+  return { menus, menuById, menuBySkuid, menusByName, menusByNameSpec };
+}
+
+/** 按优先级识别单个销售分组；reason: manual | skuid | name_spec | name | ''(未命中) */
+function resolveDishMenuSmart(index, group) {
+  const onlyOne = list => (list && list.length === 1 ? list[0] : null);
+  const manual = group.menu_item_id ? index.menuById.get(Number(group.menu_item_id)) : null;
+  if (manual) return { menu: manual, reason: 'manual' };
+  const nameKey = dishMenuKey(group.product_name);
+  const coded = index.menuBySkuid.get(String(group.product_code || '').trim());
+  // 编码与名称互相校验，避免把「金牌烧鸭饭」错归到另一道菜
+  if (coded && dishMenuKey(coded.name) === nameKey) return { menu: coded, reason: 'skuid' };
+  const bySpec = onlyOne(index.menusByNameSpec.get(`${nameKey}|${normalizeDishSpec(group.spec)}`));
+  if (bySpec) return { menu: bySpec, reason: 'name_spec' };
+  const byName = onlyOne(index.menusByName.get(nameKey));
+  if (byName) return { menu: byName, reason: 'name' };
+  return { menu: null, reason: '' };
+}
+
+const RECOMMEND_REASON_LABELS = {
+  skuid: '菜品编码匹配',
+  name_spec: '名称+规格匹配',
+  name: '名称唯一匹配',
+  manual: '手工绑定',
+};
+
+/** 最长公共连续子串长度（菜名很短，O(n·m) 足够快） */
+function longestCommonSubstring(a, b) {
+  if (!a || !b) return 0;
+  let best = 0;
+  let prev = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = new Array(b.length + 1).fill(0);
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        cur[j] = prev[j - 1] + 1;
+        if (cur[j] > best) best = cur[j];
+      }
+    }
+    prev = cur;
+  }
+  return best;
+}
+
+/**
+ * 菜名相似度（0~1），四项加权，对中文菜名稳定且可解释：
+ *  ① Jaccard（字符集交并比）—— 基础相似度
+ *  ② containment = 交集 ÷ 短名长度 —— 销售名常带套餐描述（含时蔬+靓汤），Jaccard 会被长名稀释
+ *  ③ 最长公共连续子串占比 —— **顺序信息**，区分「烧鹅饭 ⊂ 招牌烧鹅饭」（连续命中）与「烧肉拼烧鹅饭」（字符凑巧）
+ *  ④ 长度比 —— **防短名噪声**：否则「【太公三宝饭】含时蔬+海咸鸭蛋+例汤」会把「咸鸭蛋」当成候选
+ *  整体包含时再加一点权重（最强信号）
+ * 实测：「烧鹅饭」→ 招牌烧鹅饭 0.86 / 烧肉拼烧鹅饭 0.70；
+ *       「太公三宝饭 x2」→ 太公烧鹅三宝饭 0.77；
+ *       「太公白米饭」（0.55）与「咸鸭蛋」噪声（0.54）均被 0.6 阈值挡掉
+ */
+function dishNameSimilarity(a, b) {
+  const keyA = dishMenuKey(a);
+  const keyB = dishMenuKey(b);
+  if (!keyA || !keyB) return 0;
+  const setA = new Set(keyA);
+  const setB = new Set(keyB);
+  let inter = 0;
+  setA.forEach(ch => { if (setB.has(ch)) inter += 1; });
+  const jaccard = inter / (setA.size + setB.size - inter);
+  const containment = inter / Math.min(setA.size, setB.size);
+  const lcsRatio = longestCommonSubstring(keyA, keyB) / Math.min(keyA.length, keyB.length);
+  const lengthRatio = Math.min(keyA.length, keyB.length) / Math.max(keyA.length, keyB.length);
+  let score = 0.45 * jaccard + 0.25 * containment + 0.15 * lcsRatio + 0.15 * lengthRatio;
+  if (keyA.includes(keyB) || keyB.includes(keyA)) score = Math.min(1, score + 0.1);
+  return score;
+}
+
+/**
+ * 疑似候选：精确规则没命中时，按名称相似度给出候选。
+ * ⚠️ **只提示、绝不自动绑定** —— 项目方针：别名/套餐只做推荐不做自动绑，避免把套餐成本算错；
+ * 用户在界面上点一下才采用（走正常的绑定接口）。
+ */
+function suggestDishCandidates(index, group, limit = 3, threshold = 0.6) {
+  const saleKey = dishMenuKey(group.product_name);
+  if (!saleKey) return [];
+  const scored = [];
+  for (const menu of index.menus) {
+    // 员工餐菜品（「（员工）xxx」）不作为候选 —— 用户要绑的是正常售卖菜品
+    if (String(menu.name || '').includes('员工')) continue;
+    // 候选名远短于销售名时跳过：否则「【太公三宝饭】含时蔬+海咸鸭蛋+例汤」会把「咸鸭蛋」当候选
+    if (dishMenuKey(menu.name).length < saleKey.length * 0.4) continue;
+    const score = dishNameSimilarity(group.product_name, menu.name);
+    if (score >= threshold) scored.push({ menu, score });
+  }
+  // 同分时名称更短的排前面：收银名多为简称（「烧鹅饭」），短档案名更可能是它的对应菜
+  scored.sort((x, y) => (y.score - x.score) || (String(x.menu.name).length - String(y.menu.name).length));
+  return scored.slice(0, limit).map(({ menu, score }) => ({
+    menu_item_id: menu.id,
+    menu_name: menu.name,
+    sku_label: menu.sku_label,
+    category: menu.category || '',
+    cost: Number(menu.cost) || 0,
+    score: Math.round(score * 1000) / 1000,
+  }));
+}
+
 // 绑定列表：dish_sales 按菜品聚合 + 关联本地菜品（含成本/毛利估算），支持搜索与分页
 app.get('/api/dish-sales/mappings', (req, res) => {
   try {
@@ -1721,13 +1864,19 @@ app.get('/api/dish-sales/mappings', (req, res) => {
       LEFT JOIN menu_items mi ON mi.id = m.menu_item_id
       ${where}
       GROUP BY d.product_code, d.product_name, d.spec
-      ORDER BY ${sortCol} DESC
+      ORDER BY ${sortCol} DESC, d.product_code, d.product_name, d.spec
       LIMIT ? OFFSET ?`, [...params, psize, (pg - 1) * psize]);
+    const index = buildDishMenuIndex(rows.map(r => r.menu_item_id));
     const items = rows.map(r => {
       const sku = withDishMenuSku({
         name: r.menu_name, spec: r.menu_spec, method: r.menu_method, spec_unit: r.menu_spec_unit, spec_weight: r.menu_spec_weight,
         price: r.menu_price, dine_in_price: r.menu_dine_in_price, member_price: r.menu_member_price, takeout_price: r.menu_takeout_price,
       });
+      // 未绑定的行给出智能推荐（与「菜品销量」同一套识别规则），用户可以一点即绑
+      const verdict = r.mapping_id ? { menu: null, reason: '' } : resolveDishMenuSmart(index, r);
+      const recommend = verdict.menu;
+      // 精确规则没命中时给「疑似候选」（只提示不自动绑，避免套餐/别名错绑）
+      const candidates = (!r.mapping_id && !recommend) ? suggestDishCandidates(index, r) : [];
       return {
         ...r,
         mapped: !!r.mapping_id,
@@ -1737,11 +1886,94 @@ app.get('/api/dish-sales/mappings', (req, res) => {
         unit_cost: Number(r.unit_cost) || 0,
         total_cost: r.mapping_id ? Math.round(Number(r.quantity) * (Number(r.unit_cost) || 0) * 100) / 100 : null,
         gross_profit: r.mapping_id ? Math.round((Number(r.income_amount) - Number(r.quantity) * (Number(r.unit_cost) || 0)) * 100) / 100 : null,
+        // 智能推荐（仅未绑定行给出）
+        recommend_reason: recommend ? verdict.reason : '',
+        recommend_reason_label: recommend ? (RECOMMEND_REASON_LABELS[verdict.reason] || '') : '',
+        recommend_menu_item_id: recommend ? recommend.id : null,
+        recommend_menu_name: recommend ? recommend.name : '',
+        recommend_sku_label: recommend ? recommend.sku_label : '',
+        recommend_sku_variant: recommend ? recommend.sku_variant : '',
+        recommend_sku_price_summary: recommend ? recommend.sku_price_summary : '',
+        recommend_category: recommend ? recommend.category : '',
+        recommend_cost: recommend ? Number(recommend.cost) || 0 : 0,
+        // 疑似候选（精确规则未命中时）：只提示，采用与否由用户点「采用」决定
+        recommend_candidates: candidates,
+        recommend_candidate_label: candidates.length ? `疑似「${candidates[0].menu_name}」` : '',
       };
     });
+    // 全量统计（不受分页/搜索影响）：还剩多少个未绑定分组能被智能推荐识别 —— 顶部按钮靠它显示条数
+    const pendingGroups = db.queryAll(`
+      SELECT d.product_code, d.product_name, d.spec
+      FROM dish_sales d
+      LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
+        AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
+      WHERE m.id IS NULL
+      GROUP BY d.product_code, d.product_name, d.spec`);
+    const statIndex = buildDishMenuIndex([]);
+    const recommendable = pendingGroups.filter(g => resolveDishMenuSmart(statIndex, g).menu).length;
     const menu_items = db.queryAll(`SELECT id,name,category,method,spec,price,dine_in_price,member_price,takeout_price,spec_unit,spec_weight,cost
       FROM menu_items WHERE status='在售' ORDER BY category,name,spec,id`).map(withDishMenuSku);
-    res.json({ ok: true, items, total, page: pg, page_size: psize, menu_items });
+    res.json({
+      ok: true, items, total, page: pg, page_size: psize, menu_items,
+      recommend_summary: {
+        pending: pendingGroups.length,
+        recommendable,
+        unmatched: pendingGroups.length - recommendable,
+      },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 智能推荐批量绑定：用与「菜品销量」完全相同的识别规则，把未绑定但能识别的堂食菜品一次绑好。
+// 与老的一键绑定（严格同名 + 规格精确，见 auto-bind）的区别：本接口额外支持
+//   ① 菜名归一化（忽略【】（）[] 与空白等前后缀差异）
+//   ② 菜品编码 = 本地菜品 skuid（并要求名称互校，防错归）
+// 因此能覆盖「【太公推介】金牌烧鸭拼叉烧单人餐」这类老接口处理不了的名称差异。
+app.post('/api/dish-sales/mappings/auto-bind-smart', (req, res) => {
+  try {
+    const groups = db.queryAll(`
+      SELECT d.product_code, d.product_name, d.spec,
+        SUM(d.quantity) as quantity, SUM(d.income_amount) as income_amount
+      FROM dish_sales d
+      LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
+        AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
+      WHERE m.id IS NULL
+      GROUP BY d.product_code, d.product_name, d.spec`);
+    const index = buildDishMenuIndex([]);
+    const reasons = { skuid: 0, name_spec: 0, name: 0, unmatched: 0 };
+    const samples = [];
+    // 回报本次实际写入的绑定键：验证脚本据此精确回滚（用户可能同时在页面上绑定，不能用总数差推断）
+    const writtenKeys = [];
+    let bound = 0;
+    db.run('BEGIN');
+    try {
+      for (const group of groups) {
+        const verdict = resolveDishMenuSmart(index, group);
+        if (!verdict.menu) { reasons.unmatched += 1; continue; }
+        const normSpec = normalizeDishSpec(group.spec);
+        const productName = String(group.product_name || '').trim();
+        db.run(`INSERT INTO dish_sales_mappings (product_code, product_name, spec, menu_item_id) VALUES (?,?,?,?)
+          ON CONFLICT(product_code, product_name, spec) DO UPDATE SET menu_item_id=excluded.menu_item_id, updated_at=datetime('now','localtime')`,
+          [group.product_code, productName, normSpec, verdict.menu.id]);
+        bound += 1;
+        reasons[verdict.reason] = (reasons[verdict.reason] || 0) + 1;
+        writtenKeys.push(`${group.product_code}|${productName}|${normSpec}`);
+        if (samples.length < 20) {
+          samples.push({
+            product_name: group.product_name,
+            menu_sku_label: verdict.menu.sku_label,
+            reason: verdict.reason,
+            reason_label: RECOMMEND_REASON_LABELS[verdict.reason] || '',
+          });
+        }
+      }
+      db.run('COMMIT');
+    } catch (error) {
+      db.run('ROLLBACK');
+      throw error;
+    }
+    db.save();
+    res.json({ ok: true, bound, skipped: reasons.unmatched, reasons, samples, written_keys: writtenKeys });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1891,41 +2123,11 @@ app.get('/api/dish-sales/analytics', (req, res) => {
         AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
       ${where}
       GROUP BY d.product_code, d.product_name, d.spec`, params);
-    // 收银机品项名称本来就取自本地菜品库，绝大多数行应与本地菜品对得上，
-    // 不能因为 dish_sales_mappings 里没有手工记录就要求用户「本地菜品绑本地菜品」。
-    // 识别优先级：手工绑定 → 菜品编码=skuid（名称互校）→ 名称+规格唯一 → 名称唯一。
-    const menus = db.queryAll(`SELECT id,name,category,method,spec,spec_unit,spec_weight,cost,skuid
-      FROM menu_items WHERE status='在售' AND INSTR(name,'员工餐')=0`).map(withDishMenuSku);
-    const menuById = new Map(menus.map(menu => [Number(menu.id), menu]));
-    // 手工绑定可能指向已下架菜品，也要查得到成本
-    const manualIds = [...new Set(groups.map(g => Number(g.menu_item_id)).filter(Boolean))].filter(id => !menuById.has(id));
-    if (manualIds.length) {
-      db.queryAll(`SELECT id,name,category,method,spec,spec_unit,spec_weight,cost,skuid FROM menu_items
-        WHERE id IN (${manualIds.map(() => '?').join(',')})`, manualIds)
-        .map(withDishMenuSku).forEach(menu => menuById.set(Number(menu.id), menu));
-    }
-    const dishMenuKey = value => String(value || '').replace(/[【】\[\]（）()\s]/g, '').trim();
-    const menuBySkuid = new Map(menus.filter(menu => String(menu.skuid || '').trim()).map(menu => [String(menu.skuid).trim(), menu]));
-    const menusByName = new Map();
-    const menusByNameSpec = new Map();
-    menus.forEach(menu => {
-      const nameKey = dishMenuKey(menu.name);
-      menusByName.set(nameKey, [...(menusByName.get(nameKey) || []), menu]);
-      const specKey = `${nameKey}|${normalizeDishSpec(menu.spec)}`;
-      menusByNameSpec.set(specKey, [...(menusByNameSpec.get(specKey) || []), menu]);
-    });
-    const onlyOne = list => (list && list.length === 1 ? list[0] : null);
+    // 识别规则已抽到 buildDishMenuIndex / resolveDishMenuSmart（与「堂食菜品绑定」共用，规则只维护一处）
+    const index = buildDishMenuIndex(groups.map(g => g.menu_item_id));
     const round2 = value => Math.round(value * 100) / 100;
     const items = groups.map(group => {
-      const nameKey = dishMenuKey(group.product_name);
-      const coded = menuBySkuid.get(String(group.product_code || '').trim());
-      // 编码与名称互相校验，避免把「金牌烧鸭饭」错归到另一道菜
-      const byCode = coded && dishMenuKey(coded.name) === nameKey ? coded : null;
-      const menu = menuById.get(Number(group.menu_item_id))
-        || byCode
-        || onlyOne(menusByNameSpec.get(`${nameKey}|${normalizeDishSpec(group.spec)}`))
-        || onlyOne(menusByName.get(nameKey))
-        || null;
+      const { menu, reason } = resolveDishMenuSmart(index, group);
       const quantity = Number(group.quantity) || 0;
       const income = Number(group.income_amount) || 0;
       const unitCost = menu ? Number(menu.cost) || 0 : 0;
@@ -1933,7 +2135,7 @@ app.get('/api/dish-sales/analytics', (req, res) => {
         ...group,
         mapped: !!menu,
         mapping_id: group.mapping_id || null,
-        auto_matched: !!menu && !group.mapping_id,
+        auto_matched: !!menu && reason !== 'manual',
         menu_item_id: menu ? menu.id : null,
         menu_name: menu ? menu.name : '',
         menu_category: menu ? menu.category : '',
@@ -2086,6 +2288,11 @@ app.get('/api/poultry/accounting/purchase-comparison', (req, res) => {
   try { res.json(poultryAccounting.purchaseComparison(req.query)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
+// 采购校准：模型理论只数 vs 门店录入的实际只数，按月对比算 MAPE（评价参数好坏的真实依据）
+app.get('/api/poultry/calibration', (req, res) => {
+  try { res.json(poultryAccounting.calibrationReport(req.query)); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 app.get('/api/poultry/purchases', (req, res) => {
   try { res.json({ ok: true, purchases: poultryAccounting.listPurchases(req.query) }); }
@@ -2119,6 +2326,34 @@ app.post('/api/poultry/import', (req, res) => {
     console.log(`[poultry import] ${filename || '未命名.xlsx'}: 禽类 ${result.birds} / 出成 ${result.yields} / 耗用 ${result.usage} / 异常 ${result.error_count}`);
     res.json({ ok: true, ...result, filename: filename || '' });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// 禽类菜范围（覆盖率分母口径，用户可维护）
+// 背景：全量覆盖率的分母含饮品/主食/包材，永远到不了 90%，不能当风控可信度门槛。
+// 这里维护「哪些菜算禽类菜」，供核算接口算出「禽类菜品覆盖率」。
+app.get('/api/poultry/scope', (req, res) => {
+  try {
+    res.json({
+      ok: true,
+      keywords: poultryAccounting.listScopeKeywords(),
+      dishes: poultryAccounting.listScopeDishes(),
+      rules: poultryAccounting.resolveScopeRules(),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/poultry/scope/keywords', (req, res) => {
+  try {
+    const body = req.body || {};
+    res.json({ ok: true, ...poultryAccounting.saveScopeKeywords(body.keywords) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/poultry/scope/dishes', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.saveScopeDishes(req.body || {}) }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/poultry/scope/preview', (req, res) => {
+  try { res.json(poultryAccounting.scopePreview()); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // 模板列表

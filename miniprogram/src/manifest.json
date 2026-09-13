@@ -1,0 +1,25 @@
+{
+  "name": "鹅太公中控",
+  "appid": "",
+  "description": "协同事项 / 日报填报 / 门店看板",
+  "versionName": "0.1.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "postcss": true,
+      "minified": true
+    },
+    "usingComponents": true
+  },
+  "h5": {
+    "title": "鹅太公中控",
+    "router": {
+      "base": "/"
+    }
+  },
+  "vueVersion": "3"
+}

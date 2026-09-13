@@ -127,20 +127,64 @@ foreach ($p in $calc.parts) {
 }
 Check '部位折鸟 = 总需求÷一只出成' ($mismatch.Count -eq 0) ($(if($mismatch.Count){ $mismatch -join ' | ' } else { "全部 $($calc.parts.Count) 个部位一致" }))
 
-# 5.3 核心：每只禽 只数 = max(身体相加, 副产品最大)
+# 5.3 核心：每只禽 只数 = max(各资源池约束)
+#   2026-09-12 升级为资源约束模型（旧口径是「身体相加 / 副产品最大」两池取最大）：
+#     ① 身体：非副产品部位的折鸟之和
+#     ② 腿：每只 2 条 —— 下庄/腿/半只/整只 各自带来的腿需求 ÷ 2
+#     ③ 翅：每只 2 只 —— 上庄/战斧/半只/整只
+#     ④ 头颈：每只 1 个 —— 头颈/整只（半只不含头颈）
+#   部位与资源的关系由 zone_code 决定（见 lib/poultry-accounting.js 的 ZONE_LIMITED_CONSUME）。
+$ZONE_LIMITED = @{
+  whole     = @{ leg = 2; wing = 2; head_neck = 1 }
+  half      = @{ leg = 1; wing = 1 }
+  upper     = @{ wing = 1 }
+  lower     = @{ leg = 1 }
+  leg       = @{ leg = 1 }
+  wing      = @{ wing = 1 }
+  head_neck = @{ head_neck = 1 }
+  belly     = @{}
+  meat      = @{}
+  other     = @{}
+}
+$RES_CAP = @{ leg = 2; wing = 2; head_neck = 1 }
 $birdMismatch = @()
 foreach ($b in $calc.summary.birds) {
   $p = @($calc.parts | Where-Object { $_.bird_id -eq $b.bird_id })
   $bodySum = [math]::Round((($p | Where-Object { $_.part_kind -ne '副产品' }) | Measure-Object -Property birds -Sum).Sum, 2)
-  $bypMax = [math]::Round((($p | Where-Object { $_.part_kind -eq '副产品' }) | Measure-Object -Property birds -Maximum).Maximum, 2)
   if ($null -eq $bodySum) { $bodySum = 0 }
-  if ($null -eq $bypMax) { $bypMax = 0 }
-  $expect = [math]::Round([math]::Max($bodySum, $bypMax), 2)
-  if ([math]::Abs($b.birds_count - $expect) -gt 0.05) { $birdMismatch += "$($b.breed_name): 接口=$($b.birds_count) max($bodySum,$bypMax)=$expect" }
+  $resDemand = @{ leg = 0.0; wing = 0.0; head_neck = 0.0 }
+  foreach ($part in $p) {
+    $zone = if ($part.zone_code) { $part.zone_code } else { 'other' }
+    $limited = $ZONE_LIMITED[$zone]
+    if (-not $limited) { $limited = @{} }
+    foreach ($res in $limited.Keys) { $resDemand[$res] += $part.demand * $limited[$res] }
+  }
+  $constraints = @{ body = $bodySum }
+  foreach ($res in $RES_CAP.Keys) { $constraints[$res] = [math]::Round($resDemand[$res] / $RES_CAP[$res], 2) }
+  $expect = [math]::Round((($constraints.Values | Measure-Object -Maximum).Maximum), 2)
+  if ([math]::Abs($b.birds_count - $expect) -gt 0.05) {
+    $birdMismatch += "$($b.breed_name): 接口=$($b.birds_count) 手算=$expect（身体 $($constraints.body)/腿 $($constraints.leg)/翅 $($constraints.wing)/头颈 $($constraints.head_neck)）"
+  }
   if ([math]::Abs($b.body_birds - $bodySum) -gt 0.05) { $birdMismatch += "$($b.breed_name) body 字段不一致 接口=$($b.body_birds) 手算=$bodySum" }
-  if ([math]::Abs($b.byproduct_birds - $bypMax) -gt 0.05) { $birdMismatch += "$($b.breed_name) byproduct 字段不一致 接口=$($b.byproduct_birds) 手算=$bypMax" }
+  foreach ($res in $RES_CAP.Keys) {
+    $apiVal = [double]$b.constraint_birds.$res
+    if ([math]::Abs($apiVal - $constraints[$res]) -gt 0.05) { $birdMismatch += "$($b.breed_name) $res 约束不一致 接口=$apiVal 手算=$($constraints[$res])" }
+  }
 }
-Check '只数 = max(身体相加, 副产品最大)' ($birdMismatch.Count -eq 0) ($(if($birdMismatch.Count){ $birdMismatch -join ' | ' } else { "全部 $($calc.summary.birds.Count) 种禽一致" }))
+Check '只数 = max(身体, 腿, 翅, 头颈 四个资源池)' ($birdMismatch.Count -eq 0) ($(if($birdMismatch.Count){ $birdMismatch -join ' | ' } else { "全部 $($calc.summary.birds.Count) 种禽一致（资源约束模型）" }))
+# 瓶颈标注应当落在「实际取到最大值」的那个资源池对应的部位上
+$govMismatch = @()
+foreach ($b in $calc.summary.birds) {
+  if (-not $b.governing_resource) { $govMismatch += "$($b.breed_name): 缺 governing_resource"; continue }
+  $cb = $b.constraint_birds
+  $values = @()
+  foreach ($res in 'body','leg','wing','head_neck') { $values += [double]$cb.$res }
+  $max = ($values | Measure-Object -Maximum).Maximum
+  if ([math]::Abs([double]$cb.($b.governing_resource) - $max) -gt 0.05) {
+    $govMismatch += "$($b.breed_name): 瓶颈=$($b.governing_resource) 但不是最大值 $max"
+  }
+}
+Check '瓶颈资源 = 约束最大的那个资源池' ($govMismatch.Count -eq 0) ($(if($govMismatch.Count){ $govMismatch -join ' | ' } else { "全部一致（瓶颈资源标注正确）" }))
 
 # 5.4 合计只数 = 各禽只数之和；瓶颈标注唯一
 $sumBirds = [math]::Round((($calc.summary.birds | Measure-Object -Property birds_count -Sum).Sum), 2)

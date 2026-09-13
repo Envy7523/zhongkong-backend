@@ -1,0 +1,45 @@
+{
+  "pages": [
+    {
+      "path": "pages/collab/list",
+      "style": {
+        "navigationBarTitleText": "协同事项",
+        "enablePullDownRefresh": true,
+        "backgroundTextStyle": "dark"
+      }
+    },
+    {
+      "path": "pages/collab/detail",
+      "style": {
+        "navigationBarTitleText": "事项详情"
+      }
+    },
+    {
+      "path": "pages/collab/create",
+      "style": {
+        "navigationBarTitleText": "发起事项"
+      }
+    },
+    {
+      "path": "pages/revenue/index",
+      "style": {
+        "navigationBarTitleText": "门店营业数据",
+        "enablePullDownRefresh": true,
+        "backgroundTextStyle": "dark"
+      }
+    },
+    {
+      "path": "pages/login/login",
+      "style": {
+        "navigationBarTitleText": "登录",
+        "navigationStyle": "custom"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "鹅太公中控",
+    "navigationBarBackgroundColor": "#FFFFFF",
+    "backgroundColor": "#F5F6F8"
+  }
+}

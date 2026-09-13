@@ -20,6 +20,7 @@ const PAGE_TITLES = {
   'staff-management': '人事专区',
   bookkeeping: '记账本',
   'store-preparation': '筹建门店',
+  'db-viewer': '数据库查看',
 }
 
 const SUB_LABELS = {

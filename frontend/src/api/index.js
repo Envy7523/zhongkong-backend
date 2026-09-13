@@ -155,11 +155,18 @@ export const batchSavePoultryDishUsage = (data) => http.post('/api/poultry/dish-
 export const getPoultryConfiguredMenus = () => http.get('/api/poultry/dish-usage/configured')
 export const getPoultryAccounting = (params) => http.get('/api/poultry/accounting', { params })
 export const getPoultryPurchaseComparison = (params) => http.get('/api/poultry/accounting/purchase-comparison', { params })
+// 采购校准：模型理论只数 vs 门店录入的实际只数（MAPE），用于评价参数好坏（每条都要跑一次核算，故放宽超时）
+export const getPoultryCalibration = (params) => http.get('/api/poultry/calibration', { params, timeout: 180000 })
 export const getPoultryPurchases = (params) => http.get('/api/poultry/purchases', { params })
 export const savePoultryPurchase = (data) => http.post('/api/poultry/purchases', data)
 export const deletePoultryPurchase = (id) => http.delete(`/api/poultry/purchases/${id}`)
 export const getPoultryTemplate = () => http.get('/api/poultry/template')
 export const importPoultryWorkbook = (data) => http.post('/api/poultry/import', data, { timeout: 120000 })
+// 禽类菜范围（覆盖率分母口径：哪些菜算禽类菜，用户可维护）
+export const getPoultryScope = () => http.get('/api/poultry/scope')
+export const savePoultryScopeKeywords = (keywords) => http.put('/api/poultry/scope/keywords', { keywords })
+export const savePoultryScopeDishes = (data) => http.post('/api/poultry/scope/dishes', data)
+export const getPoultryScopePreview = () => http.get('/api/poultry/scope/preview')
 
 // ===== 菜品模板 =====
 export const getMenuTemplates = () => http.get('/api/menu-templates')
@@ -217,6 +224,8 @@ export const saveDishSalesMapping = (data) => http.post('/api/dish-sales/mapping
 export const batchSaveDishSalesMappings = (data) => http.post('/api/dish-sales/mappings/batch', data)
 export const deleteDishSalesMapping = (id) => http.delete(`/api/dish-sales/mappings/${id}`)
 export const autoBindDishSalesMappings = () => http.post('/api/dish-sales/mappings/auto-bind')
+// 智能推荐批量绑定：与「菜品销量」同一套识别规则（菜名归一化 + 编码互校 + 名称/规格唯一）
+export const autoBindDishSalesMappingsSmart = () => http.post('/api/dish-sales/mappings/auto-bind-smart')
 
 // ===== 日报导入 =====
 export const importDailyReport = (data) => http.post('/api/reports/daily/import', data)
@@ -293,3 +302,14 @@ export const syncPullStaff = () => http.get('/api/staff/sync-pull')
 export const syncStaffFromWecom = () => http.post('/api/staff/sync-wecom', {})
 export const getStaffStoreManagers = () => http.get('/api/staff/store-managers')
 export const saveStaffStoreManager = (storeId, employeeId) => http.put(`/api/staff/store-managers/${storeId}`, { employee_id: employeeId })
+
+// ===== 数据库查看器（只读，开发辅助）=====
+export const dbViewerOverview = () => http.get('/api/db-viewer/overview')
+export const dbViewerTables = () => http.get('/api/db-viewer/tables')
+export const dbViewerTable = (name, params) => http.get(`/api/db-viewer/table/${encodeURIComponent(name)}`, { params })
+export const dbViewerRefs = (table) => http.get('/api/db-viewer/refs', { params: { table } })
+export const dbViewerFeatureMap = () => http.get('/api/db-viewer/feature-map')
+export const dbViewerFiles = (dir) => http.get('/api/db-viewer/files', { params: { dir } })
+export const dbViewerFile = (filePath, mode) => http.get('/api/db-viewer/file', { params: mode ? { path: filePath, [mode]: '1' } : { path: filePath } })
+export const dbViewerQuery = (sql) => http.post('/api/db-viewer/query', { sql })
+export const dbViewerDataHealth = (days) => http.get('/api/db-viewer/data-health', { params: { days } })

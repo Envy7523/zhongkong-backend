@@ -15,6 +15,10 @@ data/database.sqlite
 data/*.sqlite
 data/*.sqlite.bak*
 *.sqlite.bak*
+# sql.js 开了 journal_mode=WAL，运行时会生成 WAL / 共享内存附属文件，
+# 它们同样含有业务数据片段，必须一并忽略（否则 git add -A 会把它们带进公开仓库）
+data/*.sqlite-wal
+data/*.sqlite-shm
 
 # ===== 本地运维 / 抓包 / 浏览器诊断产物 =====
 # .chrome-diagnose 是带登录令牌（localStorage）的 Chrome 配置目录，绝不能入库

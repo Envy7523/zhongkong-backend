@@ -91,22 +91,36 @@
         </div>
       </section>
 
-      <!-- ===== 覆盖率提示 ===== -->
+      <!-- ===== 覆盖率提示（两个口径：禽类菜品覆盖率是风控该看的数，全量覆盖率作参考） ===== -->
       <section class="menu-panel coverage-panel">
         <div class="coverage-body">
           <div class="coverage-head">
             <span :class="['coverage-badge', coverageTone]">
-              销量覆盖 {{ percent(result.summary.covered_rate) }}
+              禽类菜品覆盖 {{ percent(poultryCoverage.covered_rate) }}
+            </span>
+            <span class="coverage-badge reference" title="分母含柠檬茶/白米饭/打包盒等无需配禽类系数的品类，只作参考">
+              全量覆盖 {{ percent(result.summary.covered_rate) }}
             </span>
             <span class="coverage-text">
-              本次区间共 <b>{{ number(result.summary.total_quantity) }}</b> 份销量，其中
-              <b>{{ number(result.summary.covered_quantity) }}</b> 份已配齐禽类出成关系；
-              未覆盖 <b>{{ number(result.coverage.unbound_quantity + result.coverage.no_usage_quantity) }}</b> 份
-              （未绑定菜品 {{ result.coverage.unbound.length }} 项 / 已绑定但未配出成 {{ result.coverage.no_usage.length }} 项）。
+              本期<b>禽类菜</b>共 <b>{{ number(poultryCoverage.scope_quantity) }}</b> 份销量
+              （判定依据：名称含 {{ scopeIncludeText }}<template v-if="poultryCoverage.exclude_keywords?.length">，排除 {{ scopeExcludeText }}</template>），
+              已配齐 <b>{{ number(poultryCoverage.covered_quantity) }}</b> 份，
+              还差 <b>{{ number(poultryCoverage.uncovered_quantity) }}</b> 份没配
+              （<b>{{ number(poultryCoverage.unbound_quantity) }}</b> 份是报表菜名没关联到本地菜品，
+              需去「堂食菜品绑定」；<b>{{ number(poultryCoverage.no_usage_quantity) }}</b> 份是已关联但没配部位系数，
+              需去「菜品耗用」）。
+              全量覆盖率的分母 {{ number(result.summary.total_quantity) }} 份里含无需配禽类系数的品类，所以它天然偏低，只看参考。
             </span>
-            <el-button link type="primary" @click="gapVisible = true">
+            <el-button link type="primary" @click="openGapDialog">
               查看缺口明细
             </el-button>
+            <el-button link type="primary" @click="openScopeDialog">
+              维护禽类菜范围
+            </el-button>
+          </div>
+          <div v-if="poultryCoverage.fallback" class="coverage-warnings">
+            <el-alert type="warning" :closable="false" show-icon
+              title="禽类菜关键词表为空，当前用的是内置默认（鹅/鸭/鸡）—— 请到「维护禽类菜范围」里确认。" />
           </div>
           <div v-if="result.coverage.warning_count" class="coverage-warnings">
             <el-alert type="warning" :closable="false" show-icon
@@ -197,10 +211,71 @@
         <div v-if="!(result.parts || []).length" class="menu-empty">还没有已配置的部位耗用</div>
         <footer v-if="(result.parts || []).length" class="menu-pagination-footer">
           <span>
-            共 {{ (result.parts || []).length }} 个部位 · 身体合计 {{ bodyBirds }} 只 / 副产品瓶颈 {{ byproductBirds }} 只 →
-            只数取较大者 {{ result.summary.total_birds }} 只
+            共 {{ (result.parts || []).length }} 个部位 · 资源池约束：{{ constraintText }} →
+            只数取<b>最大者</b> {{ result.summary.total_birds }} 只
           </span>
         </footer>
+      </section>
+
+      <!-- ===== 采购校准（模型 vs 门店实际，MAPE） ===== -->
+      <section class="menu-panel">
+        <header class="menu-panel-header">
+          <div class="menu-panel-title">
+            <h3>采购校准 · 模型 vs 门店实际</h3>
+            <span class="muted-text">
+              用真实只数评价参数好坏 —— MAPE 越小说明出成系数越准；改完系数再校准一次，就能看出是否真的改善
+            </span>
+          </div>
+          <el-button :loading="calibLoading" @click="loadCalibration">开始校准</el-button>
+        </header>
+        <div v-if="calibData" class="calib-body">
+          <div class="calib-summary">
+            <div :class="['calib-card', calibLevelTone]">
+              <span>MAPE（平均绝对偏差）</span>
+              <strong>{{ percent(calibData.summary.mape) }}</strong>
+              <small>{{ calibData.summary.level_label }}</small>
+            </div>
+            <div class="calib-card">
+              <span>样本数（门店 × 月）</span>
+              <strong>{{ calibData.summary.sample_count }}</strong>
+              <small>来自「实际采购只数」录入</small>
+            </div>
+            <div class="calib-card">
+              <span>平均偏差（带正负）</span>
+              <strong>{{ percent(calibData.summary.avg_deviation) }}</strong>
+              <small>正值=模型偏高，负值=模型偏低</small>
+            </div>
+            <div class="calib-card">
+              <span>中位绝对偏差</span>
+              <strong>{{ percent(calibData.summary.median_abs_deviation) }}</strong>
+              <small>比平均值更抗个别异常</small>
+            </div>
+          </div>
+          <el-table v-if="calibData.rows.length" :data="calibData.rows" class="menu-data-table" size="small" max-height="320">
+            <el-table-column prop="month" label="月份" width="100" />
+            <el-table-column prop="store_name" label="门店" min-width="180" />
+            <el-table-column prop="animal" label="禽类" width="80" />
+            <el-table-column label="模型理论" width="110" align="right">
+              <template #default="{ row }">{{ number(row.theory_birds) }} 只</template>
+            </el-table-column>
+            <el-table-column label="门店实际" width="110" align="right">
+              <template #default="{ row }">{{ number(row.actual_birds) }} 只</template>
+            </el-table-column>
+            <el-table-column label="偏差" width="110" align="right">
+              <template #default="{ row }">
+                <span :class="['calib-dev', Math.abs(row.deviation) > 0.1 ? 'bad' : Math.abs(row.deviation) > 0.05 ? 'warn' : 'ok']">
+                  {{ row.deviation > 0 ? '+' : '' }}{{ percent(row.deviation) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="governing" label="瓶颈" min-width="130" />
+          </el-table>
+          <p v-else class="menu-empty">
+            还没有可校准的数据 —— 请先在「理论 vs 实际采购」里录入门店每月的实际只数（每店每月每禽类一条）
+          </p>
+          <p v-if="calibData.truncated" class="archive-note">（本次只算了最近 12 条；数据多时可指定门店再校准）</p>
+        </div>
+        <p v-else class="menu-empty">点右上角「开始校准」：把每个门店每月录入的实际只数与模型算出的只数逐条对比（数据多时需要几秒）</p>
       </section>
 
       <!-- ===== 食材去向对账（风控） ===== -->
@@ -216,7 +291,7 @@
         </header>
         <div class="risk-body">
           <el-alert v-if="riskLowCoverage" type="warning" :closable="false" show-icon
-            :title="`当前销量覆盖率只有 ${percent(result.summary.covered_rate)}，还有 ${number(result.summary.uncovered_quantity)} 份销量没落到任何已配系数的菜品上。此时「身体差额」主要来自覆盖不足，不能当损耗看 —— 先把覆盖率补上来这个指标才有意义。`" />
+            :title="`当前禽类菜品覆盖率只有 ${percent(poultryCoverage.covered_rate)}，还有 ${number(poultryCoverage.uncovered_quantity)} 份禽类菜销量没落到已配系数的菜品上。此时「身体差额」主要来自覆盖不足，不能当损耗看 —— 先把覆盖率补上来这个指标才有意义。`" />
 
           <div v-for="bird in riskBirds" :key="bird.bird_id" class="risk-block">
             <div class="risk-head">
@@ -573,13 +648,20 @@
             <el-table-column label="单只成本" width="120" align="right">
               <template #default="{ row }">{{ row.unit_cost ? '¥' + money(row.unit_cost) : '未设置' }}</template>
             </el-table-column>
-            <el-table-column label="出成部位" width="110" align="center">
+            <!-- 每个禽类各配各的：直接从这里进它的拆解 / 菜品耗用 -->
+            <el-table-column label="② 拆解配置" width="150" align="center">
               <template #default="{ row }">
-                <el-button link type="primary" @click="openYields(row)">{{ row.yield_count }} 项</el-button>
+                <el-button link type="primary" @click="openYields(row)">
+                  {{ row.yield_count ? `${row.yield_count} 个部位 →` : '去配置 →' }}
+                </el-button>
               </template>
             </el-table-column>
-            <el-table-column label="关联菜品" width="110" align="center">
-              <template #default="{ row }">{{ row.dish_count }} 个</template>
+            <el-table-column label="③ 菜品耗用" width="150" align="center">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openUsageForAnimal(row)">
+                  {{ row.dish_count ? `${row.dish_count} 个菜品 →` : '去配置 →' }}
+                </el-button>
+              </template>
             </el-table-column>
             <el-table-column label="状态" width="90" align="center">
               <template #default="{ row }"><span :class="['status-pill', row.status === '停用' ? 'off' : 'on']">{{ row.status }}</span></template>
@@ -597,6 +679,22 @@
 
         <!-- ② 整只出成 -->
         <el-tab-pane label="② 整只出成拆解" name="yields">
+          <!-- 当前禽类：从「① 禽类档案」某一行点进来会带上；每个禽类各配各的 -->
+          <div class="yield-current">
+            <span class="yield-current-tag">正在配置</span>
+            <b>{{ currentYieldBird ? `${currentYieldBird.animal} · ${currentYieldBird.breed_name}` : '未选择禽类' }}</b>
+            <span class="muted-text">共 {{ yieldRows.length }} 个部位 —— 鹅/鸡/鸭各有一套拆解，互不影响</span>
+            <el-select v-model="yieldBirdId" size="small" style="width: 180px;" @change="loadYields">
+              <el-option v-for="bird in birds" :key="bird.id" :label="`${bird.animal} · ${bird.breed_name}`" :value="bird.id" />
+            </el-select>
+          </div>
+          <!-- 整只部位示意图：点选部位 → 高亮下方表格行；右侧做「整只份量自检」 -->
+          <PoultryBodyMap
+            v-if="yieldBirdId"
+            :rows="yieldRows"
+            :animal="currentYieldBird ? currentYieldBird.animal : ''"
+            @pick="onPickBodyZone" />
+          <p v-if="pickedPartHint" class="body-map-hint">{{ pickedPartHint }}</p>
           <div class="archive-bar">
             <span class="archive-tip">
               「一只禽出几个该部位」—— 例如一只鹅出 2 份上庄、2 份下庄、1 个鹅头带颈，就分别填 2、2、1。
@@ -610,7 +708,7 @@
               <el-button type="primary" :loading="saving" @click="saveYields">保存出成</el-button>
             </div>
           </div>
-          <el-table v-if="yieldBirdId" :data="yieldRows" class="menu-data-table" row-key="_key">
+          <el-table v-if="yieldBirdId" :data="yieldRows" class="menu-data-table" row-key="_key" :row-class-name="yieldRowClass">
             <el-table-column label="部位名称" min-width="190">
               <template #default="{ row }">
                 <el-input v-model="row.part_name" placeholder="如 上庄 / 下庄 / 鹅腿 / 鹅头带颈" />
@@ -621,6 +719,20 @@
                 <el-select v-model="row.part_kind" style="width: 100%;">
                   <el-option label="身体" value="身体" />
                   <el-option label="副产品" value="副产品" />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="图示区域" width="140">
+              <template #default="{ row }">
+                <el-select v-model="row.zone_code" style="width: 100%;" placeholder="选择区域">
+                  <el-option v-for="z in zoneOptions" :key="z.value" :label="z.label" :value="z.value" />
+                </el-select>
+              </template>
+            </el-table-column>
+            <el-table-column label="口径类型" width="185">
+              <template #default="{ row }">
+                <el-select v-model="row.yield_mode" style="width: 100%;">
+                  <el-option v-for="m in yieldModeOptions" :key="m.value" :label="m.label" :value="m.value" />
                 </el-select>
               </template>
             </el-table-column>
@@ -675,6 +787,18 @@
 
         <!-- ③ 菜品耗用 -->
         <el-tab-pane label="③ 菜品耗用" name="usage">
+          <!-- 当前禽类：从「① 禽类档案」某一行点进来会带上禽类，也可在此切换 -->
+          <div class="yield-current">
+            <span class="yield-current-tag">正在配置</span>
+            <b>{{ usageAnimal || '全部禽类' }}</b>
+            <span class="muted-text">的菜品耗用 —— 每个禽类的部位各配各的，互不影响</span>
+            <el-select v-model="usageAnimal" size="small" style="width: 150px;" @change="loadUsageOverview">
+              <el-option label="全部禽类" value="" />
+              <el-option label="鹅" value="鹅" />
+              <el-option label="鸡" value="鸡" />
+              <el-option label="鸭" value="鸭" />
+            </el-select>
+          </div>
           <div class="archive-bar">
             <span class="archive-tip">
               先<b>按分组挑菜</b>（同一分组的菜通常用同一套部位耗用），勾选后一次关联整组，再按需微调单个菜品。
@@ -817,6 +941,16 @@
           <small>{{ usageTarget.spec || '无规格' }} · 每份该菜品消耗以下部位</small>
         </div>
       </div>
+      <!-- 禽类快捷标签：一键收窄部位下拉（找「鸭腿」不必在 24 个部位里翻） -->
+      <div class="usage-animal-bar">
+        <span class="usage-kw-tag">禽类</span>
+        <button type="button" :class="['usage-kw-btn', { active: !usageAnimalFilter }]" @click="usageAnimalFilter = ''">全部</button>
+        <button v-for="a in yieldAnimalTabs" :key="a" type="button"
+          :class="['usage-kw-btn', { active: usageAnimalFilter === a }]" @click="usageAnimalFilter = usageAnimalFilter === a ? '' : a">
+          {{ a }}
+        </button>
+        <span class="muted-text">选禽类可只看它的部位；也可直接在下拉里输入「鸭腿」搜索</span>
+      </div>
       <el-table :data="usageRows" class="menu-data-table">
         <el-table-column label="部位" min-width="260">
           <template #default="{ row }">
@@ -880,6 +1014,16 @@
         </span>
       </div>
 
+      <!-- 禽类快捷标签：批量套用时先收窄到目标禽类 -->
+      <div class="usage-animal-bar">
+        <span class="usage-kw-tag">禽类</span>
+        <button type="button" :class="['usage-kw-btn', { active: !usageAnimalFilter }]" @click="usageAnimalFilter = ''">全部</button>
+        <button v-for="a in yieldAnimalTabs" :key="a" type="button"
+          :class="['usage-kw-btn', { active: usageAnimalFilter === a }]" @click="usageAnimalFilter = usageAnimalFilter === a ? '' : a">
+          {{ a }}
+        </button>
+        <span class="muted-text">例如只看「鸭」就能直接挑到鸭腿</span>
+      </div>
       <el-table :data="batchRows" class="menu-data-table">
         <el-table-column label="部位" min-width="280">
           <template #default="{ row }">
@@ -961,11 +1105,117 @@
         <el-button @click="importVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- ===== 禽类菜范围维护（覆盖率分母口径） ===== -->
+    <el-dialog v-model="scopeDialogVisible" title="维护禽类菜范围 · 覆盖率分母口径" width="min(1100px, calc(100vw - 32px))"
+      align-center class="menu-dialog" top="5vh">
+      <div v-loading="scopeLoading" class="scope-body">
+        <el-alert type="info" :closable="false" show-icon class="scope-intro"
+          title="「禽类菜品覆盖率」的分母只算这里判定出来的禽类菜 —— 柠檬茶、白米饭、打包盒这类永远不用配禽类系数的品类不再拉低它。判定顺序：手动标记 → 已配禽类耗用 → 名称关键词（含 include 且不含 exclude）。" />
+
+        <div class="scope-grid">
+          <!-- 左：关键词规则 -->
+          <section class="scope-column">
+            <header class="scope-column-head">
+              <h4>判定关键词</h4>
+              <span class="muted-text">菜名包含即命中；排除词优先</span>
+            </header>
+
+            <div class="scope-kw-block">
+              <div class="scope-kw-title">
+                <span class="scope-kw-tag include">算作禽类菜</span>
+                <el-button link type="primary" size="small" @click="addScopeKeyword('include')">+ 添加</el-button>
+              </div>
+              <div v-for="(row, index) in scopeIncludeRows" :key="'kw-in-' + index" class="scope-kw-row">
+                <el-input v-model="row.keyword" size="small" placeholder="如 鹅 / 鸭 / 鸡 / 肶" style="width: 110px" />
+                <el-switch v-model="row.enabled" size="small" />
+                <el-input v-model="row.note" size="small" placeholder="备注（可空）" />
+                <el-button link type="danger" size="small" @click="removeScopeKeyword(row)">删除</el-button>
+              </div>
+              <div v-if="!scopeIncludeRows.length" class="scope-kw-empty">至少需要一条，否则无法判定分母</div>
+            </div>
+
+            <div class="scope-kw-block">
+              <div class="scope-kw-title">
+                <span class="scope-kw-tag exclude">不算（排除）</span>
+                <el-button link type="primary" size="small" @click="addScopeKeyword('exclude')">+ 添加</el-button>
+              </div>
+              <div v-for="(row, index) in scopeExcludeRows" :key="'kw-ex-' + index" class="scope-kw-row">
+                <el-input v-model="row.keyword" size="small" placeholder="如 蛋 / 柠檬茶" style="width: 110px" />
+                <el-switch v-model="row.enabled" size="small" />
+                <el-input v-model="row.note" size="small" placeholder="备注（可空）" />
+                <el-button link type="danger" size="small" @click="removeScopeKeyword(row)">删除</el-button>
+              </div>
+              <div v-if="!scopeExcludeRows.length" class="scope-kw-empty">没有排除词 —— 含「蛋」的滑蛋饭/咸鸭蛋会被算进分母</div>
+            </div>
+
+            <el-button type="primary" :loading="scopeSaving" @click="saveScopeRules">保存关键词并重新核算</el-button>
+
+            <div v-if="scopePreviewData" class="scope-stat">
+              <div class="scope-stat-row"><span>全部菜品</span><b>{{ scopePreviewData.summary.dish_total }} 个</b></div>
+              <div class="scope-stat-row"><span>判定为禽类菜</span><b>{{ scopePreviewData.summary.scope_dish_count }} 个</b></div>
+              <div class="scope-stat-row"><span>禽类菜销量（全区间）</span><b>{{ number(scopePreviewData.summary.scope_quantity) }} 份</b></div>
+              <div class="scope-stat-row"><span>来源构成</span>
+                <b>手动 {{ scopePreviewData.summary.scope_source.manual }} · 已配 {{ scopePreviewData.summary.scope_source.configured }} · 关键词 {{ scopePreviewData.summary.scope_source.keyword }}</b>
+              </div>
+              <div class="scope-stat-row"><span>被排除词挡掉</span><b>{{ scopePreviewData.summary.scope_source.excluded }} 个菜品</b></div>
+              <p class="scope-stat-tip">预览用「菜名匹配 + 全区间销量」估算，用于核对规则；正式覆盖率以本次核算区间为准。</p>
+            </div>
+          </section>
+
+          <!-- 右：菜品判定明细 -->
+          <section class="scope-column">
+            <header class="scope-column-head">
+              <h4>菜品判定明细</h4>
+              <span class="muted-text">勾选后可手动改判（优先级最高）</span>
+            </header>
+            <div class="scope-tools">
+              <el-input v-model="scopePreviewFilter" size="small" placeholder="搜索菜名 / 分类 / 判定依据" clearable style="width: 220px" />
+              <el-checkbox v-model="scopeOnlyInScope" size="small">只看禽类菜</el-checkbox>
+              <span class="muted-text">已选 {{ scopeSelected.length }}</span>
+            </div>
+            <div class="scope-actions">
+              <el-button size="small" :loading="scopeSaving" @click="markScopeDishes(true)">标为禽类菜</el-button>
+              <el-button size="small" :loading="scopeSaving" @click="markScopeDishes(false)">标为不算</el-button>
+              <el-button size="small" :loading="scopeSaving" @click="markScopeDishes(null)">清除标记</el-button>
+            </div>
+            <el-table :data="scopePreviewRows" max-height="420" class="menu-data-table" size="small"
+              @selection-change="rows => { scopeSelected = rows.map(row => row.menu_item_id) }">
+              <el-table-column type="selection" width="42" />
+              <el-table-column label="菜品" min-width="180">
+                <template #default="{ row }">
+                  <span>{{ row.menu_name }}</span>
+                  <span v-if="row.menu_spec" class="muted-text"> · {{ row.menu_spec }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="分类" width="110" prop="category" />
+              <el-table-column label="判定" width="96" align="center">
+                <template #default="{ row }">
+                  <span :class="['scope-flag', row.in_scope ? 'in' : 'out']">{{ row.in_scope ? '禽类菜' : '不算' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="依据" min-width="150">
+                <template #default="{ row }">
+                  <span>{{ row.reason_label }}</span>
+                  <span v-if="row.configured" class="muted-text"> · 已配系数</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="销量" width="96" align="right">
+                <template #default="{ row }">{{ number(row.quantity) }}</template>
+              </el-table-column>
+            </el-table>
+          </section>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="scopeDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -976,8 +1226,11 @@ import {
   getPoultryDishUsageOverview, getPoultryDishUsage, savePoultryDishUsage, batchSavePoultryDishUsage,
   getPoultryPurchaseComparison, savePoultryPurchase,
   getPoultryTemplate, importPoultryWorkbook,
+  getPoultryScope, savePoultryScopeKeywords, savePoultryScopeDishes, getPoultryScopePreview,
+  getPoultryCalibration,
 } from '@/api'
 import MenuModuleHeader from './MenuModuleHeader.vue'
+import PoultryBodyMap from '@/components/PoultryBodyMap.vue'
 import './menu-theme.css'
 
 const router = useRouter()
@@ -1012,10 +1265,11 @@ const summaryCards = computed(() => {
     if (!row) {
       return { label: `${animal}消耗`, value: '0 只', hint: '本次区间无消耗或未配该禽类', tone: 'muted' }
     }
-    // 说清这个数是怎么来的：瓶颈在身体（各卖法相加）还是在副产品（取最大）
-    const why = row.governing === '副产品'
-      ? `瓶颈：副产品「${row.governing_part}」${row.byproduct_birds} 只 > 身体 ${row.body_birds} 只`
-      : `瓶颈：身体各卖法合计 ${row.body_birds} 只 ≥ 副产品 ${row.byproduct_birds} 只`
+    // 说清这个数是怎么来的：四个资源池约束里哪个是瓶颈（身体 / 腿 / 翅 / 头颈）
+    const cb = row.constraint_birds || {}
+    const why = `瓶颈：${row.governing_resource_label || row.governing || '身体'}`
+      + (row.governing_part ? `（${row.governing_part}）` : '')
+      + `—— 身体 ${cb.body || row.body_birds || 0} ｜ 腿 ${cb.leg || 0} ｜ 翅 ${cb.wing || 0} ｜ 头颈 ${cb.head_neck || 0} 只`
     return {
       label: `${animal}消耗`,
       value: `${row.birds_count} 只`,
@@ -1026,7 +1280,7 @@ const summaryCards = computed(() => {
   cards.push({
     label: '合计只数',
     value: `${summary.total_birds || 0} 只`,
-    hint: `折重 ${summary.total_weight_kg} kg · 覆盖销量 ${percent(summary.covered_rate)}`,
+    hint: `折重 ${summary.total_weight_kg} kg · 禽类菜覆盖 ${percent(poultryCoverage.value.covered_rate)}`,
     tone: 'metric-warning',
     main: true,
   })
@@ -1044,9 +1298,11 @@ const linearGap = computed(() => {
 
 const heroMetrics = computed(() => {
   const summary = result.value?.summary
+  const scopeRate = poultryCoverage.value.covered_rate || 0
   return [
     { label: '合计只数', value: summary ? summary.total_birds : '—', tone: '' },
-    { label: '销量覆盖', value: result.value ? percent(summary.covered_rate) : '—', tone: result.value && summary.covered_rate < 0.5 ? 'warning' : 'success' },
+    { label: '禽类菜覆盖', value: result.value ? percent(scopeRate) : '—', tone: result.value && scopeRate < 0.6 ? 'warning' : 'success' },
+    { label: '全量覆盖', value: result.value ? percent(summary.covered_rate) : '—', tone: 'muted' },
     { label: '缺配置菜品', value: result.value ? result.value.coverage.no_usage.length : '—', tone: result.value?.coverage?.no_usage?.length ? 'warning' : 'success' },
   ]
 })
@@ -1065,18 +1321,50 @@ const bodyBirds = computed(() => {
   const rows = result.value?.summary?.birds || []
   return Math.round(rows.reduce((sum, row) => sum + (row.body_birds || 0), 0) * 100) / 100
 })
-const byproductBirds = computed(() => {
+// 各资源池最大约束（资源约束模型：身体相加、腿/翅/头颈各按每只禽的固定容量算需求只数，取 MAX）
+const resourceMax = computed(() => {
   const rows = result.value?.summary?.birds || []
-  return Math.round(rows.reduce((sum, row) => sum + (row.byproduct_birds || 0), 0) * 100) / 100
+  const keys = ['body', 'leg', 'wing', 'head_neck']
+  const out = {}
+  keys.forEach(k => { out[k] = Math.round(rows.reduce((sum, row) => sum + ((row.constraint_birds || {})[k] || 0), 0) * 100) / 100 })
+  return out
 })
+const constraintText = computed(() => {
+  const r = resourceMax.value
+  return `身体 ${r.body || 0} ｜ 腿 ${r.leg || 0} ｜ 翅 ${r.wing || 0} ｜ 头颈 ${r.head_neck || 0} 只`
+})
+
+// ===== 覆盖率两个口径 =====
+// 风控可信度看「禽类菜品覆盖率」：分母只算禽类菜，把柠檬茶/白米饭/打包盒这类
+// 永远不需要配禽类系数的品类排除在外；全量覆盖率保留作参考（老接口无该字段时回退到全量口径，保证页面不崩）。
+const poultryCoverage = computed(() => {
+  const block = result.value?.coverage?.poultry_scope
+  if (block) return block
+  const summary = result.value?.summary || {}
+  return {
+    covered_rate: summary.covered_rate || 0,
+    covered_quantity: summary.covered_quantity || 0,
+    scope_quantity: summary.total_quantity || 0,
+    uncovered_quantity: summary.uncovered_quantity || 0,
+    unbound_quantity: result.value?.coverage?.unbound_quantity || 0,
+    no_usage_quantity: result.value?.coverage?.no_usage_quantity || 0,
+    include_keywords: [], exclude_keywords: [], fallback: false,
+    source_summary: { manual: 0, configured: 0, keyword: 0, excluded: 0 },
+    unbound: result.value?.coverage?.unbound || [],
+    no_usage: result.value?.coverage?.no_usage || [],
+    dishes: [],
+  }
+})
+const scopeIncludeText = computed(() => (poultryCoverage.value.include_keywords || []).join(' / ') || '未设置')
+const scopeExcludeText = computed(() => (poultryCoverage.value.exclude_keywords || []).join(' / ') || '无')
 
 // ===== 风控（食材去向对账）=====
 const riskBirds = computed(() => (result.value?.summary?.birds || []).filter(b => b.risk))
-// 覆盖率低时「身体差额」主要来自未绑定菜品，不能当损耗读，需要显式提示
+// 覆盖率低时「身体差额」主要来自未绑定菜品，不能当损耗读，需要显式提示。
+// 判断用禽类菜覆盖率 —— 全量口径含无需配系数的品类，永远达不到 90%，拿它当门槛会让告警永远亮着。
 const riskLowCoverage = computed(() => {
-  const summary = result.value?.summary
-  if (!summary) return false
-  return summary.covered_rate < 0.9 && (summary.uncovered_quantity || 0) > 0
+  if (!result.value?.summary) return false
+  return (poultryCoverage.value.covered_rate || 0) < 0.9 && (poultryCoverage.value.uncovered_quantity || 0) > 0
 })
 const rangeOutOfData = computed(() => {
   const maxDate = result.value?.data_range?.max_date
@@ -1085,7 +1373,7 @@ const rangeOutOfData = computed(() => {
 })
 const hasUnclassifiedChannel = computed(() => (result.value?.channel_breakdown || []).some(row => row.channel === 'other' && row.quantity > 0))
 const coverageTone = computed(() => {
-  const rate = result.value?.summary?.covered_rate || 0
+  const rate = poultryCoverage.value.covered_rate || 0
   if (rate >= 0.9) return 'good'
   if (rate >= 0.6) return 'medium'
   return 'low'
@@ -1174,6 +1462,101 @@ async function loadComparison() {
   finally { comparisonLoading.value = false }
 }
 
+// ===== 禽类菜范围维护（覆盖率分母口径：哪些菜算禽类菜）=====
+// 为什么要有这个：全量覆盖率的分母含柠檬茶 / 白米饭 / 打包盒等永远不用配禽类系数的品类，
+// 所以永远到不了 90%，不能当风控可信度门槛。这里维护「禽类菜」范围，核算时另算一个禽类菜品覆盖率。
+// 判定优先级（后端固定，配置可改）：显式名单 > 已配禽类耗用 > 名称关键词（include 命中且不含 exclude）。
+const scopeDialogVisible = ref(false)
+const scopeLoading = ref(false)
+const scopeSaving = ref(false)
+const scopeKeywords = ref([])        // 编辑中的关键词（本地副本，保存时整表提交）
+const scopeDishScope = ref([])       // 已有显式名单
+const scopePreviewData = ref(null)   // 规则预览（全部菜品 × 全区间销量）
+const scopeSelected = ref([])
+const scopePreviewFilter = ref('')
+const scopeOnlyInScope = ref(true)
+
+const scopeIncludeRows = computed(() => scopeKeywords.value.filter(row => row.kind === 'include'))
+const scopeExcludeRows = computed(() => scopeKeywords.value.filter(row => row.kind === 'exclude'))
+const scopePreviewRows = computed(() => {
+  const rows = scopePreviewData.value?.dishes || []
+  const keyword = scopePreviewFilter.value.trim().toLowerCase()
+  return rows
+    .filter(row => (scopeOnlyInScope.value ? row.in_scope : true))
+    .filter(row => !keyword || `${row.menu_name} ${row.category} ${row.reason_label}`.toLowerCase().includes(keyword))
+    .map(row => ({ ...row, rowKey: String(row.menu_item_id) }))
+})
+
+function openScopeDialog() {
+  scopeDialogVisible.value = true
+  scopeSelected.value = []
+  Promise.all([loadScopeConfig(), loadScopePreview()])
+}
+async function loadScopeConfig() {
+  scopeLoading.value = true
+  try {
+    const data = await getPoultryScope()
+    scopeKeywords.value = (data.keywords || []).map(row => ({
+      keyword: row.keyword, kind: row.kind, enabled: row.enabled !== false, note: row.note || '',
+    }))
+    scopeDishScope.value = data.dishes || []
+  } catch (error) { ElMessage.error('禽类菜范围加载失败：' + error.message) }
+  finally { scopeLoading.value = false }
+}
+async function loadScopePreview() {
+  try { scopePreviewData.value = await getPoultryScopePreview() }
+  catch (error) { ElMessage.error('规则预览加载失败：' + error.message) }
+}
+function addScopeKeyword(kind) { scopeKeywords.value.push({ keyword: '', kind, enabled: true, note: '' }) }
+function removeScopeKeyword(row) { scopeKeywords.value = scopeKeywords.value.filter(item => item !== row) }
+
+async function saveScopeRules() {
+  const rows = scopeKeywords.value.filter(row => String(row.keyword || '').trim())
+  if (!rows.length) { ElMessage.warning('请至少保留一条关键词'); return }
+  scopeSaving.value = true
+  try {
+    const data = await savePoultryScopeKeywords(rows)
+    ElMessage.success(`关键词已保存（${data.count} 条），已按新规则重新核算`)
+    await Promise.all([loadScopeConfig(), loadScopePreview()])
+    await loadAccounting()
+  } catch (error) { ElMessage.error('保存失败：' + (error?.response?.data?.error || error.message)) }
+  finally { scopeSaving.value = false }
+}
+
+/** 手动标记：inScope=true 强制算禽类菜 / false 强制不算 / null 清除标记（回退到关键词判定） */
+async function markScopeDishes(inScope) {
+  const ids = scopeSelected.value.map(Number).filter(Boolean)
+  if (!ids.length) { ElMessage.warning('请先勾选菜品'); return }
+  scopeSaving.value = true
+  try {
+    const data = await savePoultryScopeDishes({ menu_item_ids: ids, in_scope: inScope })
+    const action = data.mode === 'clear' ? '清除标记' : (data.mode === 'include' ? '标为禽类菜' : '标为不算')
+    ElMessage.success(`已${action} ${data.count} 个菜品，已重新核算`)
+    scopeSelected.value = []
+    await Promise.all([loadScopeConfig(), loadScopePreview()])
+    await loadAccounting()
+  } catch (error) { ElMessage.error('标记失败：' + (error?.response?.data?.error || error.message)) }
+  finally { scopeSaving.value = false }
+}
+
+// ===== 采购校准（模型 vs 门店实际）=====
+const calibData = ref(null)
+const calibLoading = ref(false)
+const calibLevelTone = computed(() => {
+  const level = calibData.value?.summary?.level
+  return level === 'good' ? 'ok' : level === 'fair' ? 'warn' : level === 'poor' ? 'bad' : ''
+})
+async function loadCalibration() {
+  calibLoading.value = true
+  try {
+    calibData.value = await getPoultryCalibration({ store_id: filters.storeId || '', limit: 12 })
+  } catch (error) {
+    ElMessage.error('校准失败：' + error.message)
+  } finally {
+    calibLoading.value = false
+  }
+}
+
 // ===== 基础档案 =====
 const archiveVisible = ref(false)
 const archiveTab = ref('birds')
@@ -1249,6 +1632,22 @@ async function loadYields() {
     }))
   } catch (error) { ElMessage.error('出成明细加载失败：' + error.message) }
 }
+
+// ===== 整只部位示意图（PoultryBodyMap）联动 =====
+const currentYieldBird = computed(() => birds.value.find(b => b.id === yieldBirdId.value) || null)
+const pickedPartNames = ref([])     // 图上点选后要高亮的表格行（按部位名匹配）
+const pickedPartHint = ref('')
+function onPickBodyZone(rows) {
+  const list = Array.isArray(rows) ? rows : []
+  pickedPartNames.value = list.map(r => r.part_name)
+  pickedPartHint.value = list.length
+    ? `已定位：${list.map(r => `${r.part_name}（一只出 ${r.parts_per_bird || 0} 份）`).join('、')}`
+    : '该区域还没有配置部位 —— 可用上方「新增部位」补一行'
+}
+function yieldRowClass({ row }) {
+  return pickedPartNames.value.includes(row.part_name) ? 'row-picked' : ''
+}
+
 // 把「一只出几份」换算成「一份占整只几分之一」，让份量口径一眼可见，
 // 避免再把它当成「数块数」（一只鹅出 2 块上庄 ≠ 一份上庄吃掉半只鹅）
 function portionShareText(row) {
@@ -1279,8 +1678,33 @@ function portionWarning(row) {
   }
   return ''
 }
+// 图示区域：与核算的「资源池约束」绑定（腿/翅/头颈是每只禽固定件数，靠它判定）
+// 新增部位时由名称推荐（后端 normalizeZoneCode），落库后可在此手工改正，改名也不影响核算
+const zoneOptions = [
+  { value: 'whole', label: '整只' },
+  { value: 'half', label: '半只' },
+  { value: 'upper', label: '上庄' },
+  { value: 'lower', label: '下庄' },
+  { value: 'leg', label: '腿' },
+  { value: 'wing', label: '翅 / 战斧' },
+  { value: 'head_neck', label: '头颈' },
+  { value: 'belly', label: '腩' },
+  { value: 'meat', label: '切片肉' },
+  { value: 'other', label: '其他' },
+]
+// 口径类型：把「一只出几份」的语义说清楚（份量型与件数型计算方式相同，只是读法不同）
+const yieldModeOptions = [
+  { value: 'fraction', label: '份量型（一只出几份）' },
+  { value: 'count', label: '件数型（一只出几件）' },
+  { value: 'weight', label: '重量型（一只出几克）' },
+]
+
 function addYieldRow() {
-  yieldRows.value.push({ _key: `n${yieldKeySeed++}`, part_name: '', part_kind: '身体', parts_per_bird: 1, part_weight_g: 0, remark: '', usage_count: 0 })
+  yieldRows.value.push({
+    _key: `n${yieldKeySeed++}`,
+    part_name: '', part_kind: '身体', parts_per_bird: 1, part_weight_g: 0,
+    zone_code: 'other', yield_mode: 'fraction', remark: '', usage_count: 0,
+  })
 }
 async function saveYields() {
   if (!yieldBirdId.value) { ElMessage.warning('请先选择禽类品种'); return }
@@ -1291,6 +1715,8 @@ async function saveYields() {
       part_kind: row.part_kind || '身体',
       parts_per_bird: row.parts_per_bird,
       part_weight_g: row.part_weight_g,
+      zone_code: row.zone_code || 'other',
+      yield_mode: row.yield_mode || 'fraction',
       remark: row.remark,
     })))
     await loadYields()
@@ -1311,11 +1737,22 @@ function openYields(bird) {
   yieldBirdId.value = bird.id
   loadYields()
 }
+// 从「① 禽类档案」某一行点「菜品耗用」→ 切到 ③ 并只看该禽类的菜（默认看已配的，便于核对）
+function openUsageForAnimal(bird) {
+  archiveTab.value = 'usage'
+  usageAnimal.value = bird.animal
+  usageFilter.value = 'set'
+  usageKeyword.value = ''
+  loadYieldOptions()
+  loadUsageOverview()
+}
 
 // ③ 菜品耗用
 const usageOverview = ref({ items: [], categories: [], configured: 0, total: 0, all_total: 0 })
 const usageKeyword = ref('')
 const usageFilter = ref('all')
+// 当前正在配置哪个禽类的菜品耗用（从「① 禽类档案」点「菜品耗用」进来会带上；空=全部禽类）
+const usageAnimal = ref('')
 const usageCategory = ref('')
 const usageTableRef = ref(null)
 const usageSelection = ref([])
@@ -1344,6 +1781,7 @@ async function loadUsageOverview() {
       keyword: usageKeyword.value.trim(),
       filter: usageFilter.value === 'all' ? '' : usageFilter.value,
       category: usageCategory.value,
+      animal: usageAnimal.value || '',
     })
     // 切换分组/筛选后旧勾选会失效，必须清掉，否则会误把上一次的选择一起提交
     usageSelection.value = []
@@ -1375,15 +1813,41 @@ async function loadYieldOptions() {
 }
 // 部位按「禽类 · 品种」分组展示。一个品种挂十来个部位时，平铺列表很难找，
 // 分组后鹅/鸭/鸡各自成块，双拼、套餐要跨禽类选部位也看得清。
+// 2026-09-12 追加：① 顶部禽类标签可一键收窄（找「鸭腿」不必在 24 个部位里翻）
+//                ② 组内按常用度排序（腿 > 单份/半只/整只 > 拼盘 > 上下庄 > 副产物）
+const usageAnimalFilter = ref('')   // 耗用弹窗内：按禽类收窄部位下拉（空 = 全部）
+
+function partPriority(name) {
+  const n = String(name || '')
+  if (/腿|肶/.test(n)) return 0
+  if (/单份|肉|半只|整只|一只/.test(n)) return 1
+  if (/双拼|三拼|三宝/.test(n)) return 2
+  if (/上庄|下庄|例牌/.test(n)) return 3
+  if (/翅|头|颈|掌|爪|肝|肠|腩|小料/.test(n)) return 4
+  return 5
+}
+
 const yieldOptionGroups = computed(() => {
+  const animal = usageAnimalFilter.value
   const groups = new Map()
   for (const option of yieldOptions.value) {
+    if (animal && option.animal !== animal) continue
     const label = `${option.animal} · ${option.breed_name}`
     const list = groups.get(label) || []
     list.push(option)
     groups.set(label, list)
   }
-  return [...groups.entries()].map(([label, options]) => ({ label, options }))
+  return [...groups.entries()].map(([label, options]) => ({
+    label,
+    options: options.slice().sort((a, b) => partPriority(a.part_name) - partPriority(b.part_name)
+      || String(a.part_name).localeCompare(String(b.part_name), 'zh')),
+  }))
+})
+
+// 弹窗里可选的禽类（按现有档案去重，没有的禽类不显示标签）
+const yieldAnimalTabs = computed(() => {
+  const set = new Set(yieldOptions.value.map(o => o.animal).filter(Boolean))
+  return [...set]
 })
 async function openUsageDialog(row) {
   // 每次都重新拉：出成可能在「整只出成」页签里刚改过，缓存住会出现「新增的部位选不到」
@@ -1392,6 +1856,8 @@ async function openUsageDialog(row) {
     ElMessage.warning('还没有可用的部位，请先在「整只出成拆解」里录入')
     return
   }
+  // 跟随上下文：从「① 禽类档案」点某禽类的「菜品耗用」进来时，弹窗直接收窄到该禽类
+  usageAnimalFilter.value = usageAnimal.value || ''
   usageTarget.value = row
   try {
     const data = await getPoultryDishUsage(row.id)
@@ -1410,6 +1876,7 @@ async function openBatchUsageDialog() {
     ElMessage.warning('还没有可用的部位，请先在「整只出成拆解」里录入')
     return
   }
+  usageAnimalFilter.value = usageAnimal.value || ''
   // 选中的菜品若已配同一套部位，取第一个已配置的作为初值，减少重复录入
   const sample = usageSelection.value.find(row => (row.usage || []).length)
   batchRows.value = sample
@@ -1434,11 +1901,18 @@ async function saveUsage() {
   if (!rows.length) { ElMessage.warning('请至少配置一条部位耗用'); return }
   saving.value = true
   try {
-    await savePoultryDishUsage(usageTarget.value.id, rows.map(row => ({ yield_id: row.yield_id, usage_qty: row.usage_qty })))
+    const saved = await savePoultryDishUsage(usageTarget.value.id, rows.map(row => ({ yield_id: row.yield_id, usage_qty: row.usage_qty })))
     usageDialogVisible.value = false
     await loadUsageOverview()
     await loadBirds()
-    ElMessage.success('菜品耗用已保存')
+    // 父子部位同时配置（如「下庄」+「鹅腿」）会重复计量 —— 后端只提示不拦截，这里弹出来让用户判断
+    const warnList = (saved && saved.warnings) || []
+    if (warnList.length) {
+      ElMessageBox.alert(warnList.map(w => w.message).join('\n\n'), '疑似重复计量', { confirmButtonText: '我知道了', type: 'warning' })
+      ElMessage.warning('菜品耗用已保存（有疑似重复计量，请核对）')
+    } else {
+      ElMessage.success('菜品耗用已保存')
+    }
   } catch (error) { ElMessage.error('保存失败：' + error.message) }
   finally { saving.value = false }
 }
@@ -1461,7 +1935,13 @@ async function saveBatchUsage() {
     const tail = data.mode === 'replace' && data.removed
       ? `，同时清除了 ${data.removed} 条被替换的旧配置`
       : ''
-    ElMessage.success(`已为 ${data.dishes} 个菜品套用 ${data.rows} 条耗用关系${tail}`)
+    const warnList = (data && data.warnings) || []
+    if (warnList.length) {
+      ElMessageBox.alert(warnList.map(w => w.message).join('\n\n'), '疑似重复计量', { confirmButtonText: '我知道了', type: 'warning' })
+      ElMessage.warning(`已为 ${data.dishes} 个菜品套用 ${data.rows} 条耗用关系${tail}（有疑似重复计量，请核对）`)
+    } else {
+      ElMessage.success(`已为 ${data.dishes} 个菜品套用 ${data.rows} 条耗用关系${tail}`)
+    }
   } catch (error) { ElMessage.error('批量关联失败：' + error.message) }
   finally { saving.value = false }
 }
@@ -1544,6 +2024,19 @@ onMounted(async () => {
   await Promise.all([loadStores(), loadBirds(), loadYieldOptions()])
   await loadAccounting()
 })
+
+// 本页被 KeepAlive 缓存（见 App.vue），返回时不会重新 mount。
+// 用户的常见路径是「核算页 → 缺口明细 → 去绑定 → 回核算页」，若不刷新就会看到
+// 已经绑好的菜仍留在缺口清单里 —— 所以每次激活都重取一次核算结果。
+onActivated(() => {
+  if (filters.range?.[0] && filters.range?.[1]) loadAccounting()
+})
+
+/** 打开缺口明细前先刷新一次核算，保证清单是刚绑完的最新状态 */
+async function openGapDialog() {
+  gapVisible.value = true
+  if (filters.range?.[0] && filters.range?.[1]) await loadAccounting()
+}
 </script>
 
 <style scoped>
@@ -1705,4 +2198,71 @@ onMounted(async () => {
 .import-errors-title { margin: 0 0 6px; font-weight: 700; }
 .drawer-footer-tip { margin-right: auto; color: #9aa3b1; font-size: 12px; }
 .hero-action { --el-button-bg-color: rgba(255,255,255,.14); --el-button-border-color: rgba(255,255,255,.3); --el-button-text-color: #fff; --el-button-hover-bg-color: rgba(255,255,255,.24); --el-button-hover-border-color: rgba(255,255,255,.5); --el-button-hover-text-color: #fff; }
+
+/* 整只部位示意图：点选后高亮对应表格行 */
+.body-map-hint { margin: 0 0 12px; padding: 8px 12px; border: 1px solid #f3dfb8; border-radius: 9px; background: #fffaf0; color: #9a6a12; font-size: 12px; line-height: 1.7; }
+:deep(.menu-data-table .row-picked td.el-table__cell) { background: #fff6e0 !important; }
+:deep(.menu-data-table .row-picked:hover td.el-table__cell) { background: #ffefcf !important; }
+
+/* 耗用弹窗里的禽类快捷标签（一键收窄部位下拉） */
+.usage-animal-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; padding: 9px 12px; border: 1px solid #e3e9f2; border-radius: 10px; background: #f8fafd; }
+.usage-kw-tag { color: #7e899a; font-size: 12px; }
+.usage-kw-btn { padding: 4px 12px; border: 1px solid #dfe6f0; border-radius: 13px; background: #fff; color: #4a5a75; font-size: 12px; cursor: pointer; transition: all .15s; }
+.usage-kw-btn:hover { border-color: #b9d0ff; color: #2468e8; }
+.usage-kw-btn.active { border-color: #2468e8; background: #2468e8; color: #fff; font-weight: 650; }
+.usage-animal-bar .muted-text { flex: 1; min-width: 160px; }
+
+/* 当前禽类提示条（② 拆解 / ③ 菜品耗用 各自显示正在配置哪个禽类） */
+.yield-current { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; padding: 10px 14px; border: 1px solid #cddffb; border-radius: 10px; background: #f4f8ff; }
+.yield-current-tag { padding: 2px 9px; border-radius: 10px; background: #dbe8ff; color: #3a62c0; font-size: 11px; font-weight: 700; }
+.yield-current b { color: #1f3f6e; font-size: 15px; }
+.yield-current .muted-text { flex: 1; min-width: 200px; }
+
+/* 采购校准（MAPE） */
+.calib-body { padding: 0 18px 16px; }
+.calib-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+@media (max-width: 900px) { .calib-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.calib-card { padding: 12px 14px; border: 1px solid #e7eaf0; border-radius: 10px; background: #f8fafd; }
+.calib-card span, .calib-card strong, .calib-card small { display: block; }
+.calib-card span { color: #7e899a; font-size: 12px; }
+.calib-card strong { margin: 5px 0 3px; color: #173f8a; font-size: 20px; font-variant-numeric: tabular-nums; }
+.calib-card small { color: #98a2b1; font-size: 11px; line-height: 1.6; }
+.calib-card.ok { border-color: #c8ecdf; background: #f2fbf8; }
+.calib-card.ok strong { color: #168160; }
+.calib-card.warn { border-color: #f3d19e; background: #fffaf0; }
+.calib-card.warn strong { color: #c4761a; }
+.calib-card.bad { border-color: #f2c4c1; background: #fff5f4; }
+.calib-card.bad strong { color: #c0392b; }
+.calib-dev { font-weight: 700; font-variant-numeric: tabular-nums; }
+.calib-dev.ok { color: #168160; }
+.calib-dev.warn { color: #c4761a; }
+.calib-dev.bad { color: #c0392b; }
+
+/* 禽类菜范围维护（覆盖率分母口径） */
+.coverage-badge.reference { color: #5b6b85; background: #f1f4f9; font-weight: 600; }
+.scope-body { max-height: 70vh; overflow: auto; }
+.scope-intro { margin-bottom: 14px; }
+.scope-intro :deep(.el-alert__title) { line-height: 1.8; font-size: 12px; }
+.scope-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 18px; }
+@media (max-width: 900px) { .scope-grid { grid-template-columns: minmax(0, 1fr); } }
+.scope-column { min-width: 0; }
+.scope-column-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.scope-column-head h4 { margin: 0; color: #18345d; font-size: 14px; }
+.scope-kw-block { padding: 12px; border: 1px solid #e7eaf0; border-radius: 10px; background: #f8fafd; margin-bottom: 12px; }
+.scope-kw-title { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.scope-kw-tag { padding: 2px 10px; border-radius: 10px; font-size: 12px; font-weight: 700; }
+.scope-kw-tag.include { color: #168160; background: #e9f8f3; }
+.scope-kw-tag.exclude { color: #ca4744; background: #fff0ef; }
+.scope-kw-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.scope-kw-row :deep(.el-input) { flex: 1; }
+.scope-kw-empty { color: #98a2b1; font-size: 11px; line-height: 1.8; }
+.scope-stat { margin-top: 14px; padding: 12px; border: 1px dashed #d9e2f0; border-radius: 10px; background: #fbfdff; }
+.scope-stat-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; color: #66768f; font-size: 12px; }
+.scope-stat-row b { color: #173f8a; text-align: right; }
+.scope-stat-tip { margin: 8px 0 0; color: #98a2b1; font-size: 11px; line-height: 1.7; }
+.scope-tools { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.scope-actions { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.scope-flag { padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.scope-flag.in { color: #168160; background: #e9f8f3; }
+.scope-flag.out { color: #7e899a; background: #f1f3f7; }
 </style>

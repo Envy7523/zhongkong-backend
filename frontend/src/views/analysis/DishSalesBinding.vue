@@ -11,8 +11,13 @@
         <div><strong>{{ totalCount }}</strong><span>堂食菜品</span></div>
         <div><strong>{{ mappedCount }}</strong><span>已绑定</span></div>
         <div><strong class="warn">{{ unmappedCount }}</strong><span>待绑定</span></div>
-        <button type="button" class="hero-bind-btn" :disabled="autoBinding" @click="autoBind">
-          {{ autoBinding ? '绑定中…' : '⚡ 一键绑定' }}
+        <button type="button" class="hero-bind-btn ghost" :disabled="autoBinding || smartBinding" @click="autoBind"
+          title="最保守：只按「严格同名 + 规格精确」匹配，无法区分的一律跳过">
+          {{ autoBinding ? '绑定中…' : '严格同名绑定' }}
+        </button>
+        <button type="button" class="hero-bind-btn" :disabled="smartBinding || autoBinding || !recommendableCount" @click="autoBindSmart"
+          :title="`与「菜品销量」同一套识别规则：菜名忽略【】（）等前后缀 + 菜品编码与名称互校 + 名称/规格唯一。当前可绑定 ${recommendableCount} 项`">
+          {{ smartBinding ? '绑定中…' : `⚡ 智能采用全部推荐（${recommendableCount}）` }}
         </button>
       </div>
     </section>
@@ -52,7 +57,47 @@
               <div class="sku-card-title"><i>本地 SKU</i><b>{{ row.menu_sku_label || row.menu_name }}</b></div>
               <div class="sku-card-meta"><span>{{ row.menu_category || '未分类' }}</span><span>{{ row.menu_sku_price_summary || '价格未设置' }}</span><span>成本 {{ money(row.unit_cost) }}</span></div>
             </div>
-            <div v-else class="sku-empty"><span>未选择本地 SKU</span><small>请选择对应规格后再绑定</small></div>
+            <!-- 未绑定但智能识别命中：直接给出推荐，一键采用（规则与「菜品销量」一致，只做精确匹配） -->
+            <div v-else-if="row.recommend_menu_item_id" class="mapped-dish sku-card recommend">
+              <div class="sku-card-title"><i class="rec">推荐</i><b>{{ row.recommend_sku_label }}</b></div>
+              <div class="sku-card-meta">
+                <span class="reason">{{ row.recommend_reason_label }}</span>
+                <span>{{ row.recommend_category || '未分类' }}</span>
+                <span>成本 {{ money(row.recommend_cost) }}</span>
+              </div>
+              <div class="sku-card-actions">
+                <el-button size="small" type="primary" @click="adoptRecommend(row)">采用推荐</el-button>
+                <el-button size="small" link @click="openBindDialog(row)">另选</el-button>
+              </div>
+            </div>
+            <!-- 精确规则没命中，但名称相似 → 给出疑似候选（只提示，点「采用」才绑定，避免套餐错绑） -->
+            <div v-else-if="row.recommend_candidates && row.recommend_candidates.length" class="mapped-dish sku-card suspect">
+              <div class="sku-card-title"><i class="sus">疑似</i><b>{{ row.recommend_candidates[0].menu_name }}</b></div>
+              <div class="sku-card-meta">
+                <span class="reason">相似度 {{ Math.round(row.recommend_candidates[0].score * 100) }}%</span>
+                <span>{{ row.recommend_candidates[0].category || '未分类' }}</span>
+                <span>成本 {{ money(row.recommend_candidates[0].cost) }}</span>
+              </div>
+              <div class="sku-card-actions">
+                <el-button size="small" type="primary" plain @click="adoptCandidate(row, row.recommend_candidates[0])">采用</el-button>
+                <el-dropdown v-if="row.recommend_candidates.length > 1" trigger="click" @command="c => adoptCandidate(row, c)">
+                  <el-button size="small" link>其他候选（{{ row.recommend_candidates.length - 1 }}）</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item v-for="c in row.recommend_candidates.slice(1)" :key="c.menu_item_id" :command="c">
+                        {{ c.menu_name }}（{{ Math.round(c.score * 100) }}%）
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+                <el-button size="small" link @click="openBindDialog(row)">另选</el-button>
+              </div>
+            </div>
+            <div v-else class="sku-empty">
+              <span>无自动推荐</span>
+              <small>菜名与本地档案差异较大（或同名多规格），请手工选择</small>
+              <el-button size="small" link type="primary" @click="openBindDialog(row)">手工绑定</el-button>
+            </div>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="140" fixed="right" align="right">
@@ -137,7 +182,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getDishSalesMappings, saveDishSalesMapping, batchSaveDishSalesMappings, deleteDishSalesMapping, autoBindDishSalesMappings } from '@/api'
+import { getDishSalesMappings, saveDishSalesMapping, batchSaveDishSalesMappings, deleteDishSalesMapping, autoBindDishSalesMappings, autoBindDishSalesMappingsSmart } from '@/api'
 
 const route = useRoute()
 
@@ -146,6 +191,9 @@ const menuItems = ref([])
 const loading = ref(false)
 const saving = ref(false)
 const autoBinding = ref(false)
+const smartBinding = ref(false)
+// 全量统计（后端算，不受分页影响）：还剩多少待绑定项能被智能识别 → 顶部按钮显示条数
+const recommendSummary = ref({ pending: 0, recommendable: 0, unmatched: 0 })
 const search = ref('')
 const mappedFilter = ref('')
 const page = ref(1)
@@ -162,6 +210,7 @@ const batchSaving = ref(false)
 const mappedCount = computed(() => items.value.filter(r => r.mapped).length)
 const totalCount = computed(() => total.value)
 const unmappedCount = computed(() => total.value - mappedCount.value)
+const recommendableCount = computed(() => Number(recommendSummary.value.recommendable) || 0)
 const menuOptions = computed(() => [...menuItems.value].sort((a, b) => String(a.sku_label || a.name).localeCompare(String(b.sku_label || b.name), 'zh-CN')))
 const selectedMenu = computed(() => menuItems.value.find(item => item.id === selectedMenuId.value) || null)
 const batchSelectedMenu = computed(() => menuItems.value.find(item => item.id === batchMenuId.value) || null)
@@ -230,9 +279,73 @@ async function autoBind() {
   }
 }
 
+/** 绑定到指定本地菜品（精确推荐与疑似候选共用同一入口） */
+async function bindToMenu(row, menuItemId, label) {
+  if (!menuItemId || saving.value) return
+  saving.value = true
+  try {
+    await saveDishSalesMapping({
+      product_code: row.product_code,
+      product_name: row.product_name,
+      spec: row.spec,
+      menu_item_id: menuItemId,
+    })
+    ElMessage.success(`已绑定：${row.product_name} → ${label || menuItemId}`)
+    await loadData()
+  } catch (error) {
+    ElMessage.error('绑定失败：' + error.message)
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 采用精确推荐：与「菜品销量」识别出的同一个本地 SKU，直接写入绑定表 */
+function adoptRecommend(row) {
+  return bindToMenu(row, row.recommend_menu_item_id, row.recommend_sku_label)
+}
+
+/** 采用疑似候选：名称相似但规则未精确命中，用户点「采用」才绑定 */
+function adoptCandidate(row, candidate) {
+  if (!candidate) return
+  return bindToMenu(row, candidate.menu_item_id, candidate.sku_label || candidate.menu_name)
+}
+
+/** 智能采用全部推荐：规则与「菜品销量」完全一致（精确匹配，不做模糊，避免套餐错绑） */
+async function autoBindSmart() {
+  if (smartBinding.value) return
+  try {
+    await ElMessageBox.confirm(
+      `按与「菜品销量」相同的识别规则自动关联 ${recommendableCount.value} 个待绑定堂食菜品：\n`
+      + '① 菜名忽略【】（）[] 等前后缀差异\n② 菜品编码与本地档案编码一致且名称互校\n③ 名称+规格唯一、或名称唯一\n\n'
+      + '只做精确匹配、不做模糊匹配（别名/套餐仍需你手工绑）。继续吗？',
+      '智能采用全部推荐',
+      { confirmButtonText: '开始绑定', cancelButtonText: '取消', type: 'info' }
+    )
+  } catch { return }
+  smartBinding.value = true
+  try {
+    const res = await autoBindDishSalesMappingsSmart()
+    const parts = [
+      res.reasons?.skuid ? `编码匹配 ${res.reasons.skuid}` : '',
+      res.reasons?.name_spec ? `名称+规格 ${res.reasons.name_spec}` : '',
+      res.reasons?.name ? `名称唯一 ${res.reasons.name}` : '',
+    ].filter(Boolean).join('；')
+    ElMessage.success(`智能绑定完成：成功 ${res.bound} 个${parts ? `（${parts}）` : ''}，仍无法识别 ${res.skipped} 个（保留待手工处理）`)
+    await loadData()
+  } catch (error) {
+    ElMessage.error('智能绑定失败：' + error.message)
+  } finally {
+    smartBinding.value = false
+  }
+}
+
 function openBindDialog(row) {
   current.value = row
-  selectedMenuId.value = row.menu_item_id || null
+  // 打开时自动预选：已绑定 → 精确推荐 → 首个疑似候选，省去手敲搜索（下拉仍可改）
+  selectedMenuId.value = row.menu_item_id
+    || row.recommend_menu_item_id
+    || (row.recommend_candidates && row.recommend_candidates.length ? row.recommend_candidates[0].menu_item_id : null)
+    || null
   dialogVisible.value = true
 }
 
@@ -280,6 +393,7 @@ async function loadData() {
     items.value = res.items || []
     total.value = Number(res.total) || 0
     menuItems.value = res.menu_items || []
+    if (res.recommend_summary) recommendSummary.value = res.recommend_summary
   } catch (error) {
     ElMessage.error('加载失败：' + error.message)
   } finally {
@@ -446,6 +560,17 @@ watch(() => route.query, () => { applyRouteQuery(); page.value = 1; loadData() }
 .sku-empty { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px dashed #dbe1ea; border-radius: 9px; color: #8e99a9; }
 .sku-empty span { color: #778497; font-size: 12px; }
 .sku-empty small { color: #aab3c0; font-size: 10px; }
+.sku-empty :deep(.el-button) { align-self: flex-start; margin-top: 4px; }
+/* 智能推荐卡片：与「菜品销量」同一套识别规则的结果，一键采用 */
+.sku-card.recommend { border-color: #cbe7d8; background: linear-gradient(105deg, #f7fdfa, #eefaf3); }
+.sku-card-title i.rec { background: #cdf0dd; color: #1d7a55; }
+.sku-card-meta span.reason { color: #1d7a55; font-weight: 650; }
+.sku-card-actions { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+.hero-bind-btn.ghost { background: rgba(255, 255, 255, .06); border-color: rgba(255, 255, 255, .26); font-weight: 600; }
+/* 疑似候选卡片（名称相似但未精确命中）：橙色系，强调「需你确认」 */
+.sku-card.suspect { border-color: #f3d9b0; background: linear-gradient(105deg, #fffcf6, #fff6e8); }
+.sku-card-title i.sus { background: #fbe6c4; color: #a4650f; }
+.sku-card.suspect .sku-card-meta span.reason { color: #a4650f; font-weight: 650; }
 .binding-table td.el-table__cell { height: 68px; }
 .selection-preview { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; padding: 11px 13px; border: 1px solid #cfe0ff; border-radius: 10px; background: #f4f8ff; }
 .selection-preview span { color: #71809a; font-size: 10px; }

@@ -24,6 +24,12 @@ const routes = [
     meta: { pageKey: 'store-3d', pageTitle: '筹建门店 · 门店渲染' },
   },
   {
+    path: '/db-viewer',
+    name: 'db-viewer',
+    component: () => import('@/views/devtools/DatabaseViewer.vue'),
+    meta: { pageKey: 'db-viewer', pageTitle: '数据库查看' },
+  },
+  {
     path: '/analysis',
     redirect: '/analysis/total/brand',
   },

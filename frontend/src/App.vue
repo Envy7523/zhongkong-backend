@@ -110,6 +110,10 @@
           </el-menu-item>
 
           <div class="sidebar-section-label">系统管理</div>
+          <el-menu-item index="db-viewer">
+            <el-icon><Coin /></el-icon>
+            <template #title><span>数据库查看</span><small class="nav-badge beta">DEV</small></template>
+          </el-menu-item>
           <el-menu-item index="enterprise-settings">
             <el-icon><Setting /></el-icon>
             <template #title>企业设置</template>
@@ -465,6 +469,7 @@ const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path =
 const isDataImportRoute = computed(() => router.currentRoute.value.path.startsWith('/data-import/'))
 const isEnterpriseSettingsRoute = computed(() => router.currentRoute.value.path.startsWith('/enterprise-settings'))
 const isStore3dRoute = computed(() => router.currentRoute.value.path === '/store-3d')
+const isDbViewerRoute = computed(() => router.currentRoute.value.path === '/db-viewer')
 const isStaffManagementRoute = computed(() => router.currentRoute.value.path.startsWith('/staff-management/'))
 const workspaceRouteTabId = computed(() => {
   const route = router.currentRoute.value
@@ -488,7 +493,7 @@ const workspaceRouteTabId = computed(() => {
   }[route.name] || ''
 })
 const isWorkspaceRoute = computed(() => Boolean(workspaceRouteTabId.value))
-const isSpecialRoute = computed(() => isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value)
+const isSpecialRoute = computed(() => isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value || isDbViewerRoute.value)
 const businessRouteTabId = computed(() => router.currentRoute.value.meta.analysisKey || 'analysis-total-brand')
 const dataImportRouteTabId = computed(() => ({
   pos: 'data-import-pos',
@@ -508,6 +513,7 @@ const pageTitle = computed(() => {
   }
   if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
   if (isStore3dRoute.value) return '筹建门店 · 门店渲染'
+  if (isDbViewerRoute.value) return '数据库查看'
   if (isStaffManagementRoute.value) return staffRouteTabId.value === 'staff-management-store' ? '人事专区 · 门店管理' : '人事专区 · 员工管理'
   if (isWorkspaceRoute.value) return store.activeTab?.title || '工作台'
   return store.activeTab?.title || '数据概括'
@@ -518,6 +524,7 @@ const sidebarActive = computed(() => {
   if (isDataImportRoute.value) return 'data-import-group'
   if (isEnterpriseSettingsRoute.value) return 'enterprise-settings'
   if (isStore3dRoute.value) return 'store-preparation-group'
+  if (isDbViewerRoute.value) return 'db-viewer'
   if (isStaffManagementRoute.value) return 'staff-management-group'
   return store.activeTabId
 })
@@ -669,6 +676,11 @@ async function handleMenuSelect(index) {
     await router.push('/collab/list')
     return
   }
+  if (index === 'db-viewer') {
+    store.openTabFromId('db-viewer')
+    await router.push('/db-viewer')
+    return
+  }
   if (index === 'enterprise-settings') {
     store.openTabFromId('enterprise-settings')
     await router.push('/enterprise-settings/robot')
@@ -688,6 +700,11 @@ async function selectTab(id) {
   if (id === 'collab') {
     store.activeTabId = id
     await router.push('/collab/list')
+    return
+  }
+  if (id === 'db-viewer') {
+    store.activeTabId = id
+    await router.push('/db-viewer')
     return
   }
   if (id === 'enterprise-settings') {
