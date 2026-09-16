@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { login as apiLogin, getMe } from '@/api'
+import { permits, permitsAny } from '@/permissions'
 
 const TOKEN_KEY = 'etaigong_token'
 
@@ -10,7 +11,12 @@ export const useAuthStore = defineStore('auth', () => {
   const initialized = ref(false)
 
   const isLoggedIn = computed(() => !!token.value)
-  const isAdmin = computed(() => user.value?.role === '管理员')
+  const isAdmin = computed(() => user.value?.position_permissions?.includes('*') === true)
+  const permissions = computed(() => user.value?.position_permissions || [])
+
+  // 菜单、路由、按钮统一走这里判断，避免各自比较数组造成口径不一。
+  const can = code => permits(permissions.value, code)
+  const canAny = codes => permitsAny(permissions.value, codes)
 
   function setToken(t) {
     token.value = t
@@ -46,5 +52,5 @@ export const useAuthStore = defineStore('auth', () => {
     if (session?.user) user.value = session.user
   }
 
-  return { token, user, initialized, isLoggedIn, isAdmin, login, init, logout, updateSession }
+  return { token, user, initialized, isLoggedIn, isAdmin, permissions, can, canAny, login, init, logout, updateSession }
 })

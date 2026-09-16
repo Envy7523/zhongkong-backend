@@ -96,7 +96,7 @@ const statusOptions = [{ value: '待开始', label: '未开始', hint: '尚未�
 const uid = computed(() => Number(auth.user?.id))
 const isCreator = computed(() => uid.value === Number(issue.value?.created_by))
 const ended = computed(() => ['已完成', '未完成', '已终止'].includes(issue.value?.status))
-const canReply = computed(() => !ended.value && (isCreator.value || issue.value?.participants?.map(Number).includes(uid.value) || String(auth.user?.role || '').includes('管理员')))
+const canReply = computed(() => !ended.value && (isCreator.value || issue.value?.participants?.map(Number).includes(uid.value) || auth.isAdmin))
 const participantIds = computed(() => (issue.value?.participants || []).map(Number))
 const selectableUsers = computed(() => userList.value.filter(user => Number(user.id) !== uid.value))
 const canArchive = computed(() => {

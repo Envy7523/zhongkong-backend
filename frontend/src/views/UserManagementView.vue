@@ -68,11 +68,9 @@
           </template>
         </el-table-column>
 
-        <el-table-column prop="role" label="权限" width="130">
+        <el-table-column prop="position_name" label="岗位" min-width="150">
           <template #default="{ row }">
-            <span class="role-badge" :class="roleClass(row.role)">
-              <i></i>{{ row.role || '客服' }}
-            </span>
+            <span :class="['position-badge', { empty: !row.position_name }]">{{ row.position_name || '未分配岗位' }}</span>
           </template>
         </el-table-column>
 
@@ -118,7 +116,7 @@
         </span>
         <div>
           <b>{{ profileMode === 'create' ? '创建新的登录账号' : profileForm.display_name || profileForm.username }}</b>
-          <span>{{ profileMode === 'create' ? '设置账号资料和初始权限' : '更新该成员的账号资料' }}</span>
+          <span>{{ profileMode === 'create' ? '设置账号资料和所属岗位' : '更新该成员的账号资料' }}</span>
         </div>
       </div>
 
@@ -131,12 +129,13 @@
             <el-input v-model="profileForm.display_name" maxlength="30" placeholder="请输入成员名称" />
           </el-form-item>
         </div>
-        <div class="form-grid">
-          <el-form-item label="权限" required>
-            <el-select v-model="profileForm.role" style="width:100%;">
-              <el-option v-for="role in roleOptions" :key="role" :label="role" :value="role" />
-            </el-select>
-          </el-form-item>
+        <el-form-item label="岗位" required>
+          <el-select v-model="profileForm.position_id" placeholder="请选择岗位" style="width:100%;">
+            <el-option v-for="position in positions" :key="position.id" :label="`${position.name} · ${position.permissions?.includes('*') ? '全部权限' : `${position.permissions?.length || 0} 项权限`}`" :value="position.id" />
+          </el-select>
+          <div class="position-form-hint">岗位即该成员的系统角色与权限来源，在“系统管理 → 岗位设置”统一维护。</div>
+        </el-form-item>
+        <div class="form-grid form-grid-single">
           <el-form-item label="手机号">
             <el-input v-model="profileForm.phone" maxlength="30" placeholder="请输入手机号" />
           </el-form-item>
@@ -210,6 +209,7 @@ import {
   deleteUser,
   deleteUserAvatar,
   getUsers,
+  getPositions,
   updateUser,
   updateUserPassword,
   uploadUserAvatar,
@@ -219,6 +219,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const auth = useAuthStore()
 const users = ref([])
+const positions = ref([])
 const keyword = ref('')
 const loading = ref(false)
 const saving = ref(false)
@@ -228,15 +229,14 @@ const passwordDialogVisible = ref(false)
 const profileMode = ref('create')
 const editingUser = ref(null)
 const passwordTarget = ref(null)
-const roleOptions = ['管理员', '负责人', '团购', '外卖', '督导', '专员', '客服']
 const avatarPalette = ['#4F7CFF', '#7B61E8', '#1FA98C', '#E29036', '#D65C76', '#337FAF', '#596579', '#8B6F47']
 
 const emptyProfile = () => ({
   id: null,
   username: '',
   display_name: '',
-  role: '客服',
   phone: '',
+  position_id: null,
   password: '',
   confirmPassword: '',
 })
@@ -247,13 +247,22 @@ const filteredUsers = computed(() => {
   const query = keyword.value.trim().toLowerCase()
   if (!query) return users.value
   return users.value.filter(user =>
-    [user.username, user.display_name, user.phone, user.role]
+    [user.username, user.display_name, user.phone, user.role, user.position_name]
       .some(value => String(value || '').toLowerCase().includes(query))
   )
 })
-const adminCount = computed(() => users.value.filter(user => user.role === '管理员').length)
+const adminCount = computed(() => users.value.filter(user => user.position_permissions?.includes('*')).length)
 
-onMounted(loadUsers)
+onMounted(() => Promise.all([loadUsers(), loadPositions()]))
+
+async function loadPositions() {
+  try {
+    const data = await getPositions()
+    positions.value = data.positions || []
+  } catch (error) {
+    ElMessage.error('岗位加载失败：' + error.message)
+  }
+}
 
 async function loadUsers() {
   loading.value = true
@@ -279,18 +288,6 @@ function avatarColor(user) {
   return avatarPalette[Math.abs(hash) % avatarPalette.length]
 }
 
-function roleClass(role) {
-  return {
-    管理员: 'admin',
-    负责人: 'supervisor',
-    团购: 'specialist',
-    外卖: 'service',
-    督导: 'supervisor',
-    专员: 'specialist',
-    客服: 'service',
-  }[role] || 'service'
-}
-
 function openCreateDialog() {
   profileMode.value = 'create'
   editingUser.value = null
@@ -305,8 +302,8 @@ function openEditDialog(user) {
     id: user.id,
     username: user.username,
     display_name: user.display_name || '',
-    role: user.role || '客服',
     phone: user.phone || '',
+    position_id: user.position_id ?? null,
   })
   profileDialogVisible.value = true
 }
@@ -332,6 +329,10 @@ async function saveProfile() {
     ElMessage.warning('请输入正确的手机号')
     return
   }
+  if (!profileForm.position_id) {
+    ElMessage.warning('请为成员选择岗位')
+    return
+  }
   if (profileMode.value === 'create') {
     if (profileForm.password.length < 6) {
       ElMessage.warning('初始密码至少需要 6 位')
@@ -348,8 +349,8 @@ async function saveProfile() {
     const payload = {
       username,
       display_name: displayName,
-      role: profileForm.role,
       phone,
+      position_id: profileForm.position_id,
     }
     if (profileMode.value === 'create') {
       await createUser({ ...payload, password: profileForm.password })
@@ -610,6 +611,24 @@ async function removeAvatar(user) {
 .role-badge.supervisor { color: #be7723; background: #fff4e5; }
 .role-badge.specialist { color: #2877c4; background: #eaf4ff; }
 .role-badge.service { color: #288a70; background: #e9f8f3; }
+.position-badge {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 5px 9px;
+  overflow: hidden;
+  border: 1px solid #d9e4ff;
+  border-radius: 16px;
+  background: #f2f6ff;
+  color: #3863bd;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.position-badge.empty { border-color: #e7eaf0; background: #fafbfc; color: #a0a8b5; font-weight: 500; }
+.position-form-hint { margin-top: 7px; color: #8a95a8; font-size: 10px; line-height: 1.55; }
 .row-actions { white-space: nowrap; }
 .row-actions .el-button + .el-button { margin-left: 13px; }
 .people-footer {
@@ -658,6 +677,7 @@ async function removeAvatar(user) {
   grid-template-columns: 1fr 1fr;
   gap: 14px;
 }
+.form-grid-single { grid-template-columns: 1fr; }
 .avatar-management {
   display: flex;
   align-items: center;

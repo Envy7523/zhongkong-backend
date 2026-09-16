@@ -19,14 +19,15 @@
           active-text-color="#fff"
           @select="handleMenuSelect"
         >
-          <div class="sidebar-section-label">总览</div>
-          <el-menu-item index="dashboard">
+          <div v-if="canSeeNavGroup('dashboard')" class="sidebar-section-label">总览</div>
+          <el-menu-item v-if="canSeeNav('dashboard')" index="dashboard">
             <el-icon><DataAnalysis /></el-icon>
             <template #title><span>数据概括</span><small class="nav-badge">HOME</small></template>
           </el-menu-item>
 
-          <div class="sidebar-section-label">核心业务</div>
+          <div v-if="canSeeNavGroup('core-business')" class="sidebar-section-label">核心业务</div>
           <el-menu-item
+            v-if="canSeeNav('analysis-group')"
             index="analysis-group"
             @mouseenter="showPopup('analysis', $event)"
             @mouseleave="scheduleHidePopup"
@@ -36,6 +37,7 @@
             <template #title><span>数据分析</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
           <el-menu-item
+            v-if="canSeeNav('store-management-group')"
             index="store-management-group"
             @mouseenter="showPopup('store-management', $event)"
             @mouseleave="scheduleHidePopup"
@@ -45,6 +47,7 @@
             <template #title><span>门店管理</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
           <el-menu-item
+            v-if="canSeeNav('store-preparation-group')"
             index="store-preparation-group"
             @mouseenter="showPopup('store-preparation', $event)"
             @mouseleave="scheduleHidePopup"
@@ -54,6 +57,7 @@
             <template #title><span>筹建门店</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
           <el-menu-item
+            v-if="canSeeNav('menu-management-group')"
             index="menu-management-group"
             @mouseenter="showPopup('menu-management', $event)"
             @mouseleave="scheduleHidePopup"
@@ -63,6 +67,7 @@
             <template #title><span>菜品管理</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
           <el-menu-item
+            v-if="canSeeNav('cost-accounting-group')"
             index="cost-accounting-group"
             @mouseenter="showPopup('cost-accounting', $event)"
             @mouseleave="scheduleHidePopup"
@@ -73,6 +78,7 @@
           </el-menu-item>
 
           <el-menu-item
+            v-if="canSeeNav('staff-management-group')"
             index="staff-management-group"
             @mouseenter="showPopup('staff-management', $event)"
             @mouseleave="scheduleHidePopup"
@@ -82,16 +88,17 @@
             <template #title><span>人事专区</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
 
-          <div class="sidebar-section-label">运营工具</div>
-          <el-menu-item index="collab-list">
+          <div v-if="canSeeNavGroup('operation-tools')" class="sidebar-section-label">运营工具</div>
+          <el-menu-item v-if="canSeeNav('collab-list')" index="collab-list">
             <el-icon><List /></el-icon>
             <template #title><span>协同事项</span><small class="nav-badge new">NEW</small></template>
           </el-menu-item>
-          <el-menu-item index="bookkeeping-entry">
+          <el-menu-item v-if="canSeeNav('bookkeeping-entry')" index="bookkeeping-entry">
             <el-icon><Notebook /></el-icon>
             <template #title><span>记账本</span><small class="nav-badge new">NEW</small></template>
           </el-menu-item>
           <el-menu-item
+            v-if="canSeeNav('data-import-group')"
             index="data-import-group"
             @mouseenter="showPopup('data-import', $event)"
             @mouseleave="scheduleHidePopup"
@@ -100,29 +107,33 @@
             <el-icon><Download /></el-icon>
             <template #title><span>数据导入</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
-          <el-menu-item index="pipeline">
+          <el-menu-item v-if="canSeeNav('pipeline')" index="pipeline">
             <el-icon><Upload /></el-icon>
             <template #title>一键推送</template>
           </el-menu-item>
-          <el-menu-item index="ai-assistant">
+          <el-menu-item v-if="canSeeNav('ai-assistant')" index="ai-assistant">
             <el-icon><ChatDotRound /></el-icon>
             <template #title><span>AI 助手</span><small class="nav-badge beta">BETA</small></template>
           </el-menu-item>
 
-          <div class="sidebar-section-label">系统管理</div>
-          <el-menu-item index="db-viewer">
+          <div v-if="canSeeNavGroup('system')" class="sidebar-section-label">系统管理</div>
+          <el-menu-item v-if="canSeeNav('db-viewer')" index="db-viewer">
             <el-icon><Coin /></el-icon>
             <template #title><span>数据库查看</span><small class="nav-badge beta">DEV</small></template>
           </el-menu-item>
-          <el-menu-item index="enterprise-settings">
+          <el-menu-item v-if="canSeeNav('enterprise-settings')" index="enterprise-settings">
             <el-icon><Setting /></el-icon>
             <template #title>企业设置</template>
           </el-menu-item>
-          <el-menu-item index="user-management">
+          <el-menu-item v-if="canSeeNav('user-management')" index="user-management">
             <el-icon><User /></el-icon>
             <template #title>人员管理</template>
           </el-menu-item>
-          <el-menu-item index="settings">
+          <el-menu-item v-if="canSeeNav('position-settings')" index="position-settings">
+            <el-icon><Setting /></el-icon>
+            <template #title>岗位设置</template>
+          </el-menu-item>
+          <el-menu-item v-if="canSeeNav('settings')" index="settings">
             <el-icon><Setting /></el-icon>
             <template #title>网页设置</template>
           </el-menu-item>
@@ -260,6 +271,7 @@ import PipelineView from '@/views/PipelineView.vue'
 import DataImportView from '@/views/DataImportView.vue'
 import BusinessDataImport from '@/views/BusinessDataImport.vue'
 import UserManagementView from '@/views/UserManagementView.vue'
+import PositionSettingsView from '@/views/PositionSettingsView.vue'
 import AiAssistantView from '@/views/AiAssistantView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 import SalesAnalysis from '@/views/analysis/SalesAnalysis.vue'
@@ -290,6 +302,12 @@ import SalaryPlaceholder from '@/views/staff/SalaryPlaceholder.vue'
 import BookkeepingEntry from '@/views/bookkeeping/BookkeepingEntry.vue'
 import BookkeepingCategories from '@/views/bookkeeping/BookkeepingCategories.vue'
 import BookkeepingRecords from '@/views/bookkeeping/BookkeepingRecords.vue'
+import { NAV_GROUP_PERMISSIONS, NAV_ITEM_PERMISSIONS } from '@/permissions'
+
+// 左侧导航按岗位权限过滤：分组标题与菜单项都由这里判断，
+// 权限来自 /api/auth/me（后端每次从岗位表读取，分配岗位后重新登录即生效）。
+const canSeeNav = index => auth.can(NAV_ITEM_PERMISSIONS[index])
+const canSeeNavGroup = group => auth.canAny(NAV_GROUP_PERMISSIONS[group] || [])
 
 const COMPONENT_MAP = {
   dashboard: DashboardView,
@@ -300,6 +318,7 @@ const COMPONENT_MAP = {
   'data-import-delivery': BusinessDataImport,
   'data-import-legacy': DataImportView,
   'user-management': UserManagementView,
+  'position-settings': PositionSettingsView,
   'ai-assistant': AiAssistantView,
   settings: SettingsView,
   'analysis-sales': SalesAnalysis,
@@ -351,6 +370,7 @@ const POPUP_CONFIG = {
           { index: 'analysis-group-platform', label: '平台视角' },
           { index: 'analysis-group-brand', label: '品牌视角' },
           { index: 'analysis-group-store', label: '门店视角' },
+          { index: 'analysis-group-daily-summary', label: '每日总结' },
           { index: 'analysis-group-binding', label: '团购菜品绑定' },
         ],
       },
@@ -512,6 +532,7 @@ const workspaceRouteTabId = computed(() => {
     'workspace-pipeline': 'pipeline',
     'workspace-ai-assistant': 'ai-assistant',
     'workspace-user-management': 'user-management',
+    'workspace-position-settings': 'position-settings',
     'workspace-settings': 'settings',
     // 挂在工作台下的独立静态路由（不是 :section 通配），刷新/直接访问时必须能反查回标签 id，
     // 否则地址栏正确但内容区落到数据概括。新增这类页面记得同步登记。
@@ -720,6 +741,7 @@ const WORKSPACE_TAB_ROUTES = {
   pipeline: '/pipeline',
   'ai-assistant': '/ai-assistant',
   'user-management': '/user-management',
+  'position-settings': '/position-settings',
   settings: '/settings',
   'store-management-info-basic': '/store-management/info-basic',
   'store-management-info-circle': '/store-management/info-circle',
@@ -773,6 +795,7 @@ async function selectPopupItem(index) {
       'analysis-group-free-trial': '/analysis/group-buy/platform',
       'analysis-group-brand': '/analysis/group-buy/brand',
       'analysis-group-store': '/analysis/group-buy/store',
+      'analysis-group-daily-summary': '/analysis/group-buy/daily-summary',
       'analysis-group-binding': '/analysis/group-buy/binding',
       'analysis-delivery-platform': '/analysis/delivery/platform',
       'analysis-delivery-meituan': '/analysis/delivery/platform',
@@ -873,6 +896,7 @@ async function selectTab(id) {
       'analysis-group-free-trial': '/analysis/group-buy/platform',
       'analysis-group-brand': '/analysis/group-buy/brand',
       'analysis-group-store': '/analysis/group-buy/store',
+      'analysis-group-daily-summary': '/analysis/group-buy/daily-summary',
       'analysis-group-binding': '/analysis/group-buy/binding',
       'analysis-delivery-platform': '/analysis/delivery/platform',
       'analysis-delivery-meituan': '/analysis/delivery/platform',

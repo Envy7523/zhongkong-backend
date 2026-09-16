@@ -1,4 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { getMe } from '@/api'
 import LoginView from '@/views/LoginView.vue'
 // 菜品绑定是高频关键页。直接随入口加载，避免旧标签页请求已失效的异步分包后只剩页面外壳。
 import ProductBinding from '@/views/analysis/ProductBinding.vue'
@@ -105,6 +107,9 @@ const routes = [
     path: '/analysis/group-buy/store', name: 'analysis-group-store', component: () => import('@/views/analysis/BusinessAnalytics.vue'),
     meta: { analysisKey: 'analysis-group-store', analysisTitle: '团购视角 · 门店视角', analysisScope: 'group-buy', analysisMode: 'store' },
   },  {
+    path: '/analysis/group-buy/daily-summary', name: 'analysis-group-daily-summary', component: () => import('@/views/analysis/GroupBuyDailySummary.vue'),
+    meta: { analysisKey: 'analysis-group-daily-summary', analysisTitle: '团购视角 · 每日总结', analysisScope: 'group-buy', analysisMode: 'daily-summary' },
+  }, {
     path: '/analysis/delivery/binding',
     name: 'analysis-delivery-binding',
     component: ProductBinding,
@@ -187,6 +192,7 @@ const routes = [
   { path: '/pipeline', name: 'workspace-pipeline', component: { render: () => null } },
   { path: '/ai-assistant', name: 'workspace-ai-assistant', component: { render: () => null } },
   { path: '/user-management', name: 'workspace-user-management', component: { render: () => null } },
+  { path: '/position-settings', name: 'workspace-position-settings', component: { render: () => null } },
   { path: '/settings', name: 'workspace-settings', component: { render: () => null } },
   {
     path: '/staff-management',
@@ -263,6 +269,40 @@ router.afterEach(() => {
 
 const TOKEN_KEY = 'etaigong_token'
 
+// 路由 → 权限码。按 name 前缀匹配，覆盖全部业务路由；login 不做校验。
+const ROUTE_PERMISSION_RULES = [
+  ['dashboard', 'dashboard.view'],
+  ['collab-', 'collab.manage'],
+  ['bookkeeping-', 'bookkeeping.manage'],
+  ['workspace-bookkeeping', 'bookkeeping.manage'],
+  ['data-import-', 'data-import.manage'],
+  ['reports-', 'data-import.manage'],
+  ['workspace-pipeline', 'pipeline.manage'],
+  ['workspace-ai-assistant', 'ai-assistant.view'],
+  // 更具体的规则必须排在前面，否则会被宽前缀先命中（如 store-3d 被 store- 拿走）
+  ['store-3d', 'store-preparation.manage'],
+  ['store-', 'store.manage'],
+  ['workspace-store', 'store.manage'],
+  ['menu-management-', 'menu.manage'],
+  ['workspace-menu', 'menu.manage'],
+  ['workspace-cost', 'cost.manage'],
+  ['staff-management-', 'staff.view'],
+  ['workspace-position-settings', 'positions.manage'],
+  ['workspace-user', 'users.manage'],
+  ['workspace-settings', 'settings.manage'],
+  ['enterprise-settings-', 'enterprise-settings.manage'],
+  ['db-viewer', 'db-viewer.view'],
+  ['analysis-', 'analysis.view'],
+]
+
+function permissionFor(route) {
+  const name = String(route.name || '')
+  for (const [prefix, code] of ROUTE_PERMISSION_RULES) {
+    if (name === prefix || name.startsWith(prefix)) return code
+  }
+  return null // login 等无需权限的路由
+}
+
 router.beforeEach((to, from, next) => {
   const token = localStorage.getItem(TOKEN_KEY)
   if (to.path === '/login') {
@@ -270,7 +310,21 @@ router.beforeEach((to, from, next) => {
     return next()
   }
   if (!token) return next('/login')
-  next()
+  const required = permissionFor(to)
+  if (!required) return next()
+
+  // 权限以服务端岗位表为准，每次导航都取最新，避免旧缓存让已改权限的账号继续放行。
+  getMe().then(res => {
+    const permissions = res?.user?.position_permissions || []
+    const allowed = permissions.includes('*') || permissions.includes(required)
+    if (allowed) return next()
+    if (to.path === '/dashboard') return next() // 无任何权限时仍允许落到首页，避免死循环
+    ElMessage.warning('当前岗位没有该模块权限，已跳回首页')
+    return next('/dashboard')
+  }).catch(() => {
+    localStorage.removeItem(TOKEN_KEY)
+    return next('/login')
+  })
 })
 
 export default router
