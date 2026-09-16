@@ -1,151 +1,82 @@
 <template>
-  <div>
-    <div class="card-compact">
-      <div class="card-header">📤 读取数据 → 推送到群</div>
-      <el-alert type="info" :closable="false" style="margin-bottom:16px;">
-        选择数据源，系统会自动读取数据并通过 Webhook 推送到企业微信群聊。
-        使用前请确保「中控绑定」中的 corpid、corpsecret 和 Webhook 均已正确填写。
-      </el-alert>
+  <div class="push-center">
+    <section class="push-hero">
+      <div><span>WECOM · DAILY BRIEF</span><h2>日报推送中心</h2><p>从已保存的团购每日总结生成运营日报，先预览，确认后才会推送到企业微信群。</p></div>
+      <div class="hero-tools"><div class="target-box" :class="{ inactive: !target.configured }"><small>当前目标群</small><b>{{ target.name }}</b><em>{{ target.configured ? '机器人已配置' : '未配置机器人' }}</em></div><el-button plain class="profile-button" @click="openProfileDialog">推送通道配置</el-button></div>
+    </section>
 
-      <el-form label-width="120px" style="max-width:600px;">
-        <el-form-item label="数据源">
-          <el-select v-model="api" style="width:100%;">
-            <el-option label="📋 部门列表" value="department_list" />
-            <el-option label="👥 成员列表" value="user_list" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="部门ID" v-if="api === 'user_list'">
-          <el-input v-model="deptId" placeholder="1" />
-        </el-form-item>
-        <el-form-item label="消息格式">
-          <el-select v-model="msgType" style="width:100%;">
-            <el-option label="Markdown（推荐）" value="markdown" />
-            <el-option label="纯文本" value="text" />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-space>
-            <el-button type="primary" @click="doPipeline" :loading="loading">🚀 读取并推送到群</el-button>
-          </el-space>
-        </el-form-item>
-      </el-form>
-      <div v-if="result.text" style="margin-top:12px;">
-        <el-alert :type="result.type" :closable="false">{{ result.text }}</el-alert>
+    <section class="control-card">
+      <div class="control-title"><span>①</span><div><b>选择日报范围</b><small>不选门店则读取当日全部已汇报门店</small></div></div>
+      <div class="control-fields">
+        <div class="field"><label>日报日期</label><el-date-picker v-model="bizDate" type="date" value-format="YYYY-MM-DD" format="YYYY-MM-DD" :clearable="false" /></div>
+        <div class="field store-field"><label>门店范围</label><el-select v-model="storeIds" multiple collapse-tags collapse-tags-tooltip clearable filterable placeholder="全部已汇报门店"><el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" /></el-select></div>
+        <el-button type="primary" :loading="loading" @click="loadPreview">生成预览</el-button>
       </div>
+    </section>
+
+    <div class="work-grid">
+      <section class="preview-card" v-loading="loading">
+        <header><div><span>② 日报预览</span><h3>{{ preview ? `${preview.biz_date} 团购运营日报` : '等待生成' }}</h3></div><el-tag v-if="preview" type="success" effect="light">{{ preview.summary.store_count }} 家门店</el-tag></header>
+        <div v-if="!preview" class="preview-empty"><b>还没有日报预览</b><span>选择日期后点击“生成预览”，系统只会读取已保存的数据。</span></div>
+        <template v-else>
+          <div class="summary-grid"><div><span>已汇报门店</span><b>{{ preview.summary.store_count }}</b></div><div class="meituan"><span>美团平均星级</span><b>{{ scoreText(preview.summary.meituan_rating) }}</b></div><div class="douyin"><span>抖音平均评分</span><b>{{ scoreText(preview.summary.douyin_rating) }}</b></div><div class="negative"><span>今日差评</span><b>{{ preview.summary.meituan_negative_reviews + preview.summary.douyin_negative_reviews }}</b></div></div>
+          <div class="brief-list"><article v-for="row in preview.records" :key="row.store_id"><header><b>{{ row.store_name }}</b><span v-if="row.meituan_negative_reviews || row.douyin_negative_reviews" class="warning">有差评</span><span v-else>正常</span></header><div class="brief-platform douyin"><strong>抖音</strong><span>点亮 {{ row.lighting_actual }}/{{ targetText(row.targets?.lighting) }}</span><span>好评 {{ row.douyin_review_actual }}/{{ targetText(row.targets?.douyin_review) }}</span><span>评分 {{ scoreText(row.douyin_rating) }}</span></div><div class="brief-platform meituan"><strong>美团</strong><span>打卡 {{ row.checkin_actual }}/{{ targetText(row.targets?.checkin) }}</span><span>好评 {{ row.meituan_review_actual }}/{{ targetText(row.targets?.meituan_review) }}</span><span>星级 {{ scoreText(row.meituan_rating) }}</span></div><p v-if="negativeText(row)" class="negative-text">{{ negativeText(row) }}</p></article><div v-if="!preview.records.length" class="preview-empty compact"><b>该日期没有已保存的总结</b><span>请先在“团购每日总结”里完成今日汇报。</span></div></div>
+        </template>
+      </section>
+
+      <aside class="send-card"><div class="send-step">③ 确认推送</div><h3>发送到企业微信群</h3><p>发送内容与左侧预览一致。系统会记录时间、目标群与推送结果。</p><div class="send-target"><span>目标群</span><b>{{ target.name }}</b><small>{{ target.configured ? '使用企业设置中已保存的通知机器人' : '请先完成企业设置' }}</small></div><el-button type="primary" class="send-button" :disabled="!canSend" :loading="sending" @click="confirmSend">确认推送日报</el-button><el-button text class="settings-link" @click="openSettings">前往配置机器人</el-button><el-alert v-if="notice.text" :type="notice.type" :closable="false" show-icon>{{ notice.text }}</el-alert></aside>
     </div>
 
-    <div class="card-compact">
-      <div class="card-header">⚡ 快捷操作</div>
-      <el-space>
-        <el-button @click="quickPush('department_list')">📋 推送部门列表</el-button>
-        <el-button @click="quickPush('user_list')">👥 推送成员列表</el-button>
-        <el-button @click="testWebhook">🧪 发送测试消息</el-button>
-      </el-space>
-    </div>
+    <section class="history-card"><header><div><span>最近记录</span><h3>日报推送日志</h3></div><el-button text @click="loadLogs">刷新</el-button></header><el-table :data="logs" size="small" empty-text="暂无日报推送记录"><el-table-column prop="created_at" label="推送时间" min-width="170" /><el-table-column prop="target" label="目标群" min-width="160" /><el-table-column prop="content_preview" label="内容" min-width="260" /><el-table-column prop="status" label="状态" width="100"><template #default="{row}"><el-tag :type="row.status==='success'?'success':'danger'" size="small">{{ row.status==='success'?'成功':'失败' }}</el-tag></template></el-table-column></el-table></section>
 
-    <div class="card-compact">
-      <div class="card-header">✏️ 自定义消息</div>
-      <el-form label-width="120px" style="max-width:600px;">
-        <el-form-item label="消息类型">
-          <el-select v-model="customMsgtype" style="width:100%;">
-            <el-option label="纯文本" value="text" />
-            <el-option label="Markdown" value="markdown" />
-            <el-option label="图文消息" value="news" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="标题" v-if="customMsgtype === 'news'">
-          <el-input v-model="customTitle" placeholder="图文消息标题" />
-        </el-form-item>
-        <el-form-item label="文案内容">
-          <el-input v-model="customContent" type="textarea" :rows="4" placeholder="输入要发送的文字内容..." />
-        </el-form-item>
-        <el-form-item label="跳转链接" v-if="customMsgtype === 'news'">
-          <el-input v-model="customUrl" placeholder="https://example.com/article" />
-        </el-form-item>
-        <el-form-item label="图片链接">
-          <el-input v-model="customPicurl" placeholder="https://example.com/image.png（可选）" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="sendCustom" :loading="sending">📨 发送自定义消息</el-button>
-        </el-form-item>
-      </el-form>
-      <div v-if="customResult.text" style="margin-top:12px;">
-        <el-alert :type="customResult.type" :closable="false">{{ customResult.text }}</el-alert>
-      </div>
-    </div>
+    <el-dialog v-model="confirmVisible" title="确认推送日报" width="420px" :close-on-click-modal="false"><p class="confirm-copy">将把 <b>{{ preview?.biz_date }}</b> 的团购运营日报（{{ preview?.summary.store_count || 0 }} 家门店）发送至 <b>{{ target.name }}</b>。</p><template #footer><el-button @click="confirmVisible=false">取消</el-button><el-button type="primary" :loading="sending" @click="send">确认发送</el-button></template></el-dialog>
+    <el-dialog v-model="profileVisible" title="推送通道配置" width="760px" :close-on-click-modal="false" class="profile-dialog">
+      <template v-if="profileForm">
+        <div class="profile-tip">此处配置只作用于「{{ profileForm.name || '团购每日总结日报' }}」。机器人地址留空时，自动沿用企业设置里的默认机器人。</div>
+        <el-form label-position="top" class="profile-form">
+          <div class="form-grid"><el-form-item label="推送功能名称"><el-input v-model="profileForm.name" maxlength="60" show-word-limit /></el-form-item><el-form-item label="机器人群名称"><el-input v-model="profileForm.webhook_name" placeholder="例如：团购运营日报群" maxlength="80" /></el-form-item></div>
+          <el-form-item label="功能说明"><el-input v-model="profileForm.description" maxlength="300" show-word-limit /></el-form-item>
+          <el-form-item label="企业微信机器人 Webhook"><el-input v-model="profileForm.webhook" placeholder="留空 = 使用企业设置默认机器人" /></el-form-item>
+          <el-form-item label="日报文案模板"><el-input v-model="profileForm.content_template" type="textarea" :rows="7" /><p class="form-help">可用变量：<code v-pre>{{title}}</code>、<code v-pre>{{date}}</code>、<code v-pre>{{store_count}}</code>、<code v-pre>{{body}}</code>。其中 <code v-pre>{{body}}</code> 是系统按门店生成的日报明细。</p></el-form-item>
+          <el-form-item label="图片卡片文案"><el-input v-model="profileForm.image_template" type="textarea" :rows="3" placeholder="例如：{{title}}&#10;数据日期 {{date}} · 团购运营日报" /><p class="form-help">每家门店都会生成一张图片卡片；这里可填写卡片标题或注释。可使用上方相同变量。</p></el-form-item>
+          <el-form-item><el-switch v-model="profileForm.enabled" active-text="启用此推送通道" inactive-text="暂停此推送通道" /></el-form-item>
+        </el-form>
+      </template>
+      <el-empty v-else description="未找到可配置的推送通道" />
+      <template #footer><el-button @click="profileVisible=false">取消</el-button><el-button type="primary" :loading="profileSaving" :disabled="!profileForm" @click="saveProfile">保存通道配置</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
-import { runPipeline, sendWebhook } from '@/api'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import { getConfig, getPushLogs, getPushProfiles, getStores, previewGroupBuyDailyPush, sendGroupBuyDailyPush, updatePushProfile } from '@/api'
+import { useAppStore } from '@/stores/app'
 
-const api = ref('department_list')
-const deptId = ref('1')
-const msgType = ref('markdown')
-const loading = ref(false)
-const result = reactive({ type: 'info', text: '' })
-
-const customMsgtype = ref('text')
-const customTitle = ref('')
-const customContent = ref('')
-const customUrl = ref('')
-const customPicurl = ref('')
-const sending = ref(false)
-const customResult = reactive({ type: 'info', text: '' })
-
-async function doPipeline() {
-  loading.value = true
-  result.text = '⏳ 正在读取数据并推送到群...'; result.type = 'info'
-  try {
-    const params = {}
-    if (api.value === 'user_list') params.department_id = parseInt(deptId.value) || 1
-    const data = await runPipeline({ api: api.value, params, msgtype: msgType.value })
-    result.type = 'success'; result.text = `✅ ${data.message}`
-  } catch (e) {
-    result.type = 'error'; result.text = '推送失败：' + e.message
-  } finally { loading.value = false }
-}
-
-async function quickPush(apiName) {
-  loading.value = true
-  result.type = 'info'; result.text = `⏳ 正在推送...`
-  try {
-    const data = await runPipeline({ api: apiName, params: apiName === 'user_list' ? { department_id: 1 } : {}, msgtype: 'markdown' })
-    result.type = 'success'; result.text = `✅ ${data.message}`
-  } catch (e) {
-    result.type = 'error'; result.text = '推送失败：' + e.message
-  } finally { loading.value = false }
-}
-
-async function testWebhook() {
-  sending.value = true
-  customResult.type = 'info'; customResult.text = '⏳ 正在发送...'
-  try {
-    await sendWebhook({ msgtype: 'text', content: `✅ 测试消息\n时间：${new Date().toLocaleString()}` })
-    customResult.type = 'success'; customResult.text = '✅ 测试消息已发送'
-  } catch (e) {
-    customResult.type = 'error'; customResult.text = '发送失败：' + e.message
-  } finally { sending.value = false }
-}
-
-async function sendCustom() {
-  if (!customContent.value) { customResult.type = 'error'; customResult.text = '请输入文案内容'; return }
-  if (customMsgtype.value === 'news' && !customUrl.value) { customResult.type = 'error'; customResult.text = '图文消息必须填写链接'; return }
-  sending.value = true
-  customResult.type = 'info'; customResult.text = '⏳ 正在发送...'
-  try {
-    const body = { msgtype: customMsgtype.value, content: customContent.value }
-    if (customMsgtype.value === 'news') {
-      body.title = customTitle.value || undefined
-      body.url = customUrl.value
-      body.picurl = customPicurl.value || undefined
-    }
-    const data = await sendWebhook(body)
-    customResult.type = 'success'; customResult.text = '✅ ' + data.message
-    customContent.value = ''; customTitle.value = ''; customUrl.value = ''; customPicurl.value = ''
-  } catch (e) {
-    customResult.type = 'error'; customResult.text = '发送失败：' + e.message
-  } finally { sending.value = false }
-}
+const app = useAppStore()
+const router = useRouter()
+const now = new Date()
+const bizDate = ref(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`)
+const stores = ref([]), storeIds = ref([]), preview = ref(null), logs = ref([]), loading = ref(false), sending = ref(false), confirmVisible = ref(false)
+const profileVisible = ref(false), profileSaving = ref(false), profileForm = ref(null)
+const target = reactive({ configured:false, name:'未命名企业微信群' })
+const notice = reactive({ type:'info', text:'' })
+const canSend = computed(() => Boolean(target.configured && preview.value?.records?.length))
+const scoreText = value => value == null ? '—' : Number(value).toFixed(1)
+const targetText = value => value == null ? '—' : value
+function negativeText(row) { const text=[]; if (Number(row.meituan_negative_reviews)) text.push(`美团差评 ${row.meituan_negative_reviews}${row.meituan_negative_reason ? `：${row.meituan_negative_reason}` : ''}`); if (Number(row.douyin_negative_reviews)) text.push(`抖音差评 ${row.douyin_negative_reviews}${row.douyin_negative_reason ? `：${row.douyin_negative_reason}` : ''}`); return text.join('；') }
+async function loadPreview() { loading.value=true; notice.text=''; try { const result=await previewGroupBuyDailyPush({ biz_date:bizDate.value, store_ids:storeIds.value }); preview.value=result; Object.assign(target,result.target||{}); if (!result.target?.configured) notice.type='warning',notice.text='机器人尚未配置，预览可用，但暂不能推送。' } catch(error) { notice.type='error';notice.text=`生成预览失败：${error.message}` } finally { loading.value=false } }
+async function loadLogs() { try { const result=await getPushLogs({limit:20}); logs.value=(result.logs||[]).filter(row=>row.push_type==='group_buy_daily') } catch(error) { ElMessage.error(`读取推送日志失败：${error.message}`) } }
+function confirmSend() { if (!canSend.value) return; confirmVisible.value=true }
+async function send() { sending.value=true; try { const result=await sendGroupBuyDailyPush({biz_date:bizDate.value,store_ids:storeIds.value}); notice.type='success';notice.text=result.message;confirmVisible.value=false;await loadLogs() } catch(error) { notice.type='error';notice.text=`推送失败：${error.message}` } finally { sending.value=false } }
+function openSettings() { app.openTabFromId('enterprise-settings'); router.push('/enterprise-settings/robot') }
+async function openProfileDialog() { try { const result = await getPushProfiles(); const profile=(result.profiles||[]).find(item=>item.code==='group_buy_daily'); profileForm.value=profile ? { ...profile, enabled: Boolean(profile.enabled) } : null; profileVisible.value=true } catch(error) { ElMessage.error(`读取推送通道失败：${error.message}`) } }
+async function saveProfile() { if (!profileForm.value) return; profileSaving.value=true; try { const result=await updatePushProfile(profileForm.value.id, profileForm.value); const saved=result.profile||profileForm.value; target.configured=Boolean(saved.target_webhook);target.name=saved.target_name||'未命名企业微信群'; profileVisible.value=false; ElMessage.success('推送通道已保存，后续日报会立即使用新配置') } catch(error) { ElMessage.error(`保存失败：${error.message}`) } finally { profileSaving.value=false } }
+onMounted(async()=>{ try { const [storeResult,configResult,profilesResult]=await Promise.all([getStores({page:1,page_size:500}),getConfig(),getPushProfiles()]); stores.value=storeResult.stores||storeResult.rows||[]; const profile=(profilesResult.profiles||[]).find(item=>item.code==='group_buy_daily'); target.configured=profile ? Boolean(profile.configured) : Boolean(configResult.webhookConfigured);target.name=profile?.target_name||configResult.webhookName||'未命名企业微信群'; await loadLogs() } catch(error) { ElMessage.error(`推送中心初始化失败：${error.message}`) } })
 </script>
+
+<style scoped>
+.push-center{color:#263b53;max-width:1500px;padding-bottom:10px}.push-hero{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:25px 28px;margin-bottom:15px;border:1px solid #d5e8e6;border-radius:17px;background:radial-gradient(circle at 84% 0%,rgba(116,220,188,.25),transparent 33%),linear-gradient(120deg,#123a5a,#126d65);color:#fff;box-shadow:0 14px 30px rgba(19,91,91,.12)}.push-hero span,.history-card header span,.preview-card header span{font-size:10px;font-weight:800;letter-spacing:.15em;color:#a9eed8}.push-hero h2{margin:7px 0 5px;font-size:25px}.push-hero p{margin:0;color:rgba(255,255,255,.76);font-size:12px}.hero-tools{display:flex;align-items:center;gap:9px}.target-box{display:grid;min-width:180px;gap:4px;padding:12px 15px;border:1px solid rgba(215,255,239,.3);border-radius:12px;background:rgba(4,40,57,.2)}.target-box small{color:#c2f4e4;font-size:10px}.target-box b{max-width:240px;overflow:hidden;font-size:13px;text-overflow:ellipsis;white-space:nowrap}.target-box em{color:#8ee0bf;font-size:10px;font-style:normal}.target-box.inactive em{color:#ffd587}.profile-button{border-color:rgba(215,255,239,.45)!important;color:#effff9!important;background:rgba(255,255,255,.09)!important}.control-card,.preview-card,.send-card,.history-card{border:1px solid #e0e9ee;border-radius:14px;background:#fff;box-shadow:0 7px 22px rgba(23,53,80,.045)}.control-card{display:flex;align-items:center;gap:28px;padding:15px 18px;margin-bottom:15px}.control-title{display:flex;align-items:center;gap:9px;min-width:210px}.control-title>span{display:grid;width:26px;height:26px;place-items:center;border-radius:8px;background:#e6f7f2;color:#10816d;font-size:11px;font-weight:800}.control-title b,.control-title small{display:block}.control-title b{font-size:13px}.control-title small{margin-top:4px;color:#8797a7;font-size:10px}.control-fields{display:flex;align-items:end;flex:1;gap:12px}.field{display:grid;gap:6px}.field label{color:#72849a;font-size:11px}.field :deep(.el-date-editor){width:160px}.store-field{min-width:240px;flex:1}.store-field :deep(.el-select){width:100%}.work-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:15px}.preview-card header,.history-card header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px;border-bottom:1px solid #edf1f4}.preview-card header span,.history-card header span{display:block;color:#168672}.preview-card header h3,.history-card header h3{margin:4px 0 0;font-size:15px}.preview-empty{display:grid;min-height:250px;place-content:center;gap:8px;padding:20px;text-align:center}.preview-empty b{font-size:14px}.preview-empty span{color:#8b9bac;font-size:12px}.preview-empty.compact{min-height:130px}.summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:14px 18px;border-bottom:1px solid #edf1f4}.summary-grid>div{padding:10px 12px;border:1px solid #e5edf0;border-radius:10px;background:#fbfdfd}.summary-grid span,.summary-grid b{display:block}.summary-grid span{color:#8292a2;font-size:10px}.summary-grid b{margin-top:5px;color:#26455c;font-size:20px}.summary-grid .meituan{background:#fff9e8;border-color:#f7e5a9}.summary-grid .meituan b{color:#a56c16}.summary-grid .douyin{background:#edf5ff;border-color:#cfe3ff}.summary-grid .douyin b{color:#286ab0}.summary-grid .negative{background:#fff7f5;border-color:#f5ddd7}.summary-grid .negative b{color:#d36c52}.brief-list{padding:0 18px 15px}.brief-list article{padding:13px 0;border-bottom:1px solid #edf1f4}.brief-list article:last-child{border-bottom:0}.brief-list article>header{padding:0 0 9px;border:0}.brief-list article>header b{font-size:13px}.brief-list article>header span{color:#1b9877;font-size:10px}.brief-list article>header .warning{color:#c47b18}.brief-platform{display:grid;grid-template-columns:48px repeat(3,minmax(0,1fr));gap:8px;margin-top:5px;padding:7px 9px;border-radius:7px;font-size:11px}.brief-platform strong{font-size:11px}.brief-platform span{color:#536d84}.brief-platform.douyin{background:#eff6ff;color:#2871bd}.brief-platform.meituan{background:#fff8df;color:#a6771f}.negative-text{margin:8px 0 0;color:#be663c;font-size:11px}.send-card{align-self:start;padding:20px}.send-step{color:#148a74;font-size:10px;font-weight:800;letter-spacing:.12em}.send-card h3{margin:7px 0;font-size:17px}.send-card>p{margin:0;color:#8495a6;font-size:11px;line-height:1.65}.send-target{display:grid;gap:4px;margin:18px 0;padding:12px;border:1px solid #e1ebeb;border-radius:10px;background:#f8fdfc}.send-target span,.send-target small{color:#8394a5;font-size:10px}.send-target b{font-size:13px}.send-button{width:100%;height:38px;font-weight:700}.settings-link{display:block;width:100%;margin-top:5px}.send-card :deep(.el-alert){margin-top:14px;padding:9px 10px}.history-card{margin-top:15px;overflow:hidden}.history-card header span{color:#768aa0}.history-card :deep(.el-table__header-wrapper th){background:#f7f9fb;color:#5a7188;font-size:11px}.confirm-copy{margin:2px 0;color:#526a80;line-height:1.8;font-size:13px}.profile-tip{margin-bottom:16px;padding:10px 12px;border:1px solid #dceeea;border-radius:8px;background:#f2fbf8;color:#52716b;font-size:12px;line-height:1.6}.profile-form .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.profile-form :deep(.el-form-item){margin-bottom:14px}.form-help{margin:6px 0 0;color:#8999a7;font-size:11px;line-height:1.55}@media(max-width:1050px){.work-grid{grid-template-columns:1fr}.send-card{display:grid;grid-template-columns:1fr auto;column-gap:20px}.send-step,.send-card>p,.send-card :deep(.el-alert){grid-column:1/-1}.send-target{margin:13px 0}.send-button,.settings-link{align-self:center;width:auto}.settings-link{margin:0}}@media(max-width:760px){.push-hero,.control-card{align-items:flex-start;flex-direction:column}.hero-tools{align-items:stretch;flex-direction:column;width:100%}.target-box{width:100%}.control-fields{align-items:stretch;flex-direction:column;width:100%}.field,.field :deep(.el-date-editor),.store-field{width:100%!important}.summary-grid,.profile-form .form-grid{grid-template-columns:1fr}.brief-platform{grid-template-columns:42px 1fr 1fr}.brief-platform span:last-child{display:none}.send-card{display:block}.send-button{width:100%}.settings-link{width:100%;margin-top:5px}}
+</style>
