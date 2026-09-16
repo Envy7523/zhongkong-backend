@@ -10,7 +10,7 @@ const path = require('path');
 const crypto = require('crypto');
 const XLSX = require('xlsx');
 const { drawBarChart, drawLineChart, drawPieChart } = require('./lib/chart');
-const { drawStoreDailyReport } = require('./lib/report');
+const { drawStoreDailyReport, drawGroupBuyDailyPushCard } = require('./lib/report');
 const { parseDailyExcel, toReportData } = require('./lib/daily-data');
 const db = require('./lib/db');
 const collabService = require('./lib/collab-service');
@@ -70,6 +70,9 @@ wecomBot.setFileMessageHandler(async ({ buffer, filename }) => {
 // ===== 中间件 =====
 app.use(express.json({ limit: '50mb' }));
 
+// 岗位功能权限：权限码目录与接口映射都在 lib/permissions.js，岗位设置界面复用同一份目录。
+const positionPermissions = require('./lib/permissions');
+
 // JWT 认证中间件（保护 /api/*，放行登录接口）
 app.use((req, res, next) => {
   if (req.path === '/api/auth/login' || req.path === '/api/bot/status' || req.path === '/api/geo/bound') return next();
@@ -86,6 +89,20 @@ app.use((req, res, next) => {
   } catch {
     return res.status(401).json({ error: '登录已过期，请重新登录' });
   }
+});
+
+// 岗位权限强制校验（只对 /api/* 且映射到权限码的接口生效，其余请求零开销）
+const positionGuard = positionPermissions.createGuard({
+  // 每次都从库里取岗位权限，保证分配岗位或改权限后无需重新登录即可生效。
+  getUserById: id => db.queryOne(`SELECT u.id,u.username,u.position_id,p.permissions_json
+    FROM users u LEFT JOIN position_settings p ON p.id=u.position_id WHERE u.id=?`, [id]),
+  hasFullAccess: user => positionPermissions.normalizePermissions(user?.permissions_json).includes('*'),
+});
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/') || req.path.startsWith('/api/mp/')) return next();
+  const required = positionPermissions.requiredPermission(req.path);
+  if (!required) return next(); // 未收录的接口：登录即可
+  return positionGuard(req, res, next);
 });
 
 // 用户头像文件
@@ -879,7 +896,7 @@ app.get('/api/store-models/maintenance/orphans', (req, res) => {
 });
 app.post('/api/store-models/maintenance/purge', async (req, res) => {
   try {
-    if (req.user?.role !== '管理员') return res.status(403).json({ error: '仅管理员可清理模型磁盘' });
+    if (!hasFullPositionAccess(req.user)) return res.status(403).json({ error: '仅系统管理员岗位可清理模型磁盘' });
     const dryRun = req.body?.dry_run !== false;
     // keep_versions：每个门店保留生效版 + (N-1) 个可回滚的历史版本；默认 1 表示只留生效版
     const keepVersions = Number(req.body?.keep_versions ?? req.query?.keep_versions ?? 1);
@@ -2972,14 +2989,18 @@ app.post('/api/push-logs', (req, res) => { try { const { push_type, target, cont
 
 // ===== 认证 =====
 function getAuthUserById(id) {
-  return db.queryOne(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.store_id,s.store_name
-    FROM users u LEFT JOIN stores s ON u.store_id=s.id WHERE u.id=?`, [id]);
+  const user = db.queryOne(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.store_id,s.store_name,u.position_id,p.name AS position_name,p.permissions_json
+    FROM users u LEFT JOIN stores s ON u.store_id=s.id LEFT JOIN position_settings p ON p.id=u.position_id WHERE u.id=?`, [id]);
+  // 岗位是账号唯一的角色来源；保留 role 列只为了兼容历史数据和旧模块。
+  return user ? { ...user, role: user.position_name || '未分配岗位', position_permissions: parsePositionPermissions(user.permissions_json), permissions_json: undefined } : null;
 }
 function issueAuthToken(user) {
   return jwt.sign({
     id: user.id, username: user.username, role: user.role,
     display_name: user.display_name, avatar_url: user.avatar_url,
     store_id: user.store_id, store_name: user.store_name || '',
+    position_id: user.position_id || null, position_name: user.position_name || '',
+    position_permissions: user.position_permissions || [],
   }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 }
 app.post('/api/auth/login', (req, res) => {
@@ -2987,9 +3008,9 @@ app.post('/api/auth/login', (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
     const hash = crypto.createHash('md5').update(password).digest('hex');
-    const user = db.queryOne(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.store_id,s.store_name
-      FROM users u LEFT JOIN stores s ON u.store_id=s.id WHERE u.username=? AND u.password_hash=?`, [username, hash]);
-    if (!user) return res.status(401).json({ error: '用户名或密码错误' });
+    const authenticated = db.queryOne('SELECT id FROM users WHERE username=? AND password_hash=?', [username, hash]);
+    if (!authenticated) return res.status(401).json({ error: '用户名或密码错误' });
+    const user = getAuthUserById(authenticated.id);
     const token = issueAuthToken(user);
     res.json({ ok: true, token, user });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -3367,6 +3388,78 @@ app.post('/api/bookkeeping/import-replace', (req, res) => {
 });
 
 // ===== 用户管理 =====
+function parsePositionPermissions(value) {
+  try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? [...new Set(parsed.map(item => String(item || '').trim()).filter(Boolean))] : []; }
+  catch { return []; }
+}
+function normalizePositionPayload(body = {}) {
+  const name = String(body.name || '').trim();
+  const description = String(body.description || '').trim();
+  const permissions = Array.isArray(body.permissions) ? [...new Set(body.permissions.map(item => String(item || '').trim()).filter(Boolean))] : [];
+  if (!name || name.length > 40) throw new Error('岗位名称不能为空且不能超过 40 个字符');
+  if (description.length > 200) throw new Error('岗位说明不能超过 200 个字符');
+  return { name, description, permissions };
+}
+function positionResponse(row) {
+  return { ...row, permissions: parsePositionPermissions(row.permissions_json), member_count: Number(row.member_count || 0) };
+}
+function hasFullPositionAccess(user) {
+  if (Array.isArray(user?.position_permissions) && user.position_permissions.includes('*')) return true;
+  const fresh = user?.id ? getAuthUserById(user.id) : null;
+  return Boolean(fresh?.position_permissions?.includes('*'));
+}
+function requireAdmin(req, res) {
+  if (hasFullPositionAccess(req.user)) return true;
+  res.status(403).json({ error: '仅管理员可以维护岗位与成员权限' });
+  return false;
+}
+function getAssignedPosition(positionId, required = false) {
+  if (positionId == null || positionId === '') {
+    if (required) throw new Error('请为成员选择岗位');
+    return null;
+  }
+  const id = Number(positionId);
+  const position = Number.isInteger(id) && id > 0 ? db.queryOne('SELECT id,name FROM position_settings WHERE id=?', [id]) : null;
+  if (!position) throw new Error('所选岗位不存在');
+  return position;
+}
+app.get('/api/positions', (req, res) => {
+  try {
+    const positions = db.queryAll(`SELECT p.*, COUNT(u.id) AS member_count FROM position_settings p LEFT JOIN users u ON u.position_id=p.id GROUP BY p.id ORDER BY p.is_system DESC,p.id`)
+      .map(positionResponse);
+    res.json({ ok: true, positions });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/positions', (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const { name, description, permissions } = normalizePositionPayload(req.body);
+    const id = db.insert('INSERT INTO position_settings (name,description,permissions_json) VALUES (?,?,?)', [name, description, JSON.stringify(permissions)]);
+    db.save();
+    res.status(201).json({ ok: true, position: positionResponse(db.queryOne('SELECT p.*,0 AS member_count FROM position_settings p WHERE id=?', [id])) });
+  } catch (e) { if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '岗位名称已存在' }); res.status(400).json({ error: e.message }); }
+});
+app.put('/api/positions/:id', (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const id = Number(req.params.id); const current = db.queryOne('SELECT * FROM position_settings WHERE id=?', [id]);
+    if (!current) return res.status(404).json({ error: '岗位不存在' });
+    const { name, description, permissions } = normalizePositionPayload(req.body);
+    db.run("UPDATE position_settings SET name=?,description=?,permissions_json=?,updated_at=datetime('now','localtime') WHERE id=?", [name, description, JSON.stringify(permissions), id]);
+    db.run('UPDATE users SET role=? WHERE position_id=?', [name, id]);
+    db.save(); res.json({ ok: true });
+  } catch (e) { if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '岗位名称已存在' }); res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/positions/:id', (req, res) => {
+  try {
+    if (!requireAdmin(req, res)) return;
+    const id = Number(req.params.id); const current = db.queryOne('SELECT * FROM position_settings WHERE id=?', [id]);
+    if (!current) return res.status(404).json({ error: '岗位不存在' });
+    if (current.is_system) return res.status(400).json({ error: '系统预置岗位不能删除，可编辑权限' });
+    db.run("UPDATE users SET position_id=NULL,role='未分配岗位' WHERE position_id=?", [id]);
+    db.run('DELETE FROM position_settings WHERE id=?', [id]); db.save(); res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 function removeAvatarFile(avatarUrl) {
   if (!avatarUrl || !avatarUrl.startsWith('/uploads/avatars/')) return;
   const filename = path.basename(avatarUrl);
@@ -3389,7 +3482,9 @@ function hasValidImageSignature(buffer, type) {
 
 app.get('/api/users', (req, res) => {
   try {
-    const users = db.queryAll('SELECT id,username,role,display_name,phone,avatar_url,created_at FROM users ORDER BY id');
+    const users = db.queryAll(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.position_id,u.created_at,p.name AS position_name,p.permissions_json
+      FROM users u LEFT JOIN position_settings p ON p.id=u.position_id ORDER BY u.id`)
+      .map(user => ({ ...user, role: user.position_name || '未分配岗位', position_permissions: parsePositionPermissions(user.permissions_json), permissions_json: undefined }));
     res.json({ ok: true, users });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3399,27 +3494,27 @@ app.post('/api/users', (req, res) => {
     const username = String(req.body.username || '').trim();
     const password = String(req.body.password || '');
     const displayName = String(req.body.display_name || '').trim();
-    const role = String(req.body.role || '客服').trim();
     const phone = String(req.body.phone || '').trim();
+    const position = getAssignedPosition(req.body.position_id, true);
     if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
     if (username.length > 50) return res.status(400).json({ error: '用户名不能超过 50 个字符' });
     if (phone.length > 30) return res.status(400).json({ error: '手机号格式不正确' });
     const hash = crypto.createHash('md5').update(password).digest('hex');
     const id = db.insert(
-      'INSERT INTO users (username,password_hash,role,display_name,phone) VALUES (?,?,?,?,?)',
-      [username, hash, role, displayName || username, phone]
+      'INSERT INTO users (username,password_hash,role,display_name,phone,position_id) VALUES (?,?,?,?,?,?)',
+      [username, hash, position.name, displayName || username, phone, position.id]
     );
     db.save();
     res.json({ ok: true, id });
   } catch (e) {
     if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '用户名已存在' });
-    res.status(500).json({ error: e.message });
+    res.status(400).json({ error: e.message });
   }
 });
 
 app.put('/api/users/:id', (req, res) => {
   try {
-    const allowed = ['username', 'role', 'display_name', 'phone'];
+    const allowed = ['username', 'display_name', 'phone'];
     const sets = [];
     const params = [];
     for (const field of allowed) {
@@ -3430,6 +3525,11 @@ app.put('/api/users/:id', (req, res) => {
       sets.push(`${field}=?`);
       params.push(value);
     }
+    if (req.body.position_id !== undefined) {
+      const position = getAssignedPosition(req.body.position_id, true);
+      sets.push('position_id=?', 'role=?');
+      params.push(position.id, position.name);
+    }
     if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' });
     params.push(req.params.id);
     db.run(`UPDATE users SET ${sets.join(',')} WHERE id=?`, params);
@@ -3437,7 +3537,7 @@ app.put('/api/users/:id', (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '用户名已存在' });
-    res.status(500).json({ error: e.message });
+    res.status(400).json({ error: e.message });
   }
 });
 
@@ -4108,6 +4208,247 @@ app.get('/api/business-analytics/views/:scope', (req, res) => {
     if (!['overview', 'group-buy', 'delivery'].includes(requested)) return res.status(404).json({ error: '分析视图不存在' });
     const result = businessAnalytics.getScopedOverview(db, requested === 'group-buy' ? 'group_buy' : requested, req.query);
     res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== 团购每日总结 =====
+const GROUP_DAILY_NUMERIC_FIELDS = ['lighting_actual', 'checkin_actual', 'douyin_review_actual', 'meituan_review_actual', 'next_lighting_target', 'next_checkin_target', 'next_douyin_review_target', 'next_meituan_review_target'];
+function groupDailyNumber(value, field) {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number) || number < 0) throw new Error(`${field} 必须为非负数字`);
+  return number;
+}
+function groupDailyRating(value, field) {
+  if (value === '' || value == null) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || number > 5) throw new Error(`${field} 需为 0 到 5 分`);
+  return number;
+}
+// 今日目标严格取「前一个自然日」的明日目标：跨月、跳日期都不会再拿错；
+// 前一天没有记录（或换月首日）就是未设，不再沿用更早的目标。
+function previousBizDate(bizDate) {
+  const matched = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(bizDate || ''));
+  if (!matched) return '';
+  const cursor = new Date(Number(matched[1]), Number(matched[2]) - 1, Number(matched[3]));
+  cursor.setDate(cursor.getDate() - 1);
+  return `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+}
+function findPreviousSummary(storeId, bizDate) {
+  const previousDate = previousBizDate(bizDate);
+  if (!previousDate) return null;
+  return db.queryOne('SELECT * FROM group_buy_daily_summaries WHERE store_id=? AND biz_date=?', [storeId, previousDate]);
+}
+// 评分不是运营手填项：日报展示时按“门店 + 当天”从两个平台的经营数据直接取值。
+// 若平台尚未导入该天记录，再保留历史手填快照，避免老数据变成空值。
+function findGroupDailyPlatformRatings(storeId, bizDate) {
+  const meituan = db.queryOne(`SELECT meituan_rating FROM meituan_group_buy_operation_records
+    WHERE store_id=? AND biz_date=? AND match_status='matched' AND meituan_rating>0 ORDER BY id DESC LIMIT 1`, [storeId, bizDate]);
+  const douyin = db.queryOne(`SELECT store_rating FROM douyin_group_buy_operation_records
+    WHERE store_id=? AND biz_date=? AND match_status='matched' AND store_rating>0 ORDER BY id DESC LIMIT 1`, [storeId, bizDate]);
+  return { meituan: meituan ? Number(meituan.meituan_rating) : null, douyin: douyin ? Number(douyin.store_rating) : null };
+}
+function mapGroupDailySummary(row, previous) {
+  const platformRatings = row?.store_id && row?.biz_date ? findGroupDailyPlatformRatings(row.store_id, row.biz_date) : { meituan: null, douyin: null };
+  const targets = {
+    lighting: previous ? Number(previous.next_lighting_target || 0) : null,
+    checkin: previous ? Number(previous.next_checkin_target || 0) : null,
+    douyin_review: previous ? Number(previous.next_douyin_review_target || 0) : null,
+    meituan_review: previous ? Number(previous.next_meituan_review_target || 0) : null,
+  };
+  const actuals = {
+    lighting: Number(row?.lighting_actual || 0),
+    checkin: Number(row?.checkin_actual || 0),
+    douyin_review: Number(row?.douyin_review_actual || 0),
+    meituan_review: Number(row?.meituan_review_actual || 0),
+  };
+  const rate = key => targets[key] > 0 ? actuals[key] / targets[key] : 0;
+  return {
+    // 没有记录的日期也要给出完整字段（实际值补 0、评分补 null），
+    // 否则前端拿到 undefined，空行与有记录行的字段形状不一致。
+    ...(row || {}),
+    lighting_actual: actuals.lighting,
+    checkin_actual: actuals.checkin,
+    douyin_review_actual: actuals.douyin_review,
+    meituan_review_actual: actuals.meituan_review,
+    meituan_rating: platformRatings.meituan ?? row?.meituan_rating ?? null,
+    douyin_rating: platformRatings.douyin ?? row?.douyin_rating ?? null,
+    meituan_negative_reviews: Number(row?.meituan_negative_reviews || 0),
+    douyin_negative_reviews: Number(row?.douyin_negative_reviews || 0),
+    meituan_negative_reason: row?.meituan_negative_reason || '',
+    douyin_negative_reason: row?.douyin_negative_reason || '',
+    next_lighting_target: Number(row?.next_lighting_target || 0),
+    next_checkin_target: Number(row?.next_checkin_target || 0),
+    next_douyin_review_target: Number(row?.next_douyin_review_target || 0),
+    next_meituan_review_target: Number(row?.next_meituan_review_target || 0),
+    targets,
+    actuals,
+    rates: { lighting: rate('lighting'), checkin: rate('checkin'), douyin_review: rate('douyin_review'), meituan_review: rate('meituan_review') },
+    target_source_date: previous?.biz_date || '',
+  };
+}
+app.get('/api/business-analytics/group-buy/daily-summary', (req, res) => {
+  try {
+    const allStores = String(req.query.all || '') === '1';
+    const storeId = Number(req.query.store_id);
+    const store = !allStores && storeId ? db.queryOne('SELECT id,store_name FROM stores WHERE id=?', [storeId]) : null;
+    if (!allStores && !store) return res.status(400).json({ error: '请选择有效门店' });
+    const date = String(req.query.date || '').slice(0, 10);
+    const month = String(req.query.month || '').slice(0, 7);
+    // 区间查询（单店月度页与批量页共用）：先校验格式，排除非法值被当日期比较
+    const dateFrom = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date_from || '')) ? String(req.query.date_from) : '';
+    const dateTo = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date_to || '')) ? String(req.query.date_to) : '';
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: '日期格式应为 YYYY-MM-DD' });
+    if (date) {
+      const row = db.queryOne('SELECT * FROM group_buy_daily_summaries WHERE store_id=? AND biz_date=?', [storeId, date]);
+      const previous = findPreviousSummary(storeId, date);
+      return res.json({ ok: true, record: mapGroupDailySummary(row ? row : { biz_date: date, store_id: storeId, store_name: store.store_name }, previous) });
+    }
+    const clauses = []; const values = [];
+    if (!allStores) { clauses.push('store_id=?'); values.push(storeId); }
+    if (month) { clauses.push("substr(biz_date,1,7)=?"); values.push(month); }
+    if (dateFrom) { clauses.push('biz_date>=?'); values.push(dateFrom); }
+    if (dateTo) { clauses.push('biz_date<=?'); values.push(dateTo); }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const rows = db.queryAll(`SELECT * FROM group_buy_daily_summaries ${where} ORDER BY biz_date DESC,store_id`, values);
+    // 按行取自己前一个自然日的记录：同一门店同日期只查一次库，避免批量页逐店往返。
+    const previousCache = new Map();
+    const previousOf = row => {
+      const key = `${row.store_id}:${row.biz_date}`;
+      if (!previousCache.has(key)) previousCache.set(key, findPreviousSummary(row.store_id, row.biz_date));
+      return previousCache.get(key);
+    };
+    res.json({ ok: true, records: rows.map(row => mapGroupDailySummary(row, previousOf(row))) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/business-analytics/group-buy/daily-summary', (req, res) => {
+  try {
+    const body = req.body || {};
+    const storeId = Number(body.store_id);
+    const date = String(body.biz_date || '').slice(0, 10);
+    const store = storeId ? db.queryOne('SELECT id,store_name FROM stores WHERE id=?', [storeId]) : null;
+    if (!store) return res.status(400).json({ error: '请选择有效门店' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: '日期格式应为 YYYY-MM-DD' });
+    const numeric = Object.fromEntries(GROUP_DAILY_NUMERIC_FIELDS.map(field => [field, groupDailyNumber(body[field], field)]));
+    const meituanRating = groupDailyRating(body.meituan_rating, '美团星级');
+    const douyinRating = groupDailyRating(body.douyin_rating, '抖音门店评分');
+    const meituanNegative = Math.floor(groupDailyNumber(body.meituan_negative_reviews, '美团今日差评'));
+    const douyinNegative = Math.floor(groupDailyNumber(body.douyin_negative_reviews, '抖音今日差评'));
+    const meituanReason = String(body.meituan_negative_reason || '').trim().slice(0, 300);
+    const douyinReason = String(body.douyin_negative_reason || '').trim().slice(0, 300);
+    db.run(`INSERT INTO group_buy_daily_summaries (biz_date,store_id,store_name,lighting_actual,checkin_actual,douyin_review_actual,meituan_review_actual,meituan_rating,meituan_negative_reviews,meituan_negative_reason,douyin_rating,douyin_negative_reviews,douyin_negative_reason,next_lighting_target,next_checkin_target,next_douyin_review_target,next_meituan_review_target,created_by,created_by_name,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now','localtime'))
+      ON CONFLICT(biz_date,store_id) DO UPDATE SET store_name=excluded.store_name,lighting_actual=excluded.lighting_actual,checkin_actual=excluded.checkin_actual,douyin_review_actual=excluded.douyin_review_actual,meituan_review_actual=excluded.meituan_review_actual,meituan_rating=excluded.meituan_rating,meituan_negative_reviews=excluded.meituan_negative_reviews,meituan_negative_reason=excluded.meituan_negative_reason,douyin_rating=excluded.douyin_rating,douyin_negative_reviews=excluded.douyin_negative_reviews,douyin_negative_reason=excluded.douyin_negative_reason,next_lighting_target=excluded.next_lighting_target,next_checkin_target=excluded.next_checkin_target,next_douyin_review_target=excluded.next_douyin_review_target,next_meituan_review_target=excluded.next_meituan_review_target,updated_at=datetime('now','localtime')`,
+      [date, storeId, store.store_name, numeric.lighting_actual, numeric.checkin_actual, numeric.douyin_review_actual, numeric.meituan_review_actual, meituanRating, meituanNegative, meituanReason, douyinRating, douyinNegative, douyinReason, numeric.next_lighting_target, numeric.next_checkin_target, numeric.next_douyin_review_target, numeric.next_meituan_review_target, req.user?.id || null, req.user?.display_name || req.user?.username || '']);
+    db.save();
+    const row = db.queryOne('SELECT * FROM group_buy_daily_summaries WHERE store_id=? AND biz_date=?', [storeId, date]);
+    const previous = findPreviousSummary(storeId, date);
+    res.json({ ok: true, record: mapGroupDailySummary(row, previous) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ===== 可维护推送通道 =====
+// 每个业务可维护自己的一套机器人和文案；未填写机器人时自动回退到企业设置的默认机器人。
+function getPushProfile(code) {
+  const cfg = loadConfig();
+  const profile = db.queryOne('SELECT * FROM push_profiles WHERE code=?', [code]);
+  if (!profile) return { code, name: code, description: '', webhook: '', webhook_name: '', content_template: '', image_template: '', enabled: 1, target_webhook: cfg.webhook || '', target_name: cfg.webhookName || '未命名企业微信群' };
+  return { ...profile, target_webhook: profile.webhook || cfg.webhook || '', target_name: profile.webhook_name || cfg.webhookName || '未命名企业微信群' };
+}
+function renderPushTemplate(template, values) {
+  return String(template || '').replace(/\{\{(title|date|store_count|body)\}\}/g, (_, key) => String(values[key] ?? ''));
+}
+app.get('/api/push/profiles', (req, res) => {
+  try {
+    const cfg = loadConfig();
+    const profiles = db.queryAll('SELECT * FROM push_profiles ORDER BY id').map(profile => ({
+      ...profile,
+      configured: Boolean(profile.webhook || cfg.webhook),
+      target_name: profile.webhook_name || cfg.webhookName || '未命名企业微信群',
+      supported_message_types: ['markdown', 'image'],
+    }));
+    res.json({ ok: true, profiles });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/push/profiles/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id); const existing = db.queryOne('SELECT * FROM push_profiles WHERE id=?', [id]);
+    if (!existing) return res.status(404).json({ error: '推送通道不存在' });
+    const body = req.body || {};
+    const name = String(body.name ?? existing.name).trim().slice(0, 60);
+    if (!name) return res.status(400).json({ error: '请填写推送功能名称' });
+    const description = String(body.description ?? existing.description ?? '').trim().slice(0, 300);
+    const webhook = String(body.webhook ?? existing.webhook ?? '').trim().slice(0, 1000);
+    const webhookName = String(body.webhook_name ?? existing.webhook_name ?? '').trim().slice(0, 80);
+    const contentTemplate = String(body.content_template ?? existing.content_template ?? '').trim().slice(0, 5000);
+    const imageTemplate = String(body.image_template ?? existing.image_template ?? '').trim().slice(0, 600);
+    const enabled = body.enabled === undefined ? Number(existing.enabled) : (body.enabled ? 1 : 0);
+    db.run('UPDATE push_profiles SET name=?,description=?,webhook=?,webhook_name=?,content_template=?,image_template=?,enabled=?,updated_at=datetime(\'now\',\'localtime\') WHERE id=?', [name, description, webhook, webhookName, contentTemplate, imageTemplate, enabled, id]);
+    db.save();
+    res.json({ ok: true, profile: getPushProfile(existing.code) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ===== 团购每日总结 · 企业微信日报推送 =====
+// 推送只读取已经保存的每日总结；前端可先预览，确认后才调用已配置的群机器人。
+function buildGroupBuyDailyPushPayload(body = {}) {
+  const bizDate = String(body.biz_date || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(bizDate)) throw new Error('请选择日报日期');
+  const requestedIds = [...new Set((Array.isArray(body.store_ids) ? body.store_ids : []).map(Number).filter(Number.isFinite))];
+  const clauses = ['biz_date=?']; const values = [bizDate];
+  if (requestedIds.length) { clauses.push(`store_id IN (${requestedIds.map(() => '?').join(',')})`); values.push(...requestedIds); }
+  const records = db.queryAll(`SELECT * FROM group_buy_daily_summaries WHERE ${clauses.join(' AND ')} ORDER BY store_name,store_id`, values)
+    .map(row => mapGroupDailySummary(row, findPreviousSummary(row.store_id, row.biz_date)));
+  const rate = value => `${(Number(value || 0) * 100).toFixed(0)}%`;
+  const rating = value => value == null || value === '' ? '—' : Number(value).toFixed(1);
+  const lines = [];
+  records.forEach((row, index) => {
+    const negative = [];
+    if (Number(row.meituan_negative_reviews)) negative.push(`美团差评 ${row.meituan_negative_reviews}${row.meituan_negative_reason ? `（${row.meituan_negative_reason}）` : ''}`);
+    if (Number(row.douyin_negative_reviews)) negative.push(`抖音差评 ${row.douyin_negative_reviews}${row.douyin_negative_reason ? `（${row.douyin_negative_reason}）` : ''}`);
+    lines.push(`### ${index + 1}. ${row.store_name || `门店 ${row.store_id}`}`);
+    lines.push(`抖音：点亮 **${row.lighting_actual}/${row.targets.lighting ?? '—'}**（${rate(row.rates.lighting)}）　好评 **${row.douyin_review_actual}/${row.targets.douyin_review ?? '—'}**（${rate(row.rates.douyin_review)}）　评分 **${rating(row.douyin_rating)}**`);
+    lines.push(`美团：打卡 **${row.checkin_actual}/${row.targets.checkin ?? '—'}**（${rate(row.rates.checkin)}）　好评 **${row.meituan_review_actual}/${row.targets.meituan_review ?? '—'}**（${rate(row.rates.meituan_review)}）　星级 **${rating(row.meituan_rating)}**`);
+    lines.push(negative.length ? `<font color="warning">${negative.join('；')}</font>` : '<font color="info">今日暂无差评记录</font>');
+    lines.push('');
+  });
+  if (!records.length) lines.push('> 当日没有已保存的门店总结，未生成推送内容。');
+  const ratings = key => records.map(row => Number(row[key])).filter(Number.isFinite);
+  const average = values => values.length ? Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)) : null;
+  const summary = { store_count: records.length, meituan_negative_reviews: records.reduce((sum, row) => sum + Number(row.meituan_negative_reviews || 0), 0), douyin_negative_reviews: records.reduce((sum, row) => sum + Number(row.douyin_negative_reviews || 0), 0), meituan_rating: average(ratings('meituan_rating')), douyin_rating: average(ratings('douyin_rating')) };
+  const profile = getPushProfile('group_buy_daily');
+  const title = profile.name || '团购运营日报';
+  const fallbackTemplate = '## {{title}}\n> 日期：{{date}}　|　已汇报门店：**{{store_count}}** 家\n\n{{body}}';
+  const templateValues = { title, date: bizDate, store_count: summary.store_count, body: lines.join('\n') };
+  const markdown = renderPushTemplate(profile.content_template || fallbackTemplate, templateValues);
+  // 团购每日总结默认发送图卡；通道配置中的图片文案只负责卡片标题/注释，不再决定是否渲染图片。
+  const imageContent = profile.image_template ? renderPushTemplate(profile.image_template, templateValues) : '团购每日总结日报';
+  return { biz_date: bizDate, records, markdown, image_content: imageContent, summary, profile: { id: profile.id || null, code: profile.code, name: title, image_template: profile.image_template || '', enabled: Boolean(profile.enabled) }, target: { configured: Boolean(profile.target_webhook), name: profile.target_name } };
+}
+app.post('/api/push/group-buy-daily/preview', (req, res) => {
+  try {
+    const payload = buildGroupBuyDailyPushPayload(req.body || {});
+    res.json({ ok: true, ...payload });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/push/group-buy-daily/send', async (req, res) => {
+  try {
+    const payload = buildGroupBuyDailyPushPayload(req.body || {});
+    const profile = getPushProfile('group_buy_daily');
+    if (!profile.enabled) return res.status(400).json({ error: '团购每日总结日报通道已停用，请在一键推送中启用后再发送' });
+    if (!profile.target_webhook) return res.status(400).json({ error: '请先在「一键推送 → 推送通道配置」或企业设置中配置目标群的 Webhook 地址' });
+    if (!payload.records.length) return res.status(400).json({ error: '当前日期没有已保存的门店总结，不能发送空日报' });
+    // 一张图片只展示一家门店：批量请求也逐店发图。团购日报只保留图卡，避免群内重复出现文字版。
+    if (payload.image_content) {
+      const [imageTitle, ...footer] = payload.image_content.split(/\r?\n/);
+      for (const record of payload.records) {
+        const image = drawGroupBuyDailyPushCard({ imageTitle, imageFooter: footer.join(' · '), bizDate: payload.biz_date, records: [record] });
+        const imageResult = await httpPost(profile.target_webhook, { msgtype: 'image', image: { base64: image.base64, md5: crypto.createHash('md5').update(image.buffer).digest('hex') } });
+        if (imageResult.errcode !== 0) throw new Error(`企业微信图片发送失败: [${imageResult.errcode}] ${imageResult.errmsg || '未知错误'}`);
+      }
+    }
+    db.run('INSERT INTO push_logs (push_type,target,content_preview,status) VALUES (?,?,?,?)', ['group_buy_daily', profile.target_name || '企业微信群', `${payload.biz_date} 团购运营日报（${payload.records.length}家门店）`, 'success']);
+    db.save();
+    res.json({ ok: true, message: `团购运营日报已推送至「${profile.target_name || '企业微信群'}」`, target: profile.target_name || '企业微信群', summary: payload.summary });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -4956,18 +5297,36 @@ app.get('/api/bot/status', (_req, res) => {
   // 让总数据视角和外卖视角使用一致的第三方来源。
   businessAnalytics.rebuildJdRevenueFromOperation(db);
 
-  // 确保 admin 用户存在且密码正确（兼容旧数据库）；
-  // 不再自动补种 agent 等测试账号——人员管理以实际维护的账号为准。
+  // 初始化可编辑的岗位基础档案；已有库只补缺失项，不覆盖运营维护过的权限。
+  (function ensureDefaultPositions() {
+    const defaults = [
+      ['系统管理员', '拥有全部系统权限，可维护岗位与人员。', ['*']],
+      ['运营专员', '查看经营数据、处理平台数据和协同事项。', ['dashboard.view', 'analysis.view', 'data-import.manage', 'collab.manage']],
+      ['门店店长', '处理门店和菜品日常资料。', ['dashboard.view', 'store.manage', 'menu.manage', 'staff.view']],
+      ['财务人员', '处理成本、记账和经营数据。', ['dashboard.view', 'analysis.view', 'cost.manage', 'bookkeeping.manage']],
+    ];
+    defaults.forEach(([name, description, permissions]) => {
+      if (!db.queryOne('SELECT id FROM position_settings WHERE name=?', [name])) {
+        db.insert('INSERT INTO position_settings (name,description,permissions_json,is_system) VALUES (?,?,?,1)', [name, description, JSON.stringify(permissions)]);
+      }
+    });
+    const adminPosition = db.queryOne("SELECT id FROM position_settings WHERE name='系统管理员'");
+    if (adminPosition) db.run("UPDATE users SET position_id=?,role='系统管理员' WHERE role='管理员' AND position_id IS NULL", [adminPosition.id]);
+    // 旧账号若已分配岗位，统一回写历史 role 字段，保证所有模块都只看到岗位名称。
+    db.run('UPDATE users SET role=(SELECT name FROM position_settings WHERE id=users.position_id) WHERE position_id IS NOT NULL');
+    db.save();
+  })();
+
+  // 确保 admin 用户存在；管理员身份完全由“系统管理员”岗位承载。
   (function ensureUsers() {
     const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
     const adminHash = md5('admin123');
     const admin = db.queryOne("SELECT * FROM users WHERE username='admin'");
     if (!admin) {
-      db.insert("INSERT INTO users (username,password_hash,role,display_name) VALUES ('admin',?,'管理员','系统管理员')", [adminHash]);
-    } else if (admin.role !== '管理员') {
-      // 仅修复角色，不覆盖用户自行设置的账号名称、头像或密码。
-      db.run("UPDATE users SET role='管理员' WHERE username='admin'");
+      db.insert("INSERT INTO users (username,password_hash,role,display_name) VALUES ('admin',?,'系统管理员','系统管理员')", [adminHash]);
     }
+    const adminPosition = db.queryOne("SELECT id FROM position_settings WHERE name='系统管理员'");
+    if (adminPosition) db.run("UPDATE users SET position_id=?,role='系统管理员' WHERE username='admin'", [adminPosition.id]);
     db.save();
   })();
 
