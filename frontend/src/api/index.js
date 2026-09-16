@@ -63,6 +63,10 @@ export const tablePipeline = (data) => http.post('/api/wechat/table/pipeline', d
 
 // ===== 日报推送 =====
 export const sendReport = (data) => http.post('/api/wechat/report/send', data)
+export const previewGroupBuyDailyPush = (data) => http.post('/api/push/group-buy-daily/preview', data)
+export const sendGroupBuyDailyPush = (data) => http.post('/api/push/group-buy-daily/send', data)
+export const getPushProfiles = () => http.get('/api/push/profiles')
+export const updatePushProfile = (id, data) => http.put(`/api/push/profiles/${id}`, data)
 
 // ===== 仪表盘 =====
 export const getDashboardStats = () => http.get('/api/dashboard/stats')
@@ -145,6 +149,10 @@ export const updateUserPassword = (id, password) => http.put(`/api/users/${id}/p
 export const uploadUserAvatar = (id, data) => http.post(`/api/users/${id}/avatar`, { data })
 export const deleteUserAvatar = (id) => http.delete(`/api/users/${id}/avatar`)
 export const deleteUser = (id) => http.delete(`/api/users/${id}`)
+export const getPositions = () => http.get('/api/positions')
+export const createPosition = (data) => http.post('/api/positions', data)
+export const updatePosition = (id, data) => http.put(`/api/positions/${id}`, data)
+export const deletePosition = (id) => http.delete(`/api/positions/${id}`)
 
 // ===== 菜品管理 =====
 export const getMenuItems = (params) => http.get('/api/menu', { params })
@@ -215,6 +223,17 @@ export const getSalesAnalysis = () => http.get('/api/analysis/sales')
 export const getMonthlyOperatingDashboard = (params) => http.get('/api/analysis/monthly-operating-dashboard', { params })
 export const getBusinessAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/views/${scope}`, { params })
 export const getMeituanOperation = (params) => http.get('/api/business-analytics/meituan-operation', { params })
+export const getGroupBuyDailySummary = (params) => http.get('/api/business-analytics/group-buy/daily-summary', { params })
+// all=1 直接写进 URL：不依赖 params 序列化与合并顺序，避免请求丢掉 all 后
+// 被后端判成「既没给门店也没要全量」而报“请选择有效门店”。
+export const getAllGroupBuyDailySummaries = (params = {}) => {
+  const query = { ...params, all: '1' }
+  // 去掉 undefined/null/空串：axios 不会发送这些键，但手写查询串会把它们变成
+  // "store_id=undefined" 之类的脏值，后端判定门店无效就会报“请选择有效门店”。
+  const search = new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null && value !== '')).toString()
+  return http.get(`/api/business-analytics/group-buy/daily-summary?${search}`)
+}
+export const saveGroupBuyDailySummary = (data) => http.put('/api/business-analytics/group-buy/daily-summary', data)
 export const getDeliveryExternalExpenses = (params) => http.get('/api/business-analytics/external-expenses', { params })
 export const createDeliveryExternalExpense = (data) => http.post('/api/business-analytics/external-expenses', data)
 export const saveDeliveryExternalExpenseDaily = (data) => http.put('/api/business-analytics/external-expenses/daily', data)
