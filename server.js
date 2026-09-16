@@ -100,8 +100,8 @@ const positionGuard = positionPermissions.createGuard({
 });
 app.use((req, res, next) => {
   if (!req.path.startsWith('/api/') || req.path.startsWith('/api/mp/')) return next();
-  const required = positionPermissions.requiredPermission(req.path);
-  if (!required) return next(); // 未收录的接口：登录即可
+  const required = positionPermissions.requiredPermission(req.path, req.method);
+  if (!required) return next(); // 未收录或显式放行的接口：登录即可
   return positionGuard(req, res, next);
 });
 
