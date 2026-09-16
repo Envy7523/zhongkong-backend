@@ -170,6 +170,11 @@
         </el-button>
         <span class="topbar-title">{{ pageTitle }}</span>
         <span :class="['topbar-status', store.serverOnline ? 'online' : 'offline']">{{ store.serverStatusText }}</span>
+        <el-tooltip :content="isDarkTheme ? '切换到日间模式' : '切换到夜间模式'" placement="bottom">
+          <button class="theme-toggle" type="button" :aria-label="isDarkTheme ? '切换到日间模式' : '切换到夜间模式'" @click="toggleTheme">
+            <span class="theme-toggle-orb"><el-icon class="theme-icon sun"><Sunny /></el-icon><el-icon class="theme-icon moon"><Moon /></el-icon></span>
+          </button>
+        </el-tooltip>
         <el-dropdown v-if="auth.user" trigger="click" class="topbar-account">
           <button class="topbar-account-trigger" type="button">
             <img v-if="auth.user.avatar_url" :src="auth.user.avatar_url" class="topbar-avatar" alt="" />
@@ -181,11 +186,32 @@
           </button>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item :icon="Setting" @click="openProfileSettings">个人设置</el-dropdown-item>
               <el-dropdown-item :icon="SwitchButton" divided @click="handleLogout">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
       </div>
+
+      <el-dialog v-model="profileDialog.visible" title="个人设置" width="520px" class="profile-settings-dialog" destroy-on-close>
+        <div class="profile-settings-head">
+          <el-avatar :size="64" :src="profileDialog.preview || auth.user?.avatar_url" class="profile-settings-avatar">{{ userInitial }}</el-avatar>
+          <div><b>{{ profileDialog.form.display_name || profileDialog.form.username || '当前用户' }}</b><small>头像、账号和密码仅影响当前登录账号</small></div>
+          <div class="profile-avatar-actions">
+            <el-upload accept="image/png,image/jpeg,image/webp" :show-file-list="false" :auto-upload="false" :on-change="handleProfileAvatarChange"><el-button size="small">更换头像</el-button></el-upload>
+            <el-button v-if="profileDialog.preview || auth.user?.avatar_url" size="small" text type="danger" @click="clearProfileAvatar">移除</el-button>
+          </div>
+        </div>
+        <el-form label-position="top" class="profile-settings-form" @submit.prevent>
+          <el-form-item label="账号"><el-input v-model.trim="profileDialog.form.username" maxlength="50" autocomplete="username" /></el-form-item>
+          <el-form-item label="姓名 / 显示名称"><el-input v-model.trim="profileDialog.form.display_name" maxlength="50" /></el-form-item>
+          <el-divider>修改密码（如不修改可留空）</el-divider>
+          <el-form-item label="当前密码" :required="profileNeedsCurrentPassword"><el-input v-model="profileDialog.form.current_password" type="password" show-password autocomplete="current-password" placeholder="修改账号或密码时需要填写" /></el-form-item>
+          <el-form-item label="新密码"><el-input v-model="profileDialog.form.new_password" type="password" show-password autocomplete="new-password" placeholder="至少 6 位" /></el-form-item>
+          <el-form-item label="确认新密码"><el-input v-model="profileDialog.form.confirm_password" type="password" show-password autocomplete="new-password" /></el-form-item>
+        </el-form>
+        <template #footer><el-button @click="profileDialog.visible = false">取消</el-button><el-button type="primary" :loading="profileDialog.saving" @click="saveProfileSettings">保存设置</el-button></template>
+      </el-dialog>
 
       <div class="tab-bar-wrapper" v-if="store.tabs.length > 0">
         <div class="tab-bar">
@@ -222,10 +248,11 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { SwitchButton } from '@element-plus/icons-vue'
+import { Setting, SwitchButton } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
-import { getConfig } from '@/api'
+import { getConfig, updateMyProfile } from '@/api'
 import LoginView from '@/views/LoginView.vue'
 
 import DashboardView from '@/views/DashboardView.vue'
@@ -501,7 +528,10 @@ const dataImportRouteTabId = computed(() => ({
   delivery: 'data-import-delivery',
   legacy: 'data-import-legacy',
 }[router.currentRoute.value.meta.importMode] || 'data-import-pos'))
-const staffRouteTabId = computed(() => router.currentRoute.value.path.endsWith('/store-management') ? 'staff-management-store' : 'staff-management-employees')
+const staffRouteTabId = computed(() => ({
+  '/staff-management/store-management': 'staff-management-store',
+  '/staff-management/salary': 'staff-management-salary',
+}[router.currentRoute.value.path] || 'staff-management-employees'))
 const pageTitle = computed(() => {
   if (isCollabRoute.value) return '协同事项'
   if (isBusinessAnalyticsRoute.value) {
@@ -514,7 +544,7 @@ const pageTitle = computed(() => {
   if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
   if (isStore3dRoute.value) return '筹建门店 · 门店渲染'
   if (isDbViewerRoute.value) return '数据库查看'
-  if (isStaffManagementRoute.value) return staffRouteTabId.value === 'staff-management-store' ? '人事专区 · 门店管理' : '人事专区 · 员工管理'
+  if (isStaffManagementRoute.value) return ({ 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作' }[staffRouteTabId.value] || '人事专区 · 员工管理')
   if (isWorkspaceRoute.value) return store.activeTab?.title || '工作台'
   return store.activeTab?.title || '数据概括'
 })
@@ -532,6 +562,114 @@ const userInitial = computed(() => {
   const name = auth.user?.display_name || auth.user?.username || '用'
   return String(name).trim().slice(0, 1).toUpperCase()
 })
+
+const THEME_KEY = 'etaigong_theme'
+const isDarkTheme = ref(localStorage.getItem(THEME_KEY) === 'dark')
+function applyTheme(dark, animate = false) {
+  const root = document.documentElement
+  if (animate) root.classList.add('theme-switching')
+  root.classList.toggle('theme-dark', dark)
+  root.dataset.theme = dark ? 'dark' : 'light'
+  localStorage.setItem(THEME_KEY, dark ? 'dark' : 'light')
+  if (animate) window.setTimeout(() => root.classList.remove('theme-switching'), 460)
+}
+applyTheme(isDarkTheme.value)
+function toggleTheme(event) {
+  const nextDark = !isDarkTheme.value
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  if (!document.startViewTransition || reducedMotion) {
+    isDarkTheme.value = nextDark
+    applyTheme(nextDark, !reducedMotion)
+    return
+  }
+  const rect = event?.currentTarget?.getBoundingClientRect?.()
+  const originX = rect ? rect.left + rect.width / 2 : window.innerWidth - 48
+  const originY = rect ? rect.top + rect.height / 2 : 28
+  const radius = Math.hypot(Math.max(originX, window.innerWidth - originX), Math.max(originY, window.innerHeight - originY))
+  const root = document.documentElement
+  root.style.setProperty('--theme-ripple-x', `${originX}px`)
+  root.style.setProperty('--theme-ripple-y', `${originY}px`)
+  root.style.setProperty('--theme-ripple-radius', `${radius}px`)
+  let viewTransition
+  try {
+    viewTransition = document.startViewTransition(() => {
+      isDarkTheme.value = nextDark
+      applyTheme(nextDark)
+    })
+  } catch {
+    isDarkTheme.value = nextDark
+    applyTheme(nextDark, true)
+    return
+  }
+  viewTransition.ready.then(() => root.classList.add('theme-ripple')).catch(() => {})
+  viewTransition.finished.finally(() => root.classList.remove('theme-ripple'))
+}
+
+const profileDialog = reactive({
+  visible: false,
+  saving: false,
+  preview: '',
+  avatarData: '',
+  removeAvatar: false,
+  originalUsername: '',
+  form: { username: '', display_name: '', current_password: '', new_password: '', confirm_password: '' },
+})
+const profileNeedsCurrentPassword = computed(() =>
+  profileDialog.form.username !== profileDialog.originalUsername || Boolean(profileDialog.form.new_password),
+)
+function openProfileSettings() {
+  const user = auth.user || {}
+  profileDialog.visible = true
+  profileDialog.preview = ''
+  profileDialog.avatarData = ''
+  profileDialog.removeAvatar = false
+  profileDialog.originalUsername = user.username || ''
+  profileDialog.form = { username: user.username || '', display_name: user.display_name || user.username || '', current_password: '', new_password: '', confirm_password: '' }
+}
+function handleProfileAvatarChange(uploadFile) {
+  const file = uploadFile?.raw
+  if (!file) return
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 2 * 1024 * 1024) {
+    ElMessage.warning('请选择 PNG、JPG 或 WebP 格式且不超过 2MB 的头像')
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    profileDialog.preview = String(reader.result || '')
+    profileDialog.avatarData = profileDialog.preview
+    profileDialog.removeAvatar = false
+  }
+  reader.readAsDataURL(file)
+}
+function clearProfileAvatar() {
+  profileDialog.preview = ''
+  profileDialog.avatarData = ''
+  profileDialog.removeAvatar = true
+}
+async function saveProfileSettings() {
+  const form = profileDialog.form
+  if (!form.username || !form.display_name) { ElMessage.warning('请填写账号和显示名称'); return }
+  if (form.new_password && form.new_password !== form.confirm_password) { ElMessage.warning('两次输入的新密码不一致'); return }
+  if (profileNeedsCurrentPassword.value && !form.current_password) { ElMessage.warning('修改账号或密码前，请填写当前密码'); return }
+  profileDialog.saving = true
+  try {
+    const result = await updateMyProfile({
+      username: form.username,
+      display_name: form.display_name,
+      current_password: form.current_password,
+      new_password: form.new_password,
+      avatar_data: profileDialog.avatarData || undefined,
+      remove_avatar: profileDialog.removeAvatar,
+    })
+    auth.updateSession(result)
+    profileDialog.visible = false
+    ElMessage.success('个人设置已保存')
+  } catch (error) {
+    ElMessage.error(error.message || '个人设置保存失败')
+  } finally {
+    profileDialog.saving = false
+  }
+}
 
 function handleLogout() {
   auth.logout()
@@ -664,6 +802,15 @@ async function selectPopupItem(index) {
     popupMenu.sections = []
     return
   }
+  if (index.startsWith('staff-management-')) {
+    store.openTabFromId(index)
+    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary' }[index]
+    await router.push(routePath || '/staff-management/employees')
+    popupMenu.visible = false
+    popupMenu.group = null
+    popupMenu.sections = []
+    return
+  }
   await openWorkspaceTab(index)
   popupMenu.visible = false
   popupMenu.group = null
@@ -747,6 +894,12 @@ async function selectTab(id) {
       'data-import-legacy': '/data-import/legacy',
     }[id]
     await router.push(routePath)
+    return
+  }
+  if (id.startsWith('staff-management-')) {
+    store.activeTabId = id
+    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary' }[id]
+    await router.push(routePath || '/staff-management/employees')
     return
   }
   const routePath = WORKSPACE_TAB_ROUTES[id]

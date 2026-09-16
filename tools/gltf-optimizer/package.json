@@ -1,0 +1,16 @@
+{
+  "name": "gltf-optimizer",
+  "private": true,
+  "version": "1.0.0",
+  "description": "门店 GLB 离线压缩工具（独立依赖，刻意不装进项目根 package.json）",
+  "type": "module",
+  "scripts": {
+    "optimize": "node optimize.js"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "^4.5.0",
+    "@gltf-transform/extensions": "^4.5.0",
+    "@gltf-transform/functions": "^4.5.0",
+    "meshoptimizer": "^1.2.0"
+  }
+}

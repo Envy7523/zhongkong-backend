@@ -41,5 +41,10 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
   }
 
-  return { token, user, initialized, isLoggedIn, isAdmin, login, init, logout }
+  function updateSession(session) {
+    if (session?.token) setToken(session.token)
+    if (session?.user) user.value = session.user
+  }
+
+  return { token, user, initialized, isLoggedIn, isAdmin, login, init, logout, updateSession }
 })

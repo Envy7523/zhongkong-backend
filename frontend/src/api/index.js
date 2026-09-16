@@ -32,6 +32,7 @@ http.interceptors.response.use(
 // ===== 认证 =====
 export const login = (username, password) => http.post('/api/auth/login', { username, password })
 export const getMe = () => http.get('/api/auth/me')
+export const updateMyProfile = (data) => http.put('/api/auth/profile', data)
 
 // ===== 配置 =====
 export const getConfig = () => http.get('/api/config')
@@ -75,6 +76,29 @@ export const deleteStore = (id) => http.delete(`/api/db/stores/${id}`)
 export const getStorePlatforms = () => http.get('/api/store-platforms')
 export const saveStorePlatforms = (storeId, platforms) => http.put(`/api/stores/${storeId}/platforms`, { platforms })
 export const resolveStorePlatform = (params) => http.get('/api/store-platforms/resolve', { params })
+
+// ===== 门店 GLB 模型（分片上传 + 断点续传）=====
+// 模型文件存在服务端磁盘上，库里只存元数据；下载走 JWT 鉴权接口。
+// 100MB+ 的文件必须分片传：单片失败只重传一片，且前端把 upload_id 记在 localStorage，
+// 关掉页面再回来能接着传（服务端以磁盘上的 .part 文件为准判断已收到哪些片）。
+export const listStoreModels = () => http.get('/api/store-models')
+export const getStoreModel = (storeId) => http.get(`/api/stores/${storeId}/model`)
+export const getStoreModelAnnotations = (modelId) => http.get(`/api/store-models/${modelId}/annotations`)
+export const createStoreModelAnnotation = (modelId, data) => http.post(`/api/store-models/${modelId}/annotations`, data)
+export const deleteStoreModelAnnotation = (modelId, annotationId) => http.delete(`/api/store-models/${modelId}/annotations/${annotationId}`)
+export const initStoreModelUpload = (data) => http.post('/api/store-models/uploads', data)
+export const getStoreModelUploadState = (uploadId) => http.get(`/api/store-models/uploads/${uploadId}`)
+// 单片可能要传几十秒，这里关掉全局 30s 超时，交给 axios 自身的进度事件
+export const uploadStoreModelChunk = (uploadId, index, blob, onProgress) => http.put(
+  `/api/store-models/uploads/${uploadId}/chunks/${index}`,
+  blob,
+  { headers: { 'Content-Type': 'application/octet-stream' }, timeout: 0, onUploadProgress: onProgress }
+)
+export const completeStoreModelUpload = (uploadId) => http.post(`/api/store-models/uploads/${uploadId}/complete`, null, { timeout: 0 })
+export const abortStoreModelUpload = (uploadId) => http.delete(`/api/store-models/uploads/${uploadId}`)
+export const deleteStoreModel = (id) => http.delete(`/api/store-models/${id}`)
+export const getStoreModelPurge = () => http.get('/api/store-models/maintenance/orphans')
+export const purgeStoreModelOrphans = (dryRun = true) => http.post('/api/store-models/maintenance/purge', { dry_run: dryRun })
 
 // ===== 自定义门店区域 =====
 export const getStoreRegions = () => http.get('/api/store-regions')
@@ -154,12 +178,12 @@ export const savePoultryDishUsage = (menuItemId, rows) => http.put(`/api/poultry
 export const batchSavePoultryDishUsage = (data) => http.post('/api/poultry/dish-usage/batch', data)
 export const getPoultryConfiguredMenus = () => http.get('/api/poultry/dish-usage/configured')
 export const getPoultryAccounting = (params) => http.get('/api/poultry/accounting', { params })
-export const getPoultryPurchaseComparison = (params) => http.get('/api/poultry/accounting/purchase-comparison', { params })
-// 采购校准：模型理论只数 vs 门店录入的实际只数（MAPE），用于评价参数好坏（每条都要跑一次核算，故放宽超时）
+export const getPoultryConsumptionComparison = (params) => http.get('/api/poultry/accounting/consumption-comparison', { params })
+// 消耗校准：模型理论只数 vs 门店录入的实际消耗只数（MAPE），用于评价参数好坏（每条都要跑一次核算，故放宽超时）
 export const getPoultryCalibration = (params) => http.get('/api/poultry/calibration', { params, timeout: 180000 })
-export const getPoultryPurchases = (params) => http.get('/api/poultry/purchases', { params })
-export const savePoultryPurchase = (data) => http.post('/api/poultry/purchases', data)
-export const deletePoultryPurchase = (id) => http.delete(`/api/poultry/purchases/${id}`)
+export const getPoultryConsumption = (params) => http.get('/api/poultry/consumption', { params })
+export const savePoultryConsumption = (data) => http.post('/api/poultry/consumption', data)
+export const deletePoultryConsumption = (id) => http.delete(`/api/poultry/consumption/${id}`)
 export const getPoultryTemplate = () => http.get('/api/poultry/template')
 export const importPoultryWorkbook = (data) => http.post('/api/poultry/import', data, { timeout: 120000 })
 // 禽类菜范围（覆盖率分母口径：哪些菜算禽类菜，用户可维护）
@@ -191,6 +215,10 @@ export const getSalesAnalysis = () => http.get('/api/analysis/sales')
 export const getMonthlyOperatingDashboard = (params) => http.get('/api/analysis/monthly-operating-dashboard', { params })
 export const getBusinessAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/views/${scope}`, { params })
 export const getMeituanOperation = (params) => http.get('/api/business-analytics/meituan-operation', { params })
+export const getDeliveryExternalExpenses = (params) => http.get('/api/business-analytics/external-expenses', { params })
+export const createDeliveryExternalExpense = (data) => http.post('/api/business-analytics/external-expenses', data)
+export const saveDeliveryExternalExpenseDaily = (data) => http.put('/api/business-analytics/external-expenses/daily', data)
+export const deleteDeliveryExternalExpense = (id) => http.delete(`/api/business-analytics/external-expenses/${id}`)
 export const getBusinessProductAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/products/${scope}`, { params })
 export const getBusinessProductMappings = (scope = 'overview', params) => http.get(`/api/business-analytics/mappings/${scope}`, { params })
 export const saveBusinessProductMapping = (data) => http.put('/api/business-analytics/mappings', data)
@@ -201,6 +229,8 @@ export const getSpecLinks = (params) => http.get('/api/business-analytics/spec-l
 export const saveSpecLinks = (data) => http.put('/api/business-analytics/spec-links', data)
 export const deleteSpecLinks = (params) => http.delete('/api/business-analytics/spec-links', { params })
 export const autoBindBusinessProductMappings = (scope) => http.post('/api/business-analytics/mappings/auto-bind', { scope })
+// 与「堂食菜品绑定」的「智能采用全部推荐」同款：只采用精确命中的推荐
+export const adoptBusinessProductRecommendations = (scope) => http.post('/api/business-analytics/mappings/adopt-recommendations', { scope })
 export const previewAutoBindBusinessProductMappings = (scope) => http.post('/api/business-analytics/mappings/auto-bind/preview', { scope })
 export const executeAutoBindBusinessProductMappings = (data) => http.post('/api/business-analytics/mappings/auto-bind/execute', data)
 export const getBusinessDiagnosis = (params) => http.get('/api/business-analytics/diagnoses', { params })
@@ -217,6 +247,8 @@ export const getBusinessTemplate = (sourceType) => http.get('/api/business-analy
 
 // ===== 菜品销售分析 =====
 export const getDishSalesAnalytics = (params) => http.get('/api/dish-sales/analytics', { params })
+// 合并口径：双表按区间分段 + 按标准菜品聚合（总视角「菜品销售分析」用）
+export const getMergedDishAnalytics = (params) => http.get('/api/dish-sales/dish-analytics', { params })
 export const getDishSales = (params) => http.get('/api/dish-sales', { params })
 export const getDishSalesStats = () => http.get('/api/dish-sales/stats')
 export const getDishSalesMappings = (params) => http.get('/api/dish-sales/mappings', { params })
@@ -296,6 +328,18 @@ export const getStaffStats = (params) => http.get('/api/staff/stats', { params }
 export const createStaff = (data) => http.post('/api/staff', data)
 export const importStaffWorkbook = (data) => http.post('/api/staff/import', data)
 export const updateStaff = (id, data) => http.put(`/api/staff/${id}`, data)
+export const getStaffLifecycle = (id) => http.get(`/api/staff/${id}/lifecycle`)
+export const getStaffSalaryProfile = (id) => http.get(`/api/staff/${id}/salary-profile`)
+export const saveStaffSalaryProfile = (id, data) => http.put(`/api/staff/${id}/salary-profile`, data)
+export const generateStaffPayrollSheet = (data) => http.post('/api/staff/payroll-sheet', data, { responseType: 'blob', timeout: 120000 })
+export const getPayrollSheets = () => http.get('/api/payroll-sheets')
+export const preparePayrollSheet = (data) => http.post('/api/payroll-sheets/prepare', data)
+export const getPayrollSheet = (id) => http.get(`/api/payroll-sheets/${id}`)
+export const savePayrollSheet = (id, data) => http.put(`/api/payroll-sheets/${id}`, data)
+export const exportPayrollSheet = (id) => http.get(`/api/payroll-sheets/${id}/export`, { responseType: 'blob', timeout: 120000 })
+export const getDingTalkAttendanceStatus = () => http.get('/api/staff/dingtalk/status')
+export const syncDingTalkAttendance = (data) => http.post('/api/staff/dingtalk/sync', data)
+export const getStaffDingTalkAttendance = (id, params) => http.get(`/api/staff/${id}/dingtalk-attendance`, { params })
 export const seedStaff = () => http.post('/api/staff/seed')
 export const syncPullStaff = () => http.get('/api/staff/sync-pull')
 // 以机器人身份从企微智能表格读员工档案（无需自建应用 wedoc 权限）

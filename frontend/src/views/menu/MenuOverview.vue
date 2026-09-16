@@ -7,77 +7,150 @@
       :metrics="heroMetrics"
     />
 
-    <section class="metric-strip menu-health-strip">
-      <div class="metric-card metric-main"><span>全部菜品</span><strong>{{ items.length }}</strong><small>{{ categories.length }} 个分类 · {{ comboCount }} 个套餐</small></div>
-      <div class="metric-card"><span>在售档案</span><strong class="metric-success">{{ activeCount }}</strong><small>当前可用于销售和绑定</small></div>
-      <div class="metric-card"><span>多规格菜品</span><strong class="metric-success">{{ multiSpecDishCount }}</strong><small>同菜品下维护 2 个及以上规格</small></div>
-      <div class="metric-card"><span>标准规格</span><strong :class="specMissingCount ? 'metric-warning' : 'metric-success'">{{ specMissingCount }}</strong><small>尚未细分规格的菜品</small></div>
-    </section>
+    <div class="menu-archive-layout">
+      <!-- 左：分类栏（点分类即筛右侧明细） -->
+      <aside class="menu-category-rail">
+        <div class="rail-head">
+          <span>菜品分类</span>
+          <el-button link type="primary" @click="goCategoryPage">管理分类</el-button>
+        </div>
+        <button type="button" class="rail-item" :class="{ active: !categoryFilter }" @click="selectCategory('')">
+          <span class="rail-name">全部分类</span>
+          <span class="rail-count">{{ items.length }}</span>
+        </button>
+        <button
+          v-for="group in categoryStats" :key="group.name" type="button" class="rail-item"
+          :class="{ active: categoryFilter === group.name, empty: !group.count }" @click="selectCategory(group.name)"
+        >
+          <span class="rail-name">{{ group.name }}</span>
+          <span class="rail-count">{{ group.count }}</span>
+        </button>
+        <div class="rail-foot">
+          <div><span>在售档案</span><b>{{ activeCount }}</b></div>
+          <div><span>多规格菜品</span><b>{{ multiSpecDishCount }}</b></div>
+          <div><span>标准规格</span><b :class="{ warn: specMissingCount > 0 }">{{ specMissingCount }}</b></div>
+        </div>
+      </aside>
 
-    <section class="menu-panel">
-      <header class="menu-panel-header">
-        <div class="menu-panel-title menu-archive-title">
-          <div>
-            <h3>菜品档案</h3>
-            <span>名称与规格是各平台菜品绑定和销售分析的唯一依据</span>
+      <!-- 右：菜品明细 -->
+      <section class="menu-panel menu-archive-panel">
+        <header class="menu-panel-header">
+          <div class="menu-panel-title menu-archive-title">
+            <div>
+              <h3>{{ categoryFilter || '全部菜品' }}</h3>
+              <span>共 {{ filteredItems.length }} 条规格档案 · 在售 {{ filteredActiveCount }} · 套餐 {{ filteredComboCount }}</span>
+            </div>
           </div>
-        </div>
-        <div class="menu-filters">
-          <el-input v-model="search" clearable placeholder="搜索菜品名称、做法、SKU" class="wide-filter" @keyup.enter="currentPage = 1" />
-          <el-select v-model="categoryFilter" clearable placeholder="全部分类">
-            <el-option v-for="category in categories" :key="category" :label="category" :value="category" />
-          </el-select>
-          <el-segmented v-model="statusFilter" :options="statusOptions" class="archive-status-switch" />
-          <el-button plain @click="resetFilters">重置</el-button>
-          <el-button :loading="loading" @click="loadData">刷新</el-button><el-button type="primary" @click="openCreateDialog">＋ 新增菜品</el-button>
-        </div>
-      </header>
+          <div class="menu-filters">
+            <el-input v-model="search" clearable placeholder="搜索菜品名称、做法、编码" class="wide-filter" @keyup.enter="currentPage = 1" />
+            <el-segmented v-model="statusFilter" :options="statusOptions" class="archive-status-switch" />
+            <el-button plain @click="resetFilters">重置</el-button>
+            <el-button :loading="loading" @click="loadData">刷新</el-button>
+            <el-button type="primary" @click="openCreateDialog">＋ 新增菜品</el-button>
+          </div>
+        </header>
 
-      <el-table v-loading="loading" :data="paginatedItems" class="menu-data-table grouped-menu-table" row-key="id" @expand-change="loadRowExpansion">
-        <el-table-column type="expand" width="46">
-          <template #default="{ row }">
-            <div v-if="row.isGroup" class="variant-detail-panel">
-              <div class="variant-detail-heading"><span>规格明细</span><small>{{ row.variants.length }} 个独立规格，各自对应 SKU 与销售价格</small></div>
-              <div v-for="variant in row.variants" :key="variant.id" class="variant-detail-row">
-                <b>{{ specification(variant) }}</b><span>SKU：{{ variant.skuid || '未设置' }}</span><span>堂食 ¥{{ formatPrice(variant.dine_in_price || variant.price) }}</span><span>会员 ¥{{ formatPrice(variant.member_price) }}</span>
-                <el-button link type="primary" @click="openEditDialog(variant)">编辑该规格</el-button>
+        <el-table v-loading="loading" :data="paginatedItems" class="menu-data-table archive-flat-table" row-key="id">
+          <el-table-column label="序号" width="54" align="center">
+            <template #default="{ $index }">{{ rowNumber($index) }}</template>
+          </el-table-column>
+          <el-table-column label="菜品名称" min-width="200">
+            <template #default="{ row }">
+              <div class="archive-name-cell">
+                <b>{{ row.name }}</b>
+                <span v-if="row.item_type !== 'combo' && rowVariants(row).length > 1" class="spec-chip-list">
+                  <span v-for="variant in rowVariants(row).slice(0, 3)" :key="variant.id" class="spec-chip">{{ specification(variant) }}</span>
+                  <span v-if="rowVariants(row).length > 3" class="spec-chip muted">+{{ rowVariants(row).length - 3 }}</span>
+                </span>
+                <span v-else-if="row.item_type !== 'combo' && specification(row) !== '标准规格'" class="spec-chip">{{ specification(row) }}</span>
+                <span v-else-if="row.item_type === 'combo'" class="spec-chip soft">套餐</span>
+                <small v-if="row.method && row.method !== '/'">{{ row.method }}</small>
               </div>
-            </div>
-            <div v-else-if="row.item_type === 'combo'" class="combo-detail-panel" v-loading="comboExpandLoading[row.id]">
-              <template v-if="comboExpansion[row.id]">
-                <div class="variant-detail-heading"><span>套餐内容</span><small>固定组成与按规则可选的菜品</small></div>
-                <div v-if="fixedComboComponents(row).length" class="combo-detail-section"><b>固定组成</b><span v-for="component in fixedComboComponents(row)" :key="component.id" class="combo-detail-chip">{{ componentLabel(component) }} × {{ component.quantity }}</span></div>
-                <div v-for="group in choiceComboGroups(row)" :key="group.id" class="combo-detail-section choice"><b>{{ choiceGroupRuleLabel(group) }}</b><span v-for="component in group.items" :key="component.id" class="combo-detail-chip choice-chip">{{ componentLabel(component) }} × {{ component.quantity }}</span></div>
-                <div v-if="!comboExpansion[row.id].length" class="variant-detail-single">尚未配置套餐内容。</div>
-              </template>
-              <div v-else class="variant-detail-single">展开后加载套餐内容…</div>
-            </div>
-            <div v-else class="variant-detail-single">当前菜品仅有一个规格，可通过“编辑”直接添加更多规格。</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="菜品" min-width="230">
-          <template #default="{ row }"><div class="dish-name"><span :class="['dish-monogram', row.item_type === 'combo' ? 'combo-avatar' : '']">{{ dishLetter(row) }}</span><div><b>{{ row.name }}</b><small>{{ row.isGroup ? `${row.variants.length} 个规格 · 点击左侧展开查看` : (row.method && row.method !== '/' ? row.method : '标准做法') }}</small></div></div></template>
-        </el-table-column>
-        <el-table-column label="分类 / SKU" min-width="170"><template #default="{ row }"><span class="menu-category">{{ row.category || '未分类' }}</span><small class="sku-code">{{ row.isGroup ? `${row.variants.length} 个独立 SKU` : (row.skuid || '未设置 SKU') }}</small></template></el-table-column>
-        <el-table-column label="规格" min-width="220"><template #default="{ row }"><div v-if="row.isGroup" class="spec-chip-list"><span v-for="variant in row.variants.slice(0, 4)" :key="variant.id" class="spec-chip">{{ specification(variant) }}</span><span v-if="row.variants.length > 4" class="spec-chip muted">+{{ row.variants.length - 4 }}</span></div><span v-else>{{ specification(row) }}</span></template></el-table-column>
-        <el-table-column label="类型" width="86" align="center"><template #default="{ row }"><span :class="['type-pill', row.item_type === 'combo' ? 'combo' : 'dish']">{{ row.item_type === 'combo' ? '套餐' : '菜品' }}</span></template></el-table-column>
-        <el-table-column label="销售价格" min-width="175" align="right"><template #default="{ row }"><div class="price-stack"><span>堂食 <b>{{ groupPrice(row, 'dine') }}</b></span><span>会员 <b>{{ groupPrice(row, 'member') }}</b></span></div></template></el-table-column>
-        <el-table-column label="状态" width="100" align="center"><template #default="{ row }"><span :class="['status-pill', statusLabel(row) === '停售' ? 'off' : 'on']">{{ statusLabel(row) }}</span></template></el-table-column>
-        <el-table-column label="操作" width="145" fixed="right" align="right"><template #default="{ row }"><div class="row-actions"><el-button link type="primary" @click="openEditDialog(row)">编辑</el-button><el-button link type="danger" @click="removeItem(row)">删除</el-button></div></template></el-table-column>
-      </el-table>
-      <div v-if="!loading && groupedItems.length === 0" class="menu-empty">没有符合条件的菜品</div>
-      <footer class="menu-pagination-footer">
-        <span>筛选结果 {{ totalItems }} 个菜品组 / {{ filteredItems.length }} 个规格档案</span>
-        <el-pagination
-          v-model:current-page="currentPage"
-          v-model:page-size="pageSize"
-          :page-sizes="[10, 20, 50]"
-          :total="totalItems"
-          layout="total, sizes, prev, pager, next"
-          background
-        />
-      </footer>
-    </section>
+            </template>
+          </el-table-column>
+          <el-table-column label="菜品分类" min-width="96">
+            <template #default="{ row }"><span class="menu-category">{{ row.category || '未分类' }}</span></template>
+          </el-table-column>
+          <el-table-column label="菜品类型" width="84" align="center">
+            <template #default="{ row }"><span :class="['type-pill', row.item_type === 'combo' ? 'combo' : 'dish']">{{ row.item_type === 'combo' ? '套餐' : '普通菜' }}</span></template>
+          </el-table-column>
+          <el-table-column label="价格" width="106" align="right">
+            <template #default="{ row }"><span class="menu-price">{{ groupPrice(row) }}</span></template>
+          </el-table-column>
+          <el-table-column label="系统菜品编码" width="124">
+            <template #default="{ row }"><span class="code-cell">{{ row.spuid || '—' }}</span></template>
+          </el-table-column>
+          <el-table-column label="系统菜品规格编码" width="126">
+            <template #default="{ row }"><span class="code-cell" :title="groupSkuCodeTitle(row)">{{ groupSkuCode(row) }}</span></template>
+          </el-table-column>
+          <el-table-column label="会员价" width="96" align="right">
+            <template #default="{ row }"><span class="menu-price muted">{{ groupPrice(row, 'member') }}</span></template>
+          </el-table-column>
+          <el-table-column label="菜品状态" width="96" align="center">
+            <template #default="{ row }"><span :class="['status-pill', statusLabel(row) === '停售' ? 'off' : (statusLabel(row) === '部分停售' ? 'part' : 'on')]">{{ statusLabel(row) }}</span></template>
+          </el-table-column>
+          <el-table-column label="操作" width="168" fixed="right" align="right">
+            <template #default="{ row }">
+              <div class="row-actions">
+                <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
+                <el-button link :type="statusLabel(row) === '停售' ? 'success' : 'warning'" @click="toggleStatus(row)">{{ statusLabel(row) === '停售' ? '开售' : '停售' }}</el-button>
+                <el-dropdown trigger="click" @command="command => handleRowCommand(command, row)">
+                  <el-button link type="primary">更多<el-icon class="more-caret"><ArrowDown /></el-icon></el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item v-if="row.item_type === 'combo'" command="combo">查看套餐内容</el-dropdown-item>
+                      <el-dropdown-item v-else-if="rowVariants(row).length > 1" command="specs">查看全部规格（{{ rowVariants(row).length }}）</el-dropdown-item>
+                      <el-dropdown-item divided command="delete">删除{{ rowVariants(row).length > 1 ? '整个菜品' : '' }}</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-if="!loading && filteredItems.length === 0" class="menu-empty">没有符合条件的菜品</div>
+        <footer class="menu-pagination-footer">
+          <span>共 {{ filteredItems.length }} 条记录</span>
+          <el-pagination
+            v-model:current-page="currentPage"
+            v-model:page-size="pageSize"
+            :page-sizes="[10, 20, 50, 100]"
+            :total="totalItems"
+            layout="total, sizes, prev, pager, next"
+            background
+          />
+        </footer>
+      </section>
+    </div>
+
+    <!-- 「更多」里的查看弹窗：套餐内容 / 同菜品其他规格 -->
+    <el-dialog v-model="peekVisible" :title="peekTitle" width="min(760px, calc(100vw - 32px))" align-center class="menu-dialog">
+      <div v-if="peekKind === 'combo'" v-loading="peekLoading" class="peek-body">
+        <template v-if="peekComboRows">
+          <div v-if="fixedComboComponents(peekRow).length" class="combo-detail-section">
+            <b>固定组成</b>
+            <span v-for="component in fixedComboComponents(peekRow)" :key="component.id" class="combo-detail-chip">{{ componentLabel(component) }} × {{ component.quantity }}</span>
+          </div>
+          <div v-for="group in choiceComboGroups(peekRow)" :key="group.id" class="combo-detail-section choice">
+            <b>{{ choiceGroupRuleLabel(group) }}</b>
+            <span v-for="component in group.items" :key="component.id" class="combo-detail-chip choice-chip">{{ componentLabel(component) }} × {{ component.quantity }}</span>
+          </div>
+          <div v-if="!peekComboRows.length" class="variant-detail-single">尚未配置套餐内容。</div>
+        </template>
+        <div v-else class="variant-detail-single">加载中…</div>
+      </div>
+      <div v-else class="peek-body">
+        <div class="peek-spec-hint">同一菜品「{{ peekRow && peekRow.name }}」在 {{ peekRow && peekRow.category }} 下的全部规格：</div>
+        <el-table :data="siblingSpecs(peekRow)" size="small" border>
+          <el-table-column label="规格" min-width="110"><template #default="{ row }">{{ specification(row) }}</template></el-table-column>
+          <el-table-column label="价格" width="96" align="right"><template #default="{ row }">¥ {{ formatPrice(row.dine_in_price || row.price) }}</template></el-table-column>
+          <el-table-column label="规格编码" min-width="140"><template #default="{ row }">{{ row.skuid || '—' }}</template></el-table-column>
+          <el-table-column label="状态" width="80" align="center"><template #default="{ row }">{{ row.status || '在售' }}</template></el-table-column>
+          <el-table-column label="操作" width="90" align="center"><template #default="{ row }"><el-button link type="primary" @click="peekVisible = false; openEditDialog(row)">编辑</el-button></template></el-table-column>
+        </el-table>
+      </div>
+      <template #footer><el-button @click="peekVisible = false">关闭</el-button></template>
+    </el-dialog>
 
     <el-dialog v-model="dialogVisible" :title="editingId ? '编辑菜品档案' : '新增菜品档案'" width="min(820px, calc(100vw - 32px))" align-center class="menu-dialog menu-item-dialog">
       <el-form label-position="top">
@@ -141,7 +214,8 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowDown } from '@element-plus/icons-vue'
 import {
   createMenuItem,
   deleteMenuItem,
@@ -158,6 +232,7 @@ import { useMenuPagination } from './useMenuPagination'
 import './menu-theme.css'
 
 const route = useRoute()
+const router = useRouter()
 const items = ref([])
 const categoryNames = ref([])
 const loading = ref(false)
@@ -169,7 +244,10 @@ const dialogVisible = ref(false)
 const editingId = ref(null)
 const hadComponents = ref(false)
 const comboExpansion = ref({})
-const comboExpandLoading = ref({})
+const peekVisible = ref(false)
+const peekKind = ref('combo')
+const peekRow = ref(null)
+const peekLoading = ref(false)
 
 let variantSequence = 0
 function newVariant(data = {}) {
@@ -223,6 +301,11 @@ const heroMetrics = computed(() => [
   { label: '在售菜品', value: activeCount.value, tone: 'success' },
   { label: '多规格', value: multiSpecDishCount.value, tone: 'success' },
 ])
+/**
+ * 档案按「菜品」聚合展示：同分类同名的多个规格合并成一条（规格在名称旁直接可见、
+ * 也可点「更多 → 查看全部规格」或「编辑」维护）；套餐各自独立一条。
+ * 注意：合并只影响**展示**，每个规格仍是独立档案，绑定平台菜品时照旧按「菜品—规格」选。
+ */
 const groupedItems = computed(() => {
   const groups = new Map()
   filteredItems.value.forEach(item => {
@@ -235,14 +318,99 @@ const groupedItems = computed(() => {
     const primary = ordered[0]
     return {
       ...primary,
-      id: ordered.length > 1 ? `group:${primary.category || ''}:${primary.name}` : primary.id,
+      groupKey: ordered.length > 1 ? `group:${primary.category || ''}:${primary.name}` : `item:${primary.id}`,
       representative: primary,
       variants: ordered,
       isGroup: ordered.length > 1,
     }
   })
 })
-const { currentPage, pageSize, totalItems, paginatedItems } = useMenuPagination(groupedItems)
+const { currentPage, pageSize, totalItems, paginatedItems } = useMenuPagination(groupedItems, 20)
+
+/** 左侧分类栏：托管分类在前（按管理顺序），档案里出现但未托管的分类追加在后 */
+const categoryStats = computed(() => {
+  const counts = new Map()
+  items.value.forEach(item => {
+    const name = item.category || '未分类'
+    counts.set(name, (counts.get(name) || 0) + 1)
+  })
+  return categories.value.map(name => ({ name, count: counts.get(name) || 0 }))
+})
+const filteredActiveCount = computed(() => filteredItems.value.filter(item => (item.status || '在售') === '在售').length)
+const filteredComboCount = computed(() => filteredItems.value.filter(item => item.item_type === 'combo').length)
+
+/** 序号连续（跨页累加），一行 = 一个菜品（多规格合并为一行） */
+function rowNumber(index) { return (currentPage.value - 1) * pageSize.value + index + 1 }
+function selectCategory(name) {
+  categoryFilter.value = name
+  currentPage.value = 1
+}
+function goCategoryPage() { router.push('/menu-management/category') }
+/** 该行包含的规格列表（套餐只有自己一条） */
+function rowVariants(row) { return (row && row.variants) || (row ? [row] : []) }
+/** 同分类同名的其他规格（「更多 → 查看全部规格」用） */
+function siblingSpecs(row) {
+  if (!row || row.item_type === 'combo') return row ? [row] : []
+  return items.value.filter(item => item.item_type !== 'combo' && item.name === row.name && (item.category || '') === (row.category || ''))
+}
+/** 价格：多规格价格不同时显示区间 */
+function groupPrice(row, field = 'dine') {
+  const values = rowVariants(row).map(item => Number(field === 'dine' ? (item.dine_in_price || item.price) : item.member_price) || 0)
+  if (!values.length) return '—'
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  if (field === 'member' && max === 0) return '—'
+  return min === max ? `¥ ${formatPrice(min)}` : `¥ ${formatPrice(min)}–${formatPrice(max)}`
+}
+/** 状态：整组一致时显示该状态，混合时显示「部分停售」 */
+function statusLabel(row) {
+  const statuses = rowVariants(row).map(item => item.status || '在售')
+  return new Set(statuses).size === 1 ? statuses[0] : '部分停售'
+}
+/** 规格编码：单规格直接显示；多规格显示个数，鼠标悬停列出全部 */
+function groupSkuCode(row) {
+  const codes = rowVariants(row).map(item => String(item.skuid || '').trim()).filter(Boolean)
+  if (!codes.length) return '—'
+  if (codes.length === 1) return codes[0]
+  return `${codes.length} 个规格编码`
+}
+function groupSkuCodeTitle(row) {
+  const codes = rowVariants(row).filter(item => String(item.skuid || '').trim())
+  return codes.map(item => `${specification(item)}：${item.skuid}`).join('\n')
+}
+async function toggleStatus(row) {
+  const targets = rowVariants(row)
+  const next = statusLabel(row) === '停售' ? '在售' : '停售'
+  try {
+    for (const target of targets) await updateMenuItem(target.id, { status: next })
+    await loadData()
+    const suffix = targets.length > 1 ? `（${targets.length} 个规格）` : ''
+    ElMessage.success(`「${row.name}」${suffix}已${next === '停售' ? '停售' : '开售'}`)
+  } catch (error) { ElMessage.error('状态修改失败：' + error.message) }
+}
+function handleRowCommand(command, row) {
+  if (command === 'delete') return removeItem(row)
+  if (command === 'combo') return openComboPeek(row)
+  if (command === 'specs') { peekKind.value = 'specs'; peekRow.value = row; peekVisible.value = true }
+}
+async function openComboPeek(row) {
+  peekKind.value = 'combo'
+  peekRow.value = row
+  peekVisible.value = true
+  if (comboExpansion.value[row.id]) return
+  peekLoading.value = true
+  try {
+    const result = await getMenuCostComponents(row.id)
+    comboExpansion.value = { ...comboExpansion.value, [row.id]: result.components || [] }
+  } catch (error) {
+    ElMessage.error('套餐内容加载失败：' + error.message)
+  } finally { peekLoading.value = false }
+}
+const peekComboRows = computed(() => (peekRow.value ? comboExpansion.value[peekRow.value.id] : null))
+const peekTitle = computed(() => {
+  if (peekKind.value === 'specs') return `${peekRow.value ? peekRow.value.name : ''} · 全部规格`
+  return `套餐内容 · ${peekRow.value ? peekRow.value.name : ''}`
+})
 
 function resetFilters() {
   search.value = ''
@@ -251,27 +419,11 @@ function resetFilters() {
   currentPage.value = 1
 }
 function formatPrice(value) { return (Number(value) || 0).toFixed(2) }
-function dishLetter(row) {
-  const cleanName = String(row.name || '')
-    .replace(/^\s*[【\[].*?[】\]]\s*/, '')
-    .replace(/^\s*套餐\s*[·：:]?\s*/, '')
-  return (cleanName.match(/[\u4e00-\u9fffA-Za-z0-9]/) || ['菜'])[0]
-}
 function specification(row) {
   const spec = String(row.spec || '').trim()
   if (spec && !['标准', '常规', '份'].includes(spec)) return spec
   const weight = String(row.spec_weight || '').trim()
   return weight || '标准规格'
-}
-function statusLabel(row) {
-  const statuses = (row.variants || [row]).map(item => item.status || '在售')
-  if (new Set(statuses).size === 1) return statuses[0]
-  return '部分停售'
-}
-function groupPrice(row, field) {
-  const values = (row.variants || [row]).map(item => Number(field === 'dine' ? (item.dine_in_price || item.price) : item.member_price) || 0)
-  const min = Math.min(...values), max = Math.max(...values)
-  return min === max ? `¥${formatPrice(min)}` : `¥${formatPrice(min)}–${formatPrice(max)}`
 }
 function openCreateDialog() {
   editingId.value = null
@@ -381,18 +533,6 @@ function choiceComboGroups(row) {
     groups.get(component.choice_group).push(component)
   })
   return [...groups.entries()].map(([id, items]) => ({ id, items, min_select: Number(items[0]?.choice_min) || 1, max_select: Number(items[0]?.choice_max) || Number(items[0]?.choice_min) || 1 }))
-}
-async function loadRowExpansion(row, expandedRows) {
-  if (row.item_type !== 'combo' || !expandedRows.some(item => item.id === row.id) || comboExpansion.value[row.id]) return
-  comboExpandLoading.value = { ...comboExpandLoading.value, [row.id]: true }
-  try {
-    const result = await getMenuCostComponents(row.id)
-    comboExpansion.value = { ...comboExpansion.value, [row.id]: result.components || [] }
-  } catch (error) {
-    ElMessage.error('套餐内容加载失败：' + error.message)
-  } finally {
-    comboExpandLoading.value = { ...comboExpandLoading.value, [row.id]: false }
-  }
 }
 async function loadComponents(itemId) {
   hadComponents.value = false
@@ -530,12 +670,15 @@ async function saveItem() {
 }
 async function removeItem(row) {
   const targets = row.variants || [row]
-  const targetText = row.isGroup ? `「${row.name}」及其 ${targets.length} 个规格` : `「${row.name}」`
+  const spec = specification(row)
+  const targetText = row.isGroup
+    ? `「${row.name}」及其 ${targets.length} 个规格`
+    : (spec !== '标准规格' ? `「${row.name} · ${spec}」这个规格` : `「${row.name}」`)
   try {
     await ElMessageBox.confirm(`确定删除${targetText}？`, '删除菜品', { type: 'warning', confirmButtonText: '确认删除' })
     for (const target of targets) await deleteMenuItem(target.id)
     await loadData()
-    ElMessage.success(row.isGroup ? '菜品及其规格已删除' : '菜品已删除')
+    ElMessage.success(row.isGroup || spec !== '标准规格' ? '菜品及其规格已删除' : '菜品已删除')
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error('删除失败：' + error.message)
   }
@@ -661,5 +804,63 @@ onBeforeUnmount(() => window.removeEventListener('menu-category-order-changed', 
   .choice-rule-controls { flex-wrap: wrap; justify-content: flex-end; }
   .combo-component-row { grid-template-columns: 24px minmax(0, 1fr) 90px auto; }
   .component-unit { display: none; }
+}
+
+/* ===== 菜品档案：左侧分类栏 + 右侧明细 ===== */
+.menu-archive-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); gap: 14px; align-items: start; }
+.menu-category-rail {
+  padding: 12px 10px 10px;
+  border: 1px solid #e8ecf3;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(23, 43, 77, .04);
+  position: sticky;
+  top: 12px;
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+}
+.rail-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 6px 10px; border-bottom: 1px solid #f0f2f6; }
+.rail-head span { color: #344054; font-size: 13px; font-weight: 700; }
+.rail-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin-top: 3px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #4b5768;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.rail-item:hover { background: #f5f8ff; color: #2764ca; }
+.rail-item.active { background: #eef4ff; color: #2764ca; font-weight: 700; }
+.rail-item.empty { color: #b0b8c4; }
+.rail-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-count { flex: 0 0 auto; min-width: 26px; padding: 1px 7px; border-radius: 9px; background: #f2f4f8; color: #7e899a; font-size: 11px; font-weight: 650; text-align: center; font-variant-numeric: tabular-nums; }
+.rail-item.active .rail-count { background: #fff; color: #2764ca; }
+.rail-foot { margin-top: 10px; padding: 10px 8px 2px; border-top: 1px solid #f0f2f6; display: grid; gap: 6px; }
+.rail-foot > div { display: flex; align-items: center; justify-content: space-between; color: #8b95a5; font-size: 12px; }
+.rail-foot b { color: #344054; font-size: 13px; font-variant-numeric: tabular-nums; }
+.rail-foot b.warn { color: #d98b16; }
+.menu-archive-panel { min-width: 0; }
+.archive-flat-table .el-table__cell { height: 56px; }
+.archive-name-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.archive-name-cell b { color: #344054; font-size: 14px; }
+.archive-name-cell small { color: #9aa4b2; font-size: 11px; }
+.spec-chip.soft { background: #f4f6fa; color: #8b95a5; }
+.code-cell { color: #61708a; font-size: 12px; font-variant-numeric: tabular-nums; letter-spacing: .2px; }
+.menu-price.muted { color: #9aa4b2; font-weight: 500; }
+.more-caret { margin-left: 2px; }
+.peek-body { min-height: 60px; }
+.peek-spec-hint { margin-bottom: 10px; color: #6b7a90; font-size: 13px; }
+@media (max-width: 900px) {
+  .menu-archive-layout { grid-template-columns: 1fr; }
+  .menu-category-rail { position: static; max-height: none; }
 }
 </style>

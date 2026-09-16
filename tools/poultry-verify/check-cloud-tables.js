@@ -16,7 +16,7 @@ const ROOT = '/home/ubuntu/app';
     console.log('  poultry_birds 行数      = ' + one('SELECT COUNT(*) n FROM poultry_birds').n);
     console.log('  poultry_yields 行数     = ' + one('SELECT COUNT(*) n FROM poultry_yields').n);
     console.log('  poultry_dish_usage 行数 = ' + one('SELECT COUNT(*) n FROM poultry_dish_usage').n);
-    console.log('  poultry_purchases 行数  = ' + one('SELECT COUNT(*) n FROM poultry_purchases').n);
+    console.log('  poultry_consumption 行数 = ' + one('SELECT COUNT(*) n FROM poultry_consumption').n);
     const cols = (t) => q(`PRAGMA table_info(${t})`).map(c => c.name).join(',');
     console.log('  birds 列: ' + cols('poultry_birds'));
     console.log('  dish_usage 唯一键: ' + (q("SELECT sql FROM sqlite_master WHERE name='poultry_dish_usage'")[0].sql.match(/UNIQUE\([^)]*\)/g) || []).join(' '));

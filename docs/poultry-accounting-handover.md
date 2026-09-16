@@ -110,13 +110,20 @@
 | `usage_qty` | **每份该菜品耗用几个该部位** |
 | UNIQUE | `(menu_item_id, yield_id)` —— 一菜可挂多行，天然支持双拼/套餐 |
 
-### `poultry_purchases` 实际采购只数
+### `poultry_consumption` 实际消耗只数
 | 字段 | 说明 |
 |---|---|
-| `store_id` / `store_name` / `month` | 门店 + 月份（`YYYY-MM`） |
+| `store_id` / `store_name` / `date` | 门店 + 日期（`YYYY-MM-DD`，**按天录入**） |
 | `bird_id` | 品种 |
-| `quantity` / `amount` | 采购只数 / 金额 |
-| UNIQUE | `(store_id, month, bird_id)` —— 手动录入，同键覆盖 |
+| `quantity` | **实际消耗只数**（不是采购量） |
+| `remark` | 备注 |
+| UNIQUE | `(store_id, date, bird_id)` —— 手动录入，同键覆盖 |
+
+> ⚠️ **口径（2026-09-15 定案，勿改回「采购」）**：
+> 采购量（进货）受库存进出影响 —— `实际消耗 = 期初剩余 + 期间采购 − 期末剩余`，
+> 与模型算出的「理论消耗」口径不一致，两者相减出来的差是库存波动、不是模型误差。
+> 所以录入并参与对比/校准的必须是**门店实际消耗只数**；采购只数至多作参考，不进计算。
+> 旧表 `poultry_purchases`（按月、含 amount）已废弃并 DROP，仅有的 15 行是孤儿残留。
 
 > ⚠️ **`PRAGMA foreign_keys=ON` 在本项目实际未生效**（实测返回 0），所以所有 `ON DELETE CASCADE` 都不执行。
 > 删除菜品会留下孤儿 `poultry_dish_usage` 行。本功能已用 `purgeOrphanUsage()` 在 `deleteBird` / `deleteYield` 前显式清理，
@@ -213,7 +220,7 @@ cost      = N × unit_cost
 GET    /api/poultry/species                     禽类档案列表（含出成数、挂菜数）
 POST   /api/poultry/species                     新增
 PUT    /api/poultry/species/:id                 修改
-DELETE /api/poultry/species/:id                 删除（有引用时拦截，先清孤儿行）
+DELETE /api/poultry/species/:id                 删除（有引用时拦截；先清孤儿耗用行 + 连带回收该品种采购行，返回 purged_orphans / purged_purchases）
 
 GET    /api/poultry/yields                      出成拆解（?bird_id= 可选，不传返回全部）
 PUT    /api/poultry/yields/:birdId              整表替换某禽的出成（含 part_kind）
@@ -225,11 +232,11 @@ POST   /api/poultry/dish-usage/batch            批量关联（mode=replace|appe
 GET    /api/poultry/dish-usage/configured       已配置耗用的菜品
 
 GET    /api/poultry/accounting                  核算主接口（store_id/date_from/date_to/channel/animal）
-GET    /api/poultry/accounting/purchase-comparison  理论 vs 实际采购
+GET    /api/poultry/accounting/consumption-comparison  理论用量 vs 实际消耗
 
-GET    /api/poultry/purchases                   采购只数查询
-POST   /api/poultry/purchases                   采购只数录入（upsert）
-DELETE /api/poultry/purchases/:id               删除
+GET    /api/poultry/consumption                 实际消耗只数查询（?date= /?date_from= /?date_to= /?store_id=）
+POST   /api/poultry/consumption                 消耗只数录入（upsert，按 store+date+bird 唯一）
+DELETE /api/poultry/consumption/:id             删除
 
 GET    /api/poultry/template                    Excel 模板（base64）
 POST   /api/poultry/import                      Excel 导入（逐行容错）
@@ -258,7 +265,8 @@ GET    /api/poultry/scope/preview               规则预览（全部菜品 × �
 5. **按部位汇总 · 瓶颈在哪**：口径对照条（新口径主数 vs 旧口径参考值及倍数）+ 部位表（类别/一只出/总需求/折鸟/瓶颈标注）
 6. **食材去向对账（风控）**：见 §8.1
 7. **按菜品下钻**：菜品/禽类部位/出成配置/销量/折合只数（线性贡献）/占比
-8. **理论 vs 实际采购**：对比表 + 采购录入弹窗（整月/非整月标注）
+8. **理论用量 vs 实际消耗**：对比表 + 消耗只数录入弹窗（按天录入；按起止日期精确求和，无整月口径问题）
+9. **消耗校准（模型 vs 门店实际，MAPE）**：把每天录入的消耗按月汇总，与模型理论只数逐条比对
 9. **基础档案抽屉**（三页签）：
    - ① 禽类档案：列表 + 新增/编辑弹窗
    - ② 整只出成拆解：按品种的表格编辑（部位名称/类别/一只出几份/一份占整只/单份克重/配置检查/说明）+ 类别含义图例
@@ -378,13 +386,31 @@ GET    /api/poultry/scope/preview               规则预览（全部菜品 × �
 `上庄 / 下庄 / 鹅腿 / 腩` 的「一只出几份」用户已从 2/2/2/1 改为 **4/4/4/4**。
 欧景店 9/1–9/10 结果：118.49 → **76.5 只**（门店记录 80 只）。
 
+#### 9.6.1 ⚠️ 2026-09-14：`鸡/双拼量`、`鸡/三拼量` 用户再次标定，**本地值与云上不一致，以本地为准**
+用户 2026-09-14 12:50 在本地页面手工保存了整套鸡出成，其中两个值下调：
+
+| 部位 | 云上（旧） | **本地（准）** | 影响（全区间 2026-05-01~09-10） |
+|---|---|---|---|
+| `鸡/双拼量` | 一只出 12 | **一只出 10** | — |
+| `鸡/三拼量` | 一只出 18 | **一只出 14** | 总只数 10,820.5 → **10,939.02** |
+
+用户原话：「**我本地调整的，发现调整后更接近真实消耗量**」→ **本地值是正确的，任何人不要按"以云为准"把这两个值改回 12/18。**
+
+- 证据：`poultry_yields.updated_at = 2026-09-14 12:50:17`（全 6 行鸡出成同一次保存；只有这两行的值变了）
+- 保护措施：本地覆盖项已落盘到 `_tmp/local-overrides.json`，配套脚本 `_tmp/apply-local-overrides.js`
+  （dry-run 默认，加 `--yes` 才写）。**换云上整库后必须跑它把这两个值写回去**，否则会被云上旧值覆盖。
+- 教训：**"以某一边的数据为准"不能作为通用规则**。用户手工标定的系数属于"业务判断"，
+  比任何一端的数据快照都新；做整库覆盖前必须先做字段级比对，把"本地独有且更准"的值摘出来。
+
 ### 9.7 项目级隐患：外键未生效
 `lib/db.js` 的 `PRAGMA foreign_keys=ON` 实测返回 0，全库 `ON DELETE CASCADE` 都不执行。
-已知影响：`dish_sales_mappings` 有 10 条孤儿绑定、删菜品留下孤儿耗用行。
-**本功能已规避，但全库问题未修**。建议单独处理（或在 `menu_items` 删除接口补显式清理）。
+已知影响：`dish_sales_mappings` 有 10 条孤儿绑定、删菜品留下孤儿耗用行、
+删品种留下孤儿采购行（15 条历史残留已于 2026-09-14 清理，见 §9.9）。
+**本功能已规避**：`purgeOrphanUsage()` / `purgeOrphanPurchases()` + `deleteBird` 显式回收采购 + 列表接口 `LEFT JOIN` 暴露孤儿；
+**但全库问题未修**。建议单独处理（或在 `menu_items` 删除接口补显式清理）。
 
-### 9.8 ⚠️ `canary-safe-teardown.ps1` 在**非空库**上会破坏真实配置（2026-09-12 实测，未改）
-这是本次踩到的**真实事故**，与 §12 第 11 条同类，务必先读：
+### 9.8 ✅ 已修（2026-09-14）：`canary-safe-teardown.ps1` 曾在**非空库**上破坏真实配置
+这是踩过的**真实事故**，与 §12 第 11 条同类，务必先读（下面保留事故记录，修法见本节的「修法」）：
 
 **症状**：在一份有真实档案的库上跑该脚本后，菜品 **206「招牌烧鹅饭」**的耗用配置
 （原本 `鹅肉 usage_qty=1`）**消失**，欧景店核算只数从 **76.5 掉到 62.59**。
@@ -402,17 +428,43 @@ GET    /api/poultry/scope/preview               规则预览（全部菜品 × �
 **推荐核对手法**：拿原始库与当前库逐表比对（`poultry_birds` / `poultry_yields` / `poultry_dish_usage` / `poultry_purchases`），
 比只看总数可靠得多（总数不变但内容被换掉的情况，本次就踩到了）。
 
-**建议修法（待用户确认，未擅自改）**：
-1. 开头加守卫：库里已有禽类档案/耗用配置时直接拒绝运行，或
-2. 像 `verify-poultry-batch.ps1` 那样，先把 206 的原有配置**快照**下来，收尾**原样还原**，并把第 82 行断言改成「与运行前基线一致」
-3. 该脚本**不要在有真实数据的库上运行**（尤其不要在生产库上跑）
+**✅ 修法（2026-09-14 完成，脚本全量重写）**：
+1. 金丝雀改为**只用自己的临时数据**（品种 `金丝雀验证鹅-临时` + 菜品 `金丝雀验证菜-临时`），
+   不再写入任何真实菜品（原来写死的 206 已彻底移除），收尾只删自己建的行；
+2. 断言从「自己埋的数据还在不在」升级为**真正该测的东西**：
+   运行前给**全部已配置菜品**拍逐菜品快照（菜品 id → 排序后的 `yield_id:usage_qty` 串），
+   运行后**逐项比对**，任何一处被改动就 FAIL —— 旧版对真实配置被改坏是瞎的（假绿灯）；
+3. 断言不再假设空库，改为与运行前基线比较（`已配置菜品=N 个，全部一致`）；
+4. 用 `try/catch` 包住被调脚本：即使 `verify-poultry.ps1` 中途抛异常，金丝雀仍会完成事后比对与收尾；
+5. 末尾输出 `######## 金丝雀测试结束：全部通过，真实数据未被改动 ########` 或
+   `…有 N 项 FAIL，真实数据可能已被破坏`，并带 `exit code`（FAIL 数非 0 时为失败）。
 
-### 9.9 `verify-poultry.ps1` 收尾顺序导致采购残留（2026-09-12 发现，未改）
-脚本收尾**先删禽类（第 251 行）、再回收采购（第 254 行）**，而 `listPurchases` 会 JOIN `poultry_birds`
-过滤掉孤儿行 → 采购一旦失去禽类就查不到 → `Api GET '/api/poultry/purchases'` 返回的列表里**没有它们**，
-回收必然失败。实测**每次运行残留 1 条**孤儿采购（`remark='自动化验证临时数据'`，bird_id 已删）。
-本次共残留 3 条，已手工 `DELETE /api/poultry/purchases/:id` 清理干净。
-**建议**：改成「先回收采购、再删禽类」，或回收时按 `remark` 直连库查询而不是走列表接口。
+**2026-09-14 实测**：跑完 `verify-poultry.ps1` + `verify-poultry-batch.ps1` 后
+「已比对 38 个既有菜品，全部与运行前一致」，206 配置完好（`鹅肉 ×1`，891.45 只没丢），退出码 0。
+
+### 9.9 ✅ 已修（2026-09-14）：孤儿采购（`verify-poultry.ps1` 收尾顺序）
+**症状**：脚本收尾**先删禽类、再回收采购**，而 `listPurchases` 当时用 `JOIN poultry_birds`
+过滤掉孤儿行 → 采购一旦失去禽类就查不到 → `Api GET '/api/poultry/purchases'` 的列表里**没有它们**，
+回收必然失败。**实测累计残留 15 条**孤儿采购（`remark='自动化验证临时数据'`，博罗店 / 2026-08 / 每条 800 只）
+= **12,000 只幽灵采购只数**；更糟的是因为同一个 JOIN，**UI 里也看不见它们**，属于永久垃圾。
+（`calibrationReport` 早就用 `LEFT JOIN` 并显式跳过孤儿，所以只有列表和对比受影响。）
+
+**✅ 修法（两端一起堵，2026-09-14 完成）**：
+1. **接口层**：`listPurchases` 改 `LEFT JOIN poultry_birds` 并返回 `is_orphan` 字段 —— 孤儿行再也藏不住；
+2. **行为层**：`deleteBird()` 现在顺带回收该品种名下的采购行（`DELETE FROM poultry_purchases WHERE bird_id=?`），
+   返回值新增 `purged_purchases`。**即使脚本顺序写错，也不会再产生孤儿**；
+3. 新增 `purgeOrphanPurchases()`（与 `purgeOrphanUsage()` 同思路），已随 `poultry-accounting` 导出；
+4. **脚本层**：`verify-poultry.ps1` / `verify-poultry-batch.ps1` 收尾与第 0 步都改成
+   「**先回收采购、再删品种**」，并按 `remark` **或** `is_orphan=1` 回收（旧孤儿也能一并清）；
+   两个脚本都加了 `自己没有留下孤儿采购` 断言；
+5. **存量清理**：15 条历史孤儿已删（清理脚本 `_tmp/purge-orphans.js`，默认 dry-run，
+   真删要加 `--yes`，删前自动备份）。删前已核对：备份库里 `poultry_purchases` 共 15 行**全部**是孤儿，
+   真实录入的采购 **0 条**，所以清理没有丢任何用户数据。
+
+**定点验证**（`_tmp/verify-fixes.js`，7/7 通过）：建临时品种 → 录采购 → 删品种，
+返回 `purged_purchases=1`，全库孤儿采购 0 条。
+**教训**：`PRAGMA foreign_keys` 在本项目不生效（§9.7），所以「删父行」时凡是子行**靠自己级联**的想法都不成立；
+列表接口用 `JOIN` 而非 `LEFT JOIN` 会让垃圾**静默消失**，比报错更难发现。
 
 ---
 
@@ -434,6 +486,50 @@ cd F:\NewDeom\frontend; npm run build
 - 换 dist 前先 `rm -rf frontend/dist`
 - **不要上传 `config.json`（云端凭据）和 `data/database.sqlite`**
 
+### 10.1 「云上数据为准」时怎么把云上整库换成/合并到本地（2026-09-14 实操过一遍）
+场景：用户在**云上**录了/导入了新数据（外卖账单、记账本），本地落后，要求"以云为准"。
+
+**关键教训：不要盲目整库覆盖。** 用户手工做出来的业务判断（标定的系数、本地独有的成本构成）
+在云上**没有对应版本**，一覆盖就永久丢失。所以流程必须是「先逐表逐行比对 → 再覆盖 → 再写回本地独有值」。
+
+```powershell
+# ① 拉云上库（SSH 被封时先解封；本机出口 IP 被 sshd 惩罚/ fail2ban 拦时表现为"TCP 连上但不发 banner"）
+python -u _tmp\pull-cloud-db.py --wait-minutes 300 --interval 60   # 自动等解封 + 下载 + sha256 校验
+node _tmp\inspect-db.js _tmp\cloud\database.sqlite                # integrity_check / 表数 / 关键行数
+
+# ② 逐表逐行比对（换库前的「影响面清单」，务必先看清楚）
+node --max-old-space-size=6144 _tmp\diff-db.js data\database.sqlite _tmp\cloud\database.sqlite --summary-only
+node --max-old-space-size=6144 _tmp\local-only-summary.js          # ⚠️ 补「行数不同」表的行级比对
+node _tmp\local-only-rows.js                                       # 配置类表逐条列出「仅本地」行
+node _tmp\gap-report.js                                            # 面向用户的「云上有本地没有」清单
+
+# ③ 换库（自动备份 + 清孤儿 + 写回本地独有值；dry-run 默认，加 --yes 才执行）
+#    前置：必须先停后端（sql.js 整文件覆盖写，运行中的服务会把它覆盖回去）
+node --max-old-space-size=6144 _tmp\swap-to-cloud-db.js --yes
+
+# ④ 启动后端 → 跑只读回归
+node _tmp\gap-report.js                                            # 应显示各项「云端独有 0」
+node tools\poultry-verify\verify-risk-control.js
+node tools\poultry-verify\crosscheck-poultry.js
+```
+
+⚠️ **`diff-db.js` 的一个坑**：它只在**行数相同**时才比内容，所以 `menu_items` 这种"行数也差、内容也差"的表
+会被漏掉（本次就漏了 `#451.cost` 8.8 vs 0）。必须配合 `_tmp/local-only-summary.js` 一起看。
+
+**2026-09-14 这次换库的实际结果**（可作为下次的对照基线）：
+
+| 方向 | 内容 |
+|---|---|
+| 云上→本地（拿到） | 外卖 09-10~13 各平台明细（美团/京东/淘宝闪购）、记账 +366 条（到 09-13）、菜单 +2 菜 +1 分类「外卖特殊菜品」、外卖对账 +201 条、`business_product_sales` +4948、`business_import_batches` 57→64 |
+| 本地独有（写回保住） | ① `鸡/双拼量`=10、`鸡/三拼量`=14（用户标定，云上 12/18）② 套餐 #451/#452/#455/#456 的 8 行成本构成 + 对应 `menu_items.cost`（云上这 4 个套餐 cost 全为 0） |
+| 丢掉（确认无价值） | 本地 2 条 POS 重复导入批次（同一份文件本地又导了一次，数据与云上等价）、云上带回来的 15 条孤儿采购（已清） |
+| 结果 | 表数 62、总行数 504,215 → **511,466**；导入批次 57 → **64**；记账 7,807 → **8,173** |
+| 本地备份 | `data/database.sqlite.bak-before-cloud-swap-20260914061136`（268.8 MB） |
+| 核算（全区间 05-01~09-10） | 10,939.02 只（鹅 6832 / 鸭 2545.99 / 鸡 1561.03）—— 比云上的 10,820.5 多 118.52 只，差值**正好等于用户标定系数的影响** |
+
+> 云上那份库**仍带着 15 条孤儿采购**（12000 只幽灵只数），因为清理只做在本地。
+> 将来若在云上跑验证脚本，注意这一点（§9.9）。
+
 ---
 
 ## 11. 验证方式
@@ -441,6 +537,7 @@ cd F:\NewDeom\frontend; npm run build
 验证脚本已入库到 `tools/poultry-verify/`（`_tmp/` 被 gitignore，里面还有大体积数据库快照）。
 所有脚本都是**非破坏性**的：只用自建临时数据（禽类名带「临时」前缀、临时菜品），收尾全部回收；
 对真实菜品配置只做**只读校验**。
+（2026-09-14 之前并非如此 —— 金丝雀脚本曾会改坏真实菜品，见 §9.8；现已修好并用金丝雀自证。）
 
 | 脚本 | 项数 | 覆盖内容 |
 |---|---|---|
@@ -450,15 +547,20 @@ cd F:\NewDeom\frontend; npm run build
 | `verify-risk-control.js` | 12 | 风控对账字段内部一致性、欧景店对上 80 只 |
 | `verify-yield-append.ps1` | 13 | 复现「4 规格 → 绑定 → 追加到 6 规格」场景 |
 | `crosscheck-poultry.js` | — | 直连 sql.js **独立复算**，与接口结果逐项比对 |
-| `canary-safe-teardown.ps1` | — | 金丝雀：先埋用户数据再跑验证脚本，证明不会误删（⚠️ 其收尾断言假设库为空，见 §9.8） |
+| `canary-safe-teardown.ps1` | 12 | 金丝雀：**用自己的临时数据**跑上面两个脚本，并用「运行前后全量逐菜品配置比对」证明真实数据未被改动（§9.8） |
 
 **核算不变量**（接手后改算法必须仍然成立）：
 1. 每行明细：`birds_count = round(销量 × 每份耗用 ÷ 一只出成, 2)`
 2. 每个部位：`birds = round(该部位总需求 ÷ 一只出成, 2)`
-3. 每只禽：`birds_count = max(身体各部位折鸟之和, 副产品各部位折鸟最大值)`
+3. **每只禽（资源约束模型，2026-09-13 升级）**：
+   各资源池分别算需求只数，取**最大者**为总只数 ——
+   `birds_count = max over r ∈ {body, leg, wing, head_neck} (该资源池需求 ÷ 每只供应量)`；
+   `body` 池的需求 = 所有「身体」类部位折鸟之和（互斥卖法必须相加），
+   `leg / wing / head_neck` 池的需求 = 各部位消耗条数之和（一只出 2 腿 / 2 翅 / 1 头颈）。
+   瓶颈 = 那个最大的资源池，页面「瓶颈」列据此显示（如鹅常是 `腿·鹅腿`、鸭常是 `身体·单份`）
 4. `total_birds = Σ 各禽 birds_count`
-5. 每只禽只有一个 `is_bottleneck` 标注
-6. `total_birds_linear ≥ total_birds`（旧口径是上限）
+5. 每只禽只有一个 `is_bottleneck` 标注（即瓶颈资源池下贡献最大的那个部位）
+6. `total_birds_linear ≥ total_birds`（线性口径是上限）
 7. 明细 `share` 合计 = 100%（按线性口径）
 
 运行示例：
@@ -486,9 +588,14 @@ node tools/poultry-verify/crosscheck-poultry.js
 | 9 | 刷新/分享链接进入新页面落到「数据概括」 | `App.vue` 的 `workspaceRouteTabId` 漏登记独立静态路由（顺带发现 `/menu-management/category` 也有） | 在简单页面映射里补上两条 |
 | 10 | 删品种时报「已被 N 个菜品引用」但那些菜品已不存在 | 外键级联未生效，耗用行成孤儿 | `purgeOrphanUsage()` + 计数改为 JOIN 存在的菜品 |
 | 11 | **事故：验证脚本整表清空用户数据** | 脚本为「可重复执行」做了整表 DELETE | 改为只删自建行（名称前缀）+ 对真实菜品配置快照还原 + 金丝雀测试固化 |
+| 12 | **事故：金丝雀脚本改坏真实菜品 206 却全 PASS** | 金丝雀把测试数据埋在**真实菜品**上，收尾是「清空」而非「还原」；断言只检查自己埋的数据，对真实配置被改坏**瞎** | 金丝雀改用自建临时菜品 + 运行前后**全量逐菜品配置比对**（§9.8） |
+| 13 | 孤儿采购：15 条看不见的采购（12,000 只） | 脚本先删品种再回收采购，而 `listPurchases` 用 `JOIN` 把孤儿行**隐藏**了 → 回收找不到它们，UI 也看不见 | `LEFT JOIN` + `is_orphan` 暴露；`deleteBird` 顺带回收该品种采购；脚本改顺序（§9.9） |
 
 > 第 11 条是真实事故：脚本收尾时删掉了用户当时手工录入的全部禽类档案/耗用配置/采购记录。
 > **教训：验证脚本绝不允许整表 DELETE；删除范围必须一开始就限定在自己创建的行上。**
+> 第 12 条是它的变体：**只限制删除范围还不够**，还要证明「没动真实数据」——
+> 断言必须建立在「运行前基线」上（逐项比对），而不是「自己埋的东西还在」这种自证式检查。
+> 第 13 条的教训：查询用 `JOIN` 会把垃圾**静默隐藏**，比报错更难发现；父行删除时不要依赖级联（§9.7）。
 
 另外几个环境坑：
 - 本机 `pwsh` 实际是 **Windows PowerShell 5.1**，`.ps1` 文件必须显式 `Get-Content -Encoding UTF8` 后 `Invoke-Expression`

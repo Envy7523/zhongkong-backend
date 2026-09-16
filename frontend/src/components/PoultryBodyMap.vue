@@ -2,8 +2,14 @@
   <section class="body-map">
     <header class="bm-head">
       <div class="bm-head-copy">
-        <h4>{{ title }}</h4>
-        <p>点图上部位可定位到下方表格行；<b>颜色越深 = 一份占整只的比例越大</b>；灰虚线 = 该部位还没配置。</p>
+        <div class="bm-title-row">
+          <span :class="['bm-real-bird', animalAssetClass]" aria-hidden="true"></span>
+          <div>
+            <span class="bm-kicker">真实禽体建模参照</span>
+            <h4>{{ title }}</h4>
+          </div>
+        </div>
+        <p>以真实禽体确认品种与整只出成；点击悬浮部位标签可定位到下方表格行。<b>蓝色 = 身体资源池，橙色 = 副产品资源池</b>；灰色 = 该部位还没配置。</p>
       </div>
       <div class="bm-legend">
         <span class="bm-dot body"></span>身体（互抢鸟，需求相加）
@@ -12,73 +18,13 @@
     </header>
 
     <div class="bm-body">
-      <svg viewBox="0 0 440 366" class="bm-svg" role="img" :aria-label="title">
-        <!-- ============ 鹅：俯视拆解图（头颈 / 翅 / 上庄 / 下庄 / 腩 / 腿 / 切片肉） ============ -->
-        <g v-if="isGoose">
-          <!-- 头 + 颈 -->
-          <g class="bm-zone" :class="zoneState('head')" @click="pick('head')">
-            <ellipse cx="220" cy="28" rx="26" ry="19" />
-            <path d="M206 44 L234 44 L228 84 L212 84 Z" />
-          </g>
-          <!-- 翅（左右） -->
-          <g class="bm-zone" :class="zoneState('wing')" @click="pick('wing')">
-            <ellipse cx="86" cy="132" rx="27" ry="54" />
-            <ellipse cx="354" cy="132" rx="27" ry="54" />
-          </g>
-          <!-- 上庄 -->
-          <g class="bm-zone" :class="zoneState('upper')" @click="pick('upper')">
-            <rect x="122" y="92" width="196" height="80" rx="14" />
-          </g>
-          <!-- 下庄 -->
-          <g class="bm-zone" :class="zoneState('lower')" @click="pick('lower')">
-            <rect x="122" y="178" width="196" height="80" rx="14" />
-          </g>
-          <!-- 腩 -->
-          <g class="bm-zone" :class="zoneState('belly')" @click="pick('belly')">
-            <rect x="190" y="238" width="60" height="40" rx="10" />
-          </g>
-          <!-- 腿（左右） -->
-          <g class="bm-zone" :class="zoneState('leg')" @click="pick('leg')">
-            <rect x="140" y="246" width="32" height="64" rx="14" />
-            <rect x="268" y="246" width="32" height="64" rx="14" />
-          </g>
-          <!-- 整只（虚线外框） -->
-          <g v-if="hasZone('whole')" class="bm-zone whole" :class="{ active: activeZone === 'whole' }" @click="pick('whole')">
-            <rect x="54" y="42" width="332" height="286" rx="24" />
-          </g>
-          <!-- 切片肉区（底部横条） -->
-          <g class="bm-zone" :class="zoneState('meat')" @click="pick('meat')">
-            <rect x="60" y="322" width="320" height="36" rx="10" />
-          </g>
-        </g>
-
-        <!-- ============ 鸡 / 鸭：简化拆解图（整只 / 半只 / 切片肉 / 腿 —— 只有这 4 类） ============ -->
-        <g v-else>
-          <!-- 整只（虚线外框：含 2 腿 2 翅） -->
-          <g v-if="hasZone('whole')" class="bm-zone whole" :class="{ active: activeZone === 'whole' }" @click="pick('whole')">
-            <rect x="54" y="34" width="332" height="316" rx="26" />
-          </g>
-          <!-- 半只（左右两半：沿脊一开二） -->
-          <g class="bm-zone" :class="zoneState('half')" @click="pick('half')">
-            <rect x="86" y="70" width="128" height="96" rx="14" />
-            <rect x="226" y="70" width="128" height="96" rx="14" />
-          </g>
-          <text x="150" y="124" class="bm-sub">半只（左）</text>
-          <text x="290" y="124" class="bm-sub">半只（右）</text>
-          <!-- 切片肉区（单份 / 双拼量 / 三拼量 都取自这里） -->
-          <g class="bm-zone" :class="zoneState('meat')" @click="pick('meat')">
-            <rect x="86" y="180" width="268" height="76" rx="14" />
-          </g>
-          <!-- 腿（左右两条） -->
-          <g class="bm-zone" :class="zoneState('leg')" @click="pick('leg')">
-            <rect x="112" y="270" width="90" height="62" rx="16" />
-            <rect x="238" y="270" width="90" height="62" rx="16" />
-          </g>
-        </g>
-
-        <!-- 标签 -->
-        <text v-for="l in labels" :key="l.key" :x="l.x" :y="l.y" :class="['bm-label', { empty: l.empty }]">{{ l.text }}</text>
-      </svg>
+      <div :class="['bm-real-stage', animalAssetClass]" role="img" :aria-label="title">
+        <div class="bm-stage-glow"></div>
+        <button v-for="label in labels" :key="label.key" :class="['bm-callout', zoneState(label.key), { empty: label.empty }]" :style="{ left: `${label.left}%`, top: `${label.top}%` }" @click="pick(label.key)">
+          <span class="bm-callout-name">{{ label.name }}</span><span>{{ label.text }}</span>
+        </button>
+        <span class="bm-stage-caption">真实 {{ props.animal || '禽类' }} 侧视参照 · 点击标签维护出成</span>
+      </div>
 
       <aside class="bm-side">
         <h5>{{ isGoose ? '整只份量自检' : '拆解配置自检' }}</h5>
@@ -117,6 +63,7 @@ const emit = defineEmits(['pick'])
 const activeZone = ref('')
 
 const title = computed(() => `${props.animal || '禽'} · 整只部位示意图`)
+const animalAssetClass = computed(() => ({ '鹅': 'goose', '鸭': 'duck', '鸡': 'chicken' }[String(props.animal || '').trim()] || 'goose'))
 
 /** 部位名 → 图示区域。优先用库里存的 zone_code（用户可改，改名也不受影响），缺失时才按名称兜底推断 */
 const ZONE_SET = new Set(['whole', 'half', 'upper', 'lower', 'leg', 'wing', 'head_neck', 'belly', 'meat', 'other'])
@@ -168,27 +115,27 @@ function fmtShare(value) {
 const labels = computed(() => {
   const defs = isGoose.value
     ? [
-      { zone: 'head', x: 220, y: 34 },
-      { zone: 'wing', x: 86, y: 136 },
-      { zone: 'upper', x: 220, y: 142 },
-      { zone: 'lower', x: 220, y: 228 },
-      { zone: 'belly', x: 220, y: 264 },
-      { zone: 'leg', x: 156, y: 288 },
-      { zone: 'meat', x: 220, y: 345 },
+      { zone: 'head', name: '头颈', left: 69, top: 10 },
+      { zone: 'wing', name: '翅', left: 19, top: 46 },
+      { zone: 'upper', name: '上庄', left: 62, top: 41 },
+      { zone: 'lower', name: '下庄', left: 62, top: 59 },
+      { zone: 'belly', name: '鹅腩', left: 67, top: 69 },
+      { zone: 'leg', name: '鹅腿', left: 42, top: 82 },
+      { zone: 'meat', name: '切片肉', left: 61, top: 88 },
     ]
     : [
-      { zone: 'whole', x: 220, y: 58 },
-      { zone: 'half', x: 220, y: 152 },
-      { zone: 'meat', x: 220, y: 224 },
-      { zone: 'leg', x: 157, y: 306 },
+      { zone: 'whole', name: '整只', left: 59, top: 16 },
+      { zone: 'half', name: '半只', left: 69, top: 41 },
+      { zone: 'meat', name: '切片肉', left: 57, top: 62 },
+      { zone: 'leg', name: '腿', left: 42, top: 83 },
     ]
   return defs.map(d => {
     const rows = rowsOf(d.zone)
-    if (!rows.length) return { key: d.zone, x: d.x, y: d.y, text: '未配置', empty: true }
+    if (!rows.length) return { key: d.zone, ...d, text: '未配置', empty: true }
     const shown = rows.slice(0, 2)
     const text = shown.map(r => `${r.part_name} ${r.parts_per_bird || 0}份(${fmtShare(r.parts_per_bird)})`).join(' ｜ ')
       + (rows.length > shown.length ? ` 等${rows.length}个` : '')
-    return { key: d.zone, x: d.x, y: d.y, text, empty: false }
+    return { key: d.zone, ...d, text, empty: false }
   })
 })
 
@@ -374,9 +321,22 @@ function pick(zone) {
 <style scoped>
 .body-map { margin-bottom: 16px; padding: 16px 18px; border: 1px solid #e3e9f2; border-radius: 14px; background: linear-gradient(180deg, #fbfdff, #f6f9fe); }
 .bm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
-.bm-head-copy h4 { margin: 0 0 4px; color: #18345d; font-size: 14px; }
+.bm-title-row { display: flex; align-items: center; gap: 9px; margin-bottom: 2px; }
+.bm-head-copy h4 { margin: 0 0 2px; color: #18345d; font-size: 14px; }
 .bm-head-copy p { margin: 0; color: #7b8798; font-size: 12px; line-height: 1.7; }
 .bm-head-copy b { color: #3c5a8a; }
+.bm-kicker { display: block; color: #7b8ca6; font-size: 10px; font-weight: 750; letter-spacing: .08em; }
+.bm-real-bird {
+  display: inline-block; flex: 0 0 54px; width: 54px; height: 44px;
+  border: 1px solid #dfe8f6; border-radius: 12px;
+  background-color: #f8fbff;
+  background-image: url('/images/poultry/poultry-models.png');
+  background-repeat: no-repeat; background-size: 330% auto;
+  box-shadow: 0 4px 12px rgba(33, 68, 125, .08);
+}
+.bm-real-bird.goose { background-position: 2% 50%; }
+.bm-real-bird.duck { background-position: 50% 50%; }
+.bm-real-bird.chicken { background-position: 98% 50%; }
 .bm-legend { display: flex; align-items: center; gap: 14px; color: #6e7d92; font-size: 11px; white-space: nowrap; }
 .bm-dot { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border-radius: 50%; vertical-align: middle; }
 .bm-dot.body { background: #4b83e8; }
@@ -384,6 +344,22 @@ function pick(zone) {
 .bm-body { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(240px, .85fr); gap: 18px; align-items: start; }
 @media (max-width: 1000px) { .bm-body { grid-template-columns: minmax(0, 1fr); } }
 .bm-svg { width: 100%; height: auto; max-height: 460px; }
+.bm-real-stage { position: relative; min-height: 368px; overflow: hidden; border: 1px solid #e1e9f4; border-radius: 16px; background-color: #f8fbff; background-image: url('/images/poultry/poultry-models.png'); background-repeat: no-repeat; background-size: 300% auto; box-shadow: inset 0 1px 0 rgba(255,255,255,.8), 0 10px 24px rgba(42,73,119,.05); }
+.bm-real-stage.goose { background-position: 0% 54%; }
+.bm-real-stage.duck { background-position: 50% 54%; }
+.bm-real-stage.chicken { background-position: 100% 54%; }
+.bm-stage-glow { position: absolute; inset: auto 8% 7% 9%; height: 22%; border-radius: 50%; background: radial-gradient(ellipse, rgba(61,119,210,.16), rgba(61,119,210,0) 68%); pointer-events: none; }
+.bm-callout { position: absolute; z-index: 2; display: flex; flex-direction: column; gap: 2px; max-width: 142px; padding: 6px 8px; border: 1px solid #c9d5e6; border-radius: 9px; background: rgba(255,255,255,.9); box-shadow: 0 5px 14px rgba(37,68,111,.12); color: #5e7088; font-size: 10px; line-height: 1.35; text-align: left; transform: translate(-50%,-50%); cursor: pointer; backdrop-filter: blur(8px); transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease; }
+.bm-callout:hover,.bm-callout.active { z-index: 3; border-color: #397de1; box-shadow: 0 9px 19px rgba(45,103,190,.2); transform: translate(-50%,-50%) scale(1.035); }
+.bm-callout-name { color: #2e4a6f; font-size: 11px; font-weight: 800; }
+.bm-callout.body { border-color: #91b9f2; background: rgba(240,247,255,.94); }
+.bm-callout.body .bm-callout-name { color: #2265bd; }
+.bm-callout.byproduct { border-color: #f0bf68; background: rgba(255,249,237,.95); }
+.bm-callout.byproduct .bm-callout-name { color: #ad7517; }
+.bm-callout.empty { border-style: dashed; background: rgba(249,251,254,.88); color: #9aa8b9; }
+.bm-callout.empty .bm-callout-name { color: #7d8d9f; }
+.bm-stage-caption { position: absolute; right: 13px; bottom: 10px; color: #7d8fa8; font-size: 10px; letter-spacing: .02em; }
+@media (max-width: 640px) { .bm-real-stage { min-height: 330px; background-size: 330% auto; }.bm-callout { max-width: 112px; padding: 5px 6px; font-size: 9px; }.bm-stage-caption { display: none; } }
 
 /* 区域通用样式：未配置 = 灰虚线；身体 = 蓝；副产品 = 橙 */
 .bm-zone rect,

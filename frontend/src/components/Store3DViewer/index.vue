@@ -1,13 +1,14 @@
 <template>
   <section class="viewer-shell" :class="{ fullscreen: isFullscreen }">
-    <div ref="host" class="viewer-canvas" aria-label="门店三维模型预览" />
+    <div ref="host" class="viewer-canvas" :class="{ 'annotation-mode': annotationMode }" aria-label="门店三维模型预览" @click="onCanvasClick" />
     <div v-if="loading || error" class="viewer-overlay">
       <el-progress v-if="loading" type="circle" :percentage="progress" :width="78" :stroke-width="7" />
       <el-icon v-else size="28" color="#d35b5b"><WarningFilled /></el-icon>
       <b>{{ error || statusText }}</b>
-      <small v-if="error">{{ modelUrl }}</small>
+      <small v-if="error">{{ modelName || modelUrl }}</small>
     </div>
     <div class="viewer-status"><i :class="{ loading }" />{{ statusText }}</div>
+    <div class="viewer-profile"><span>渲染</span><b>{{ profileLabel }}</b></div>
     <div class="viewer-actions" aria-label="三维视图工具栏">
       <el-tooltip content="重置视角" placement="left"><el-button circle @click="resetView"><el-icon><RefreshRight /></el-icon></el-button></el-tooltip>
       <el-divider />
@@ -26,17 +27,38 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { WarningFilled, RefreshRight, Top, View, Back, Right, Grid, Refresh, Position, FullScreen } from '@element-plus/icons-vue'
 import { useThreeViewer } from './useThreeViewer'
 
-const props = defineProps({ modelUrl: { type: String, required: true } })
+// modelName 只用于错误提示：模型现在是 fetch→blob 拿到的，出错时显示 blob: 地址对用户毫无意义
+const props = defineProps({
+  modelUrl: { type: String, required: true },
+  modelName: { type: String, default: '' },
+  renderProfile: { type: String, default: 'day' },
+  annotations: { type: Array, default: () => [] },
+  annotationMode: { type: Boolean, default: false },
+})
+const emit = defineEmits(['annotation-picked', 'annotation-selected'])
 const host = ref(null)
 const viewer = useThreeViewer()
-const { loading, progress, error, statusText, isGridVisible, isAutoRotate, isRoaming, isFullscreen, init, resetView, setView, setGridVisible, setAutoRotate, enterRoam, exitRoam, toggleFullscreen } = viewer
+const { loading, progress, error, statusText, isGridVisible, isAutoRotate, isRoaming, isFullscreen, init, resetView, setView, setGridVisible, setAutoRotate, setRenderProfile, setAnnotations, pickAt, pickAnnotationAt, focusPoint, enterRoam, exitRoam, toggleFullscreen } = viewer
+const profileLabel = computed(() => ({ day: '日间', night: '夜间', inspection: '巡检' })[props.renderProfile] || '日间')
+watch(() => props.renderProfile, value => setRenderProfile(value), { immediate: true })
+watch(() => props.annotations, value => setAnnotations(value), { deep: true, immediate: true })
 onMounted(() => init(host.value, props.modelUrl))
+function onCanvasClick(event) {
+  if (props.annotationMode) {
+    const point = pickAt(event.clientX, event.clientY)
+    if (point) emit('annotation-picked', point)
+    return
+  }
+  const annotation = pickAnnotationAt(event.clientX, event.clientY)
+  if (annotation) emit('annotation-selected', annotation)
+}
+defineExpose({ resetView, setView, focusPoint, setGridVisible, setAutoRotate, enterRoam, exitRoam, toggleFullscreen })
 </script>
 
 <style scoped>
-.viewer-shell{position:relative;min-height:560px;height:calc(100vh - 246px);overflow:hidden;border:1px solid #dfe8f4;border-radius:16px;background:#f4f7fb;box-shadow:0 16px 34px rgba(45,73,117,.09)}.viewer-shell.fullscreen{height:100vh;border:0;border-radius:0}.viewer-canvas{width:100%;height:100%;touch-action:none}.viewer-canvas :deep(canvas){display:block;width:100%!important;height:100%!important;outline:none}.viewer-overlay{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:13px;background:rgba(244,247,251,.76);backdrop-filter:blur(2px);color:#43516a}.viewer-overlay b{font-size:13px}.viewer-overlay small{max-width:72%;overflow:hidden;color:#8794a7;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.viewer-status{position:absolute;top:14px;left:16px;display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid rgba(209,222,240,.8);border-radius:8px;background:rgba(255,255,255,.84);box-shadow:0 4px 14px rgba(44,67,104,.08);color:#53647d;font-size:11px;backdrop-filter:blur(8px)}.viewer-status i{width:7px;height:7px;border-radius:50%;background:#38b985}.viewer-status i.loading{background:#4f86f7;animation:pulse 1s infinite}.viewer-actions{position:absolute;top:15px;right:15px;z-index:3;display:flex;flex-direction:column;gap:7px;padding:8px;border:1px solid rgba(209,222,240,.9);border-radius:12px;background:rgba(255,255,255,.9);box-shadow:0 10px 22px rgba(38,64,101,.12);backdrop-filter:blur(10px)}.viewer-actions :deep(.el-button){margin:0;border-color:#e4ebf4;color:#49617f}.viewer-actions :deep(.el-button--primary){color:#fff}.viewer-actions :deep(.el-divider--horizontal){margin:1px 0;border-color:#e5ebf3}.viewer-hint{position:absolute;bottom:14px;left:16px;display:flex;flex-wrap:wrap;gap:7px;padding:8px 10px;border-radius:8px;background:rgba(25,42,70,.78);color:#e7effa;font-size:10px;backdrop-filter:blur(8px)}.viewer-hint span+span{padding-left:7px;border-left:1px solid rgba(255,255,255,.18)}@keyframes pulse{50%{opacity:.3}}@media(max-width:900px){.viewer-shell{height:calc(100vh - 210px);min-height:420px}.viewer-hint{max-width:calc(100% - 32px)}.viewer-actions{right:10px;top:10px}}
+.viewer-shell{position:relative;min-height:560px;height:calc(100vh - 246px);overflow:hidden;border:1px solid #dfe8f4;border-radius:16px;background:#f4f7fb;box-shadow:0 16px 34px rgba(45,73,117,.09)}.viewer-shell.fullscreen{height:100vh;border:0;border-radius:0}.viewer-canvas{width:100%;height:100%;touch-action:none}.viewer-canvas.annotation-mode{cursor:crosshair}.viewer-canvas :deep(canvas){display:block;width:100%!important;height:100%!important;outline:none}.viewer-overlay{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:13px;background:rgba(244,247,251,.76);backdrop-filter:blur(2px);color:#43516a}.viewer-overlay b{font-size:13px}.viewer-overlay small{max-width:72%;overflow:hidden;color:#8794a7;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.viewer-status,.viewer-profile{position:absolute;z-index:2;display:flex;align-items:center;gap:7px;padding:7px 10px;border:1px solid rgba(209,222,240,.8);border-radius:8px;background:rgba(255,255,255,.84);box-shadow:0 4px 14px rgba(44,67,104,.08);color:#53647d;font-size:11px;backdrop-filter:blur(8px)}.viewer-status{top:14px;left:16px}.viewer-profile{top:14px;left:132px}.viewer-profile span{color:#8997aa}.viewer-profile b{color:#286cc3;font-size:11px}.viewer-status i{width:7px;height:7px;border-radius:50%;background:#38b985}.viewer-status i.loading{background:#4f86f7;animation:pulse 1s infinite}.viewer-actions{position:absolute;top:15px;right:15px;z-index:3;display:flex;flex-direction:column;gap:7px;padding:8px;border:1px solid rgba(209,222,240,.9);border-radius:12px;background:rgba(255,255,255,.9);box-shadow:0 10px 22px rgba(38,64,101,.12);backdrop-filter:blur(10px)}.viewer-actions :deep(.el-button){margin:0;border-color:#e4ebf4;color:#49617f}.viewer-actions :deep(.el-button--primary){color:#fff}.viewer-actions :deep(.el-divider--horizontal){margin:1px 0;border-color:#e5ebf3}.viewer-hint{position:absolute;bottom:14px;left:16px;display:flex;flex-wrap:wrap;gap:7px;padding:8px 10px;border-radius:8px;background:rgba(25,42,70,.78);color:#e7effa;font-size:10px;backdrop-filter:blur(8px)}.viewer-hint span+span{padding-left:7px;border-left:1px solid rgba(255,255,255,.18)}@keyframes pulse{50%{opacity:.3}}@media(max-width:900px){.viewer-shell{height:calc(100vh - 210px);min-height:420px}.viewer-hint{max-width:calc(100% - 32px)}.viewer-actions{right:10px;top:10px}.viewer-profile{display:none}}
 </style>

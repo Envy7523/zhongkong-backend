@@ -203,6 +203,11 @@ const routes = [
     component: () => import('@/views/staff/StaffEmployees.vue'),
   },
   {
+    path: '/staff-management/salary',
+    name: 'staff-management-salary',
+    component: () => import('@/views/staff/SalaryPlaceholder.vue'),
+  },
+  {
     path: '/collab',
     redirect: '/collab/list',
   },

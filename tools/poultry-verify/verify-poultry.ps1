@@ -54,19 +54,24 @@ if ($myYieldIds.Count) {
     }
   }
 }
+# ⚠️ 必须先收采购、再删品种（2026-09-14 修正）：
+#    旧顺序是先删品种，而 listPurchases 当时用 JOIN poultry_birds，品种一删采购行就从列表里消失，
+#    于是下面按 remark 回收的步骤看不到它们 → 每跑一次留下 1 条孤儿采购（累计 15 条 = 12000 只幽灵只数）。
+#    现在接口改成 LEFT JOIN 并返回 is_orphan，这里同时按 remark 与 is_orphan 收，旧孤儿也一并清掉。
+foreach ($p in (Api GET '/api/poultry/purchases').purchases) {
+  if ($p.remark -eq '自动化验证临时数据' -or $p.is_orphan -eq 1) { Api DELETE "/api/poultry/purchases/$($p.id)" | Out-Null }
+}
 foreach ($b in $myBirds) { Api DELETE "/api/poultry/species/$($b.id)" | Out-Null }
 # 回收自己建的临时菜品
 foreach ($d in (Api GET '/api/menu').items | Where-Object { $SCRIPT_DISH_NAMES -contains $_.name }) {
   Api DELETE "/api/menu/$($d.id)" | Out-Null
 }
-foreach ($p in (Api GET '/api/poultry/purchases').purchases) {
-  if ($p.remark -eq '自动化验证临时数据') { Api DELETE "/api/poultry/purchases/$($p.id)" | Out-Null }
-}
 
 $baselineBirds = @((Api GET '/api/poultry/species').birds).Count
 $baselineConfigured = (Api GET '/api/poultry/dish-usage?filter=set').configured
+$baselinePurchases = @((Api GET '/api/poultry/purchases').purchases | Where-Object { $_.is_orphan -ne 1 }).Count
 $leftAfterClean = @((Api GET '/api/poultry/species').birds | Where-Object { $SCRIPT_BIRD_NAMES -contains $_.breed_name }).Count
-Check '基线已记录且残留已清' ($baselineBirds -ge 0 -and $leftAfterClean -eq 0) "回收自己残留=$(if($myBirds.Count){"$($myBirds.Count) 条"}else{'无'}) 清理后残留=$leftAfterClean 现有禽类档案=$baselineBirds 已配置菜品=$baselineConfigured"
+Check '基线已记录且残留已清' ($baselineBirds -ge 0 -and $leftAfterClean -eq 0) "回收自己残留=$(if($myBirds.Count){"$($myBirds.Count) 条"}else{'无'}) 清理后残留=$leftAfterClean 现有禽类档案=$baselineBirds 已配置菜品=$baselineConfigured 采购基线=$baselinePurchases 条"
 
 Write-Output '===== 1. 初始状态 ====='
 $before = Api GET '/api/poultry/species'
@@ -273,11 +278,15 @@ Check '导入行带上了部位类别' (@($uDuck.rows)[0].part_kind -in @('身�
 
 Write-Output ''
 Write-Output '===== 10. 只回收自己建的数据（不碰用户任何配置） ====='
-# ① 删除自己建的临时菜品（注意：本项目外键级联未生效，删菜品不会自动删耗用行，下面第 ③ 步会显式解除）
+# ① 删除自己建的临时菜品（注意：本项目外键级联未生效，删菜品不会自动删耗用行，下面第 ④ 步会显式解除）
 foreach ($d in (Api GET '/api/menu').items | Where-Object { $SCRIPT_DISH_NAMES -contains $_.name }) {
   Api DELETE "/api/menu/$($d.id)" | Out-Null
 }
-# ② 删除自己按名称前缀建的禽类档案
+# ② 先收本次脚本建的采购记录，再删品种（顺序不能反，理由见第 0 步注释）
+foreach ($p in (Api GET '/api/poultry/purchases').purchases) {
+  if ($p.remark -eq '自动化验证临时数据' -or $p.is_orphan -eq 1) { Api DELETE "/api/poultry/purchases/$($p.id)" | Out-Null }
+}
+# ③ 删除自己按名称前缀建的禽类档案
 #    先显式解除「指向自己测试部位」的耗用行 —— 无论那行指向的菜品是否还存在，都要清掉
 $ownBirds = @((Api GET '/api/poultry/species').birds | Where-Object { $SCRIPT_BIRD_NAMES -contains $_.breed_name })
 $ownYieldIds = @()
@@ -293,19 +302,18 @@ if ($ownYieldIds.Count) {
   }
 }
 foreach ($b in $ownBirds) { Api DELETE "/api/poultry/species/$($b.id)" | Out-Null }
-# ③ 只删本次脚本建的采购记录
-foreach ($p in (Api GET '/api/poultry/purchases').purchases) {
-  if ($p.remark -eq '自动化验证临时数据') { Api DELETE "/api/poultry/purchases/$($p.id)" | Out-Null }
-}
 Remove-Item $tmpXlsx -Force -ErrorAction SilentlyContinue
 
 $a1 = Api GET '/api/poultry/species'
 $a3 = Api GET '/api/poultry/dish-usage?filter=set'
+$aPurchases = @((Api GET '/api/poultry/purchases').purchases)
+$orphanPurchases = @($aPurchases | Where-Object { $_.is_orphan -eq 1 })
 $leftover = @($a1.birds | Where-Object { $SCRIPT_BIRD_NAMES -contains $_.breed_name })
 $leftoverDish = @((Api GET '/api/menu').items | Where-Object { $SCRIPT_DISH_NAMES -contains $_.name })
 Check '自己建的禽类档案已回收' ($leftover.Count -eq 0) "残留=$($leftover.Count) 当前禽类档案总数=$($a1.birds.Count)（基线 $baselineBirds）"
 Check '自己建的临时菜品已回收' ($leftoverDish.Count -eq 0) "残留=$($leftoverDish.Count)"
-Check '用户数据未被改动' ($a1.birds.Count -eq $baselineBirds -and $a3.configured -eq $baselineConfigured) "禽类 $baselineBirds->$($a1.birds.Count) 已配置菜品 $baselineConfigured->$($a3.configured)"
+Check '自己没有留下孤儿采购' ($orphanPurchases.Count -eq 0) "孤儿采购=$($orphanPurchases.Count) 条（采购总数=$($aPurchases.Count)，基线 $baselinePurchases）"
+Check '用户数据未被改动' ($a1.birds.Count -eq $baselineBirds -and $a3.configured -eq $baselineConfigured -and @($aPurchases | Where-Object { $_.is_orphan -ne 1 }).Count -eq $baselinePurchases) "禽类 $baselineBirds->$($a1.birds.Count) 已配置菜品 $baselineConfigured->$($a3.configured) 采购 $baselinePurchases->$(@($aPurchases | Where-Object { $_.is_orphan -ne 1 }).Count)"
 Check '核算接口仍可用' ($true) "已配置菜品=$($a3.configured)"
 Write-Output ''
 Write-Output '===== 验证结束 ====='

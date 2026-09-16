@@ -57,6 +57,11 @@
           <el-button type="primary" :loading="loading" @click="loadAccounting">查询</el-button>
         </div>
       </header>
+      <div v-if="result?.source_note" class="accounting-source-note">
+        <span class="source-dot"></span>
+        <b>统一销量口径</b>
+        <span>{{ result.source_note }}</span>
+      </div>
       <div v-if="rangeOutOfData" class="accounting-hint">
         <el-alert type="warning" :closable="false" show-icon
           :title="`所选区间超出销量数据范围：系统内销量只覆盖 ${result.data_range.min_date} ~ ${result.data_range.max_date}，超出部分按 0 计。`" />
@@ -217,11 +222,11 @@
         </footer>
       </section>
 
-      <!-- ===== 采购校准（模型 vs 门店实际，MAPE） ===== -->
+      <!-- ===== 消耗校准（模型 vs 门店实际，MAPE） ===== -->
       <section class="menu-panel">
         <header class="menu-panel-header">
           <div class="menu-panel-title">
-            <h3>采购校准 · 模型 vs 门店实际</h3>
+            <h3>消耗校准 · 模型 vs 门店实际</h3>
             <span class="muted-text">
               用真实只数评价参数好坏 —— MAPE 越小说明出成系数越准；改完系数再校准一次，就能看出是否真的改善
             </span>
@@ -238,7 +243,7 @@
             <div class="calib-card">
               <span>样本数（门店 × 月）</span>
               <strong>{{ calibData.summary.sample_count }}</strong>
-              <small>来自「实际采购只数」录入</small>
+              <small>来自「实际消耗只数」录入</small>
             </div>
             <div class="calib-card">
               <span>平均偏差（带正负）</span>
@@ -271,11 +276,11 @@
             <el-table-column prop="governing" label="瓶颈" min-width="130" />
           </el-table>
           <p v-else class="menu-empty">
-            还没有可校准的数据 —— 请先在「理论 vs 实际采购」里录入门店每月的实际只数（每店每月每禽类一条）
+            还没有可校准的数据 —— 请先在「理论用量 vs 实际消耗」里录入门店每天的实际消耗只数（每店每天每禽类一条）
           </p>
           <p v-if="calibData.truncated" class="archive-note">（本次只算了最近 12 条；数据多时可指定门店再校准）</p>
         </div>
-        <p v-else class="menu-empty">点右上角「开始校准」：把每个门店每月录入的实际只数与模型算出的只数逐条对比（数据多时需要几秒）</p>
+        <p v-else class="menu-empty">点右上角「开始校准」：把每个门店录入的实际只数（按天录、自动按月汇总）与模型算出的只数逐条对比（数据多时需要几秒）</p>
       </section>
 
       <!-- ===== 食材去向对账（风控） ===== -->
@@ -443,25 +448,21 @@
         </footer>
       </section>
 
-      <!-- ===== 理论 vs 实际采购 ===== -->
+      <!-- ===== 理论 vs 实际消耗 ===== -->
       <section class="menu-panel">
         <header class="menu-panel-header">
           <div class="menu-panel-title">
-            <h3>理论用量 vs 实际采购</h3>
+            <h3>理论用量 vs 实际消耗</h3>
             <span>
               对比区间 {{ result.period.date_from }} ~ {{ result.period.date_to }}
-              <template v-if="comparison"> · 采购月份 {{ comparison.months.join('、') }}</template>
+              <template v-if="comparison"> · 覆盖月份 {{ comparison.months.join('、') }}</template>
             </span>
           </div>
           <div class="menu-filters">
-            <el-button @click="openPurchaseDialog()">录入采购只数</el-button>
+            <el-button @click="openConsumptionDialog()">录入消耗只数</el-button>
             <el-button type="primary" :loading="comparisonLoading" @click="loadComparison">刷新对比</el-button>
           </div>
         </header>
-        <div v-if="comparison && !comparison.is_whole_month" class="accounting-hint">
-          <el-alert type="info" :closable="false" show-icon
-            title="当前核算区间不是完整自然月，而采购只数按月录入，两者口径不完全对齐，差异率仅供参考。" />
-        </div>
         <el-table v-loading="comparisonLoading" :data="comparison?.comparison || []" class="menu-data-table" row-key="bird_id">
           <el-table-column label="禽类" min-width="170">
             <template #default="{ row }">
@@ -474,15 +475,15 @@
           <el-table-column label="理论用量" width="130" align="right">
             <template #default="{ row }"><span class="menu-price">{{ row.theoretical_birds }} 只</span></template>
           </el-table-column>
-          <el-table-column label="实际采购" width="130" align="right">
+          <el-table-column label="实际消耗" width="130" align="right">
             <template #default="{ row }">
-              <span v-if="row.has_purchase" class="menu-price">{{ row.purchased_birds }} 只</span>
+              <span v-if="row.has_consumption" class="menu-price">{{ row.consumed_birds }} 只</span>
               <span v-else class="muted-text">未录入</span>
             </template>
           </el-table-column>
           <el-table-column label="差异" width="130" align="right">
             <template #default="{ row }">
-              <span v-if="!row.has_purchase" class="muted-text">—</span>
+              <span v-if="!row.has_consumption" class="muted-text">—</span>
               <span v-else :class="['menu-price', row.diff_birds > 0 ? 'diff-up' : 'diff-down']">
                 {{ row.diff_birds > 0 ? '+' : '' }}{{ row.diff_birds }} 只
               </span>
@@ -496,25 +497,19 @@
               </span>
             </template>
           </el-table-column>
-          <el-table-column label="采购金额" width="130" align="right">
-            <template #default="{ row }">
-              <span v-if="row.has_purchase" class="menu-price">¥{{ money(row.purchased_amount) }}</span>
-              <span v-else class="muted-text">—</span>
-            </template>
-          </el-table-column>
           <el-table-column label="操作" width="130" fixed="right" align="right">
             <template #default="{ row }">
-              <el-button link type="primary" @click="openPurchaseDialog(row)">录入</el-button>
+              <el-button link type="primary" @click="openConsumptionDialog(row)">录入</el-button>
             </template>
           </el-table-column>
         </el-table>
         <div v-if="comparison && !comparison.comparison.length" class="menu-empty">
-          既没有理论用量也没有采购记录，先到「基础档案」补出成关系，或先录入采购只数
+          既没有理论用量也没有消耗记录，先到「基础档案」补出成关系，或先录入消耗只数
         </div>
         <footer v-if="comparison" class="menu-pagination-footer">
           <span>
-            理论合计 {{ comparison.totals.theoretical_birds }} 只 / 实际合计 {{ comparison.totals.purchased_birds }} 只 ·
-            理论成本 ¥{{ money(comparison.totals.theoretical_cost) }} / 采购金额 ¥{{ money(comparison.totals.purchased_amount) }}
+            理论合计 {{ comparison.totals.theoretical_birds }} 只 / 实际合计 {{ comparison.totals.consumed_birds }} 只 ·
+            理论成本 ¥{{ money(comparison.totals.theoretical_cost) }}
           </span>
         </footer>
       </section>
@@ -588,39 +583,34 @@
       </template>
     </el-dialog>
 
-    <!-- ===== 采购只数录入 ===== -->
-    <el-dialog v-model="purchaseVisible" title="录入实际采购只数" width="560px" align-center class="menu-dialog">
-      <el-alert type="info" :closable="false" show-icon
-        title="按「门店 + 月份 + 禽类」唯一，同一组合重复保存会覆盖原值。用于和理论用量做对比。" />
-      <el-form label-position="top" class="purchase-form">
+    <!-- ===== 实际消耗只数录入 ===== -->
+    <el-dialog v-model="consumptionVisible" title="录入实际消耗只数" width="560px" align-center class="menu-dialog">
+      <el-alert type="info" :closable="false" showIcon
+        title="按「门店 + 日期 + 禽类」唯一，同一天同一组合重复保存会覆盖原值。填的是实际用掉的只数，不是进货量——进货受库存进出影响，与理论用量口径不一致。" />
+      <el-form label-position="top" class="consumption-form">
         <el-form-item label="门店">
-          <el-select v-model="purchaseForm.store_id" filterable placeholder="请选择门店" style="width: 100%;">
+          <el-select v-model="consumptionForm.store_id" filterable placeholder="请选择门店" style="width: 100%;">
             <el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="月份">
-          <el-date-picker v-model="purchaseForm.month" type="month" value-format="YYYY-MM" placeholder="选择月份" style="width: 100%;" />
+        <el-form-item label="日期">
+          <el-date-picker v-model="consumptionForm.date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%;" />
         </el-form-item>
         <el-form-item label="禽类品种">
-          <el-select v-model="purchaseForm.bird_id" placeholder="请选择品种" style="width: 100%;">
+          <el-select v-model="consumptionForm.bird_id" placeholder="请选择品种" style="width: 100%;">
             <el-option v-for="bird in birds" :key="bird.id" :label="`${bird.animal} · ${bird.breed_name}`" :value="bird.id" />
           </el-select>
         </el-form-item>
-        <div class="form-grid">
-          <el-form-item label="采购只数">
-            <el-input-number v-model="purchaseForm.quantity" :min="0" :precision="2" :step="1" style="width: 100%;" />
-          </el-form-item>
-          <el-form-item label="采购金额（元，选填）">
-            <el-input-number v-model="purchaseForm.amount" :min="0" :precision="2" style="width: 100%;" />
-          </el-form-item>
-        </div>
+        <el-form-item label="实际消耗只数">
+          <el-input-number v-model="consumptionForm.quantity" :min="0" :precision="2" :step="1" style="width: 100%;" />
+        </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model="purchaseForm.remark" placeholder="选填" />
+          <el-input v-model="consumptionForm.remark" placeholder="选填" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="purchaseVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="savePurchase">保存</el-button>
+        <el-button @click="consumptionVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="saveConsumption">保存</el-button>
       </template>
     </el-dialog>
 
@@ -639,7 +629,12 @@
           </div>
           <el-table v-loading="birdLoading" :data="birds" class="menu-data-table" row-key="id">
             <el-table-column label="禽类" width="100">
-              <template #default="{ row }"><span :class="['animal-pill', animalTone(row.animal)]">{{ row.animal }}</span></template>
+              <template #default="{ row }">
+                <span class="animal-identity">
+                  <i :class="['animal-avatar', animalTone(row.animal)]" aria-hidden="true"></i>
+                  <span :class="['animal-pill', animalTone(row.animal)]">{{ row.animal }}</span>
+                </span>
+              </template>
             </el-table-column>
             <el-table-column prop="breed_name" label="品种名称" min-width="180" />
             <el-table-column label="单只净重" width="120" align="right">
@@ -904,7 +899,13 @@
         <div class="form-grid">
           <el-form-item label="禽类">
             <el-select v-model="birdForm.animal" style="width: 100%;">
-              <el-option v-for="animal in animals" :key="animal" :label="animal" :value="animal" />
+              <el-option v-for="animal in animals" :key="animal" :label="animal" :value="animal">
+                <span class="animal-option">
+                  <i :class="['animal-avatar', animalTone(animal)]" aria-hidden="true"></i>
+                  <span>{{ animal }}</span>
+                  <small>{{ animal === '鹅' ? '鹅类整只出成' : animal === '鸭' ? '鸭类整只出成' : '鸡类整只出成' }}</small>
+                </span>
+              </el-option>
             </el-select>
           </el-form-item>
           <el-form-item label="品种名称">
@@ -1224,7 +1225,7 @@ import {
   getPoultryAccounting, getPoultrySpecies, createPoultrySpecies, updatePoultrySpecies, deletePoultrySpecies,
   getPoultryYields, savePoultryYields,
   getPoultryDishUsageOverview, getPoultryDishUsage, savePoultryDishUsage, batchSavePoultryDishUsage,
-  getPoultryPurchaseComparison, savePoultryPurchase,
+  getPoultryConsumptionComparison, savePoultryConsumption,
   getPoultryTemplate, importPoultryWorkbook,
   getPoultryScope, savePoultryScopeKeywords, savePoultryScopeDishes, getPoultryScopePreview,
   getPoultryCalibration,
@@ -1451,7 +1452,7 @@ async function loadComparison() {
   if (!filters.range?.[0]) { ElMessage.warning('请先选择核算时间段'); return }
   comparisonLoading.value = true
   try {
-    comparison.value = await getPoultryPurchaseComparison({
+    comparison.value = await getPoultryConsumptionComparison({
       store_id: filters.storeId || '',
       date_from: filters.range[0],
       date_to: filters.range[1],
@@ -1539,7 +1540,7 @@ async function markScopeDishes(inScope) {
   finally { scopeSaving.value = false }
 }
 
-// ===== 采购校准（模型 vs 门店实际）=====
+// ===== 消耗校准（模型 vs 门店实际）=====
 const calibData = ref(null)
 const calibLoading = ref(false)
 const calibLevelTone = computed(() => {
@@ -1946,27 +1947,27 @@ async function saveBatchUsage() {
   finally { saving.value = false }
 }
 
-// ===== 采购录入 =====
-const purchaseVisible = ref(false)
-const purchaseForm = reactive({ store_id: '', month: dayjs().format('YYYY-MM'), bird_id: '', quantity: 0, amount: 0, remark: '' })
-function openPurchaseDialog(row) {
-  purchaseForm.store_id = filters.storeId || ''
-  purchaseForm.month = (filters.range?.[0] || dayjs().format('YYYY-MM-DD')).slice(0, 7)
-  purchaseForm.bird_id = row ? row.bird_id : (birds.value[0]?.id || '')
-  purchaseForm.quantity = 0
-  purchaseForm.amount = 0
-  purchaseForm.remark = ''
-  purchaseVisible.value = true
+// ===== 实际消耗只数录入 =====
+const consumptionVisible = ref(false)
+const consumptionForm = reactive({ store_id: '', date: dayjs().format('YYYY-MM-DD'), bird_id: '', quantity: 0, remark: '' })
+function openConsumptionDialog(row) {
+  consumptionForm.store_id = filters.storeId || ''
+  consumptionForm.date = filters.range?.[0] || dayjs().format('YYYY-MM-DD')
+  consumptionForm.bird_id = row ? row.bird_id : (birds.value[0]?.id || '')
+  consumptionForm.quantity = 0
+  consumptionForm.remark = ''
+  consumptionVisible.value = true
 }
-async function savePurchase() {
-  if (!purchaseForm.store_id) { ElMessage.warning('请选择门店'); return }
-  if (!purchaseForm.bird_id) { ElMessage.warning('请选择禽类品种'); return }
+async function saveConsumption() {
+  if (!consumptionForm.store_id) { ElMessage.warning('请选择门店'); return }
+  if (!consumptionForm.date) { ElMessage.warning('请选择日期'); return }
+  if (!consumptionForm.bird_id) { ElMessage.warning('请选择禽类品种'); return }
   saving.value = true
   try {
-    await savePoultryPurchase({ ...purchaseForm, amount: purchaseForm.amount || 0, quantity: purchaseForm.quantity || 0 })
-    purchaseVisible.value = false
+    await savePoultryConsumption({ ...consumptionForm, quantity: consumptionForm.quantity || 0 })
+    consumptionVisible.value = false
     await loadComparison()
-    ElMessage.success('采购只数已保存')
+    ElMessage.success('消耗只数已保存')
   } catch (error) { ElMessage.error('保存失败：' + error.message) }
   finally { saving.value = false }
 }
@@ -2041,6 +2042,13 @@ async function openGapDialog() {
 
 <style scoped>
 .accounting-filter-panel .menu-panel-header { flex-wrap: wrap; gap: 12px; }
+.accounting-source-note {
+  display: flex; align-items: center; gap: 8px; margin: 0 18px 14px; padding: 9px 12px;
+  border: 1px solid #d9e7fb; border-radius: 10px; color: #67809f; background: linear-gradient(90deg, #f4f8ff, #fbfdff);
+  font-size: 12px; line-height: 1.6;
+}
+.accounting-source-note b { color: #285997; white-space: nowrap; }
+.source-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #2f79e8; box-shadow: 0 0 0 4px rgba(47, 121, 232, .1); }
 .accounting-hint { padding: 0 18px 14px; }
 .accounting-empty-panel { padding: 0; }
 .accounting-empty { padding: 42px 28px; text-align: center; }
@@ -2075,6 +2083,17 @@ async function openGapDialog() {
 .animal-pill.goose { color: #b8730f; background: #fff6e6; }
 .animal-pill.duck { color: #2468c9; background: #eef4ff; }
 .animal-pill.chicken { color: #168160; background: #eaf8f3; }
+.animal-identity { display: inline-flex; align-items: center; gap: 6px; }
+.animal-avatar {
+  display: inline-block; width: 28px; height: 24px; border: 1px solid #dde7f3; border-radius: 8px;
+  background-color: #f9fbfe; background-image: url('/images/poultry/poultry-models.png');
+  background-repeat: no-repeat; background-size: 330% auto; box-shadow: 0 2px 7px rgba(24, 52, 93, .08);
+}
+.animal-avatar.goose { background-position: 2% 50%; }
+.animal-avatar.duck { background-position: 50% 50%; }
+.animal-avatar.chicken { background-position: 98% 50%; }
+.animal-option { display: inline-flex; align-items: center; gap: 8px; min-width: 220px; }
+.animal-option small { margin-left: auto; color: #98a2b1; font-size: 11px; }
 .part-name { color: #344054; font-size: 13px; }
 .menu-price.birds { color: #173f8a; font-weight: 700; }
 .menu-price.diff-up { color: #ca4744; }
@@ -2089,8 +2108,8 @@ async function openGapDialog() {
 
 .gap-desc { margin: 0 0 12px; padding: 10px 12px; border-radius: 9px; color: #66768f; background: #f7f9fc; font-size: 12px; line-height: 1.8; }
 .group-count { display: block; margin-top: 2px; color: #9aa3b1; font-size: 11px; }
-.purchase-form { margin-top: 14px; }
-.purchase-form .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 14px; }
+.consumption-form { margin-top: 14px; }
+.consumption-form .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 14px; }
 
 .archive-bar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
 .archive-tip { flex: 1; min-width: 260px; max-width: 640px; color: #6e809b; font-size: 12px; line-height: 1.7; }
@@ -2218,7 +2237,7 @@ async function openGapDialog() {
 .yield-current b { color: #1f3f6e; font-size: 15px; }
 .yield-current .muted-text { flex: 1; min-width: 200px; }
 
-/* 采购校准（MAPE） */
+/* 消耗校准（MAPE） */
 .calib-body { padding: 0 18px 16px; }
 .calib-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
 @media (max-width: 900px) { .calib-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

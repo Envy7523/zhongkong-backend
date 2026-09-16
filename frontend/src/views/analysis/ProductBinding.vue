@@ -15,6 +15,14 @@
         <button type="button" class="hero-bind-btn" :disabled="autoBinding" @click="autoBind">
           {{ autoBinding ? '正在智能匹配…' : '⚡ 智能匹配未绑定商品' }}
         </button>
+        <!-- 与「堂食菜品绑定」同一套识别规则：精确命中才采用，相似度候选只提示不自动绑 -->
+        <button
+          type="button" class="hero-bind-btn smart" :disabled="smartBinding || !recommendableCount"
+          :title="`与「堂食菜品绑定」同一套识别规则：手工绑定 → 菜品编码互校 → 名称+规格唯一 → 名称唯一，再接平台名称归一化。当前可一键采用 ${recommendableCount} 项`"
+          @click="autoAdoptRecommend"
+        >
+          {{ smartBinding ? '采用中…' : `⚡ 智能采用全部推荐（${recommendableCount}）` }}
+        </button>
       </div>
     </section>
 
@@ -92,6 +100,42 @@
                 <span>{{ row.menu_category || '未分类' }}</span>
                 <span>{{ row.menu_sku_price_summary || '价格未设置' }}</span>
                 <span>成本 {{ money(row.unit_cost) }}</span>
+              </div>
+            </div>
+            <!-- 未绑定但识别命中：与「堂食菜品绑定」同一套规则，直接给推荐，一键采用 -->
+            <div v-else-if="row.recommend_menu_item_id" class="mapped-dish sku-card recommend">
+              <div class="sku-card-title"><i class="rec">推荐</i><b>{{ row.recommend_sku_label }}</b></div>
+              <div class="sku-card-meta">
+                <span class="reason">{{ row.recommend_reason_label }}</span>
+                <span>{{ row.recommend_category || '未分类' }}</span>
+                <span>成本 {{ money(row.recommend_cost) }}</span>
+              </div>
+              <div class="sku-card-actions">
+                <el-button size="small" type="primary" @click="adoptRecommend(row)">采用推荐</el-button>
+                <el-button size="small" link @click="openBindDialog(row)">另选</el-button>
+              </div>
+            </div>
+            <!-- 精确规则没命中但名称相似 → 疑似候选（只提示，点「采用」才绑定） -->
+            <div v-else-if="row.recommend_candidates && row.recommend_candidates.length" class="mapped-dish sku-card suspect">
+              <div class="sku-card-title"><i class="sus">疑似</i><b>{{ row.recommend_candidates[0].menu_name }}</b></div>
+              <div class="sku-card-meta">
+                <span class="reason">相似度 {{ Math.round(row.recommend_candidates[0].score * 100) }}%</span>
+                <span>{{ row.recommend_candidates[0].category || '未分类' }}</span>
+                <span>成本 {{ money(row.recommend_candidates[0].cost) }}</span>
+              </div>
+              <div class="sku-card-actions">
+                <el-button size="small" type="primary" plain @click="adoptCandidate(row, row.recommend_candidates[0])">采用</el-button>
+                <el-dropdown v-if="row.recommend_candidates.length > 1" trigger="click" @command="c => adoptCandidate(row, c)">
+                  <el-button size="small" link>其他候选（{{ row.recommend_candidates.length - 1 }}）</el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item v-for="c in row.recommend_candidates.slice(1)" :key="c.menu_item_id" :command="c">
+                        {{ c.menu_name }}（{{ Math.round(c.score * 100) }}%）
+                      </el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+                <el-button size="small" link @click="openBindDialog(row)">另选</el-button>
               </div>
             </div>
             <div v-else class="sku-empty"><span>未选择本地 SKU</span><small>请绑定到对应规格，避免使用错误成本</small></div>
@@ -289,6 +333,7 @@ import {
   deleteBusinessProductMapping,
   previewAutoBindBusinessProductMappings,
   executeAutoBindBusinessProductMappings,
+  adoptBusinessProductRecommendations,
   getSpecLinks,
   saveSpecLinks,
   deleteSpecLinks,
@@ -307,6 +352,7 @@ const menuItems = ref([])
 const loading = ref(false)
 const saving = ref(false)
 const autoBinding = ref(false)
+const smartBinding = ref(false)
 const manualBindVisible = ref(false)
 const manualBindItems = ref([])
 const safeBindItems = ref([])
@@ -356,6 +402,9 @@ const totalProducts = computed(() => products.value.length)
 const mappedCount = computed(() => products.value.filter(p => p.mapped).length)
 const unmappedCount = computed(() => totalProducts.value - mappedCount.value)
 const bindingRate = computed(() => totalProducts.value ? Math.round(mappedCount.value / totalProducts.value * 100) : 0)
+/** 与堂食同款统计：待处理商品里有多少条已被识别出「推荐」（可一键采用） */
+const recommendableCount = computed(() => products.value.filter(p => !p.mapped && p.binding_mode !== 'spec' && p.recommend_menu_item_id).length)
+const suspectCount = computed(() => products.value.filter(p => !p.mapped && p.binding_mode !== 'spec' && !p.recommend_menu_item_id && (p.recommend_candidates || []).length).length)
 const manualPageCount = computed(() => Math.max(1, Math.ceil(manualBindItems.value.length / 10)))
 // 校正进度：未处理的项目不阻塞确认，直接按“本次不绑定”处理
 const manualSelectedCount = computed(() => manualBindItems.value.filter(row => Number(manualSelections.value[row.key]) > 0).length)
@@ -490,6 +539,61 @@ async function loadData() {
     ElMessage.error('加载失败：' + error.message)
   } finally {
     loading.value = false
+  }
+}
+
+/** 采用精确推荐：与「堂食菜品绑定」识别出的同一个本地 SKU，直接写入绑定表 */
+async function adoptRecommend(row) {
+  return bindRowToMenu(row, row.recommend_menu_item_id, row.recommend_sku_label)
+}
+/** 采用疑似候选：名称相似但规则未精确命中，用户点「采用」才绑定 */
+async function adoptCandidate(row, candidate) {
+  if (!candidate) return
+  return bindRowToMenu(row, candidate.menu_item_id, candidate.sku_label || candidate.menu_name)
+}
+async function bindRowToMenu(row, menuItemId, label) {
+  if (saving.value || !menuItemId) return
+  saving.value = true
+  try {
+    await saveBusinessProductMapping({
+      platform: row.platform,
+      external_product_name: row.product_name,
+      menu_item_id: Number(menuItemId),
+      scope: scope.value,
+    })
+    ElMessage.success(`已绑定「${row.product_name}」→ ${label}`)
+    await loadData()
+  } catch (error) {
+    ElMessage.error('绑定失败：' + error.message)
+  } finally {
+    saving.value = false
+  }
+}
+
+/** 智能采用全部推荐：只采用精确命中的推荐；疑似候选一律不自动绑（避免套餐错绑） */
+async function autoAdoptRecommend() {
+  if (smartBinding.value || !recommendableCount.value) return
+  try {
+    await ElMessageBox.confirm(
+      `按与「堂食菜品绑定」相同的识别规则，一键关联 ${recommendableCount.value} 个已识别出推荐的商品：\n`
+      + '① 菜名去掉【】（）等前后缀与平台营销词差异\n② 菜品编码与本地档案编码一致且名称互校\n'
+      + '③ 名称+规格唯一、或名称唯一\n④ 平台名称归一化后再走同一套规则\n\n'
+      + `只采用精确命中的推荐；另有 ${suspectCount.value} 个只是名称相似（疑似），需要你逐个确认，不会被自动绑定。继续吗？`,
+      '智能采用全部推荐',
+      { confirmButtonText: '开始采用', cancelButtonText: '取消', type: 'info' }
+    )
+  } catch { return }
+  smartBinding.value = true
+  try {
+    const res = await adoptBusinessProductRecommendations(scope.value)
+    const labels = res.reason_labels || {}
+    const parts = Object.entries(res.reasons || {}).map(([k, n]) => `${labels[k] || k} ${n}`).join('；')
+    ElMessage.success(`已采用 ${res.bound} 个推荐${parts ? `（${parts}）` : ''}，仍待处理 ${res.skipped} 个`)
+    await loadData()
+  } catch (error) {
+    ElMessage.error('一键采用失败：' + error.message)
+  } finally {
+    smartBinding.value = false
   }
 }
 
@@ -907,6 +1011,15 @@ onBeforeUnmount(() => window.removeEventListener('menu-category-order-changed', 
 .sku-empty { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px dashed #dbe1ea; border-radius: 9px; color: #8e99a9; }
 .sku-empty span { color: #778497; font-size: 12px; }
 .sku-empty small { color: #aab3c0; font-size: 10px; }
+/* 「推荐 / 疑似」卡片：与「堂食菜品绑定」保持完全一致的视觉与操作 */
+.sku-card.recommend { border-color: #cbe7d8; background: linear-gradient(105deg, #f7fdfa, #eefaf3); }
+.sku-card-title i.rec { background: #cdf0dd; color: #1d7a55; }
+.sku-card.suspect { border-color: #f3d9b0; background: linear-gradient(105deg, #fffcf6, #fff6e8); }
+.sku-card-title i.sus { background: #fbe6c4; color: #a4650f; }
+.sku-card.suspect .sku-card-meta span.reason { color: #a4650f; font-weight: 650; }
+.sku-card-actions { display: flex; align-items: center; gap: 6px; margin-top: 7px; }
+.hero-bind-btn.smart { margin-left: 8px; }
+.sku-card-meta span.reason { color: #4572cf; font-weight: 650; }
 .sales-numbers b, .sales-numbers small { display: block; font-variant-numeric: tabular-nums; }
 .sales-numbers b { color: #31415a; font-size: 13px; }
 .sales-numbers small { margin-top: 4px; color: #8a97a8; font-size: 11px; }

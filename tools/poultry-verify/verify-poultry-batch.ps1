@@ -27,11 +27,12 @@ Write-Output '===== 0. 记录基线；只回收脚本自己的残留（绝不整
 $SCRIPT_BIRD_NAMES = @('批量验证用鹅-临时', '验证用鹅-临时', '验证用鸭-临时')
 $baselineBirds = (Api GET '/api/poultry/species').birds.Count
 $baselineConfigured = (Api GET '/api/poultry/dish-usage?filter=set').configured
+# 先收自己的采购，再删品种（反了会留下看不见的孤儿采购，见 verify-poultry.ps1 第 0 步注释）
+foreach ($p in (Api GET '/api/poultry/purchases').purchases) {
+  if ($p.remark -eq '自动化验证临时数据' -or $p.is_orphan -eq 1) { Api DELETE "/api/poultry/purchases/$($p.id)" | Out-Null }
+}
 foreach ($b in (Api GET '/api/poultry/species').birds) {
   if ($SCRIPT_BIRD_NAMES -contains $b.breed_name) { Api DELETE "/api/poultry/species/$($b.id)" | Out-Null }
-}
-foreach ($p in (Api GET '/api/poultry/purchases').purchases) {
-  if ($p.remark -eq '自动化验证临时数据') { Api DELETE "/api/poultry/purchases/$($p.id)" | Out-Null }
 }
 Write-Output ("  基线：禽类档案={0} 已配置菜品={1}（脚本不修改也不删除用户数据）" -f $baselineBirds, $baselineConfigured)
 
@@ -137,6 +138,10 @@ Check '汇总只数与明细合计一致' ([math]::Abs($myBird.birds_count - $bi
 Write-Output ''
 Write-Output '===== 9. 只回收自己建的数据，并把菜品耗用还原成快照 ====='
 Restore-UsageSnapshot
+# 采购先收、品种后删（顺序不能反）
+foreach ($p in (Api GET '/api/poultry/purchases').purchases) {
+  if ($p.remark -eq '自动化验证临时数据' -or $p.is_orphan -eq 1) { Api DELETE "/api/poultry/purchases/$($p.id)" | Out-Null }
+}
 foreach ($b in (Api GET '/api/poultry/species').birds) {
   if ($SCRIPT_BIRD_NAMES -contains $b.breed_name) { Api DELETE "/api/poultry/species/$($b.id)" | Out-Null }
 }
@@ -148,6 +153,7 @@ foreach ($menuId in $groupIds) {
   $restoredCount += $rows.Count
 }
 Check '自己建的禽类档案已回收' ($leftover.Count -eq 0) "残留=$($leftover.Count) 当前禽类档案总数=$($a1.birds.Count)（基线 $baselineBirds）"
+Check '自己没有留下孤儿采购' (@((Api GET '/api/poultry/purchases').purchases | Where-Object { $_.is_orphan -eq 1 }).Count -eq 0) '孤儿采购=0 条'
 Check '用户数据未被改动' ($a1.birds.Count -eq $baselineBirds) "禽类档案 $baselineBirds -> $($a1.birds.Count)"
 Check '组内菜品耗用已还原为快照' ($restoredCount -eq $snapRowTotal) "快照=$snapRowTotal 条 现状=$restoredCount 条"
 Write-Output ''

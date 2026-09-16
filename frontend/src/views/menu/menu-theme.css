@@ -143,6 +143,8 @@
 .status-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .status-pill.on { color: #208b69; background: #e9f8f3; }
 .status-pill.off { color: #8b95a4; background: #f0f2f5; }
+/* 合并展示的菜品里，各规格状态不一致时用（如「部分停售」） */
+.status-pill.part { color: #b3760e; background: #fdf5e6; }
 .menu-panel-footer {
   display: flex;
   justify-content: space-between;

@@ -8,6 +8,7 @@ const child_process = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const XLSX = require('xlsx');
 const { drawBarChart, drawLineChart, drawPieChart } = require('./lib/chart');
 const { drawStoreDailyReport } = require('./lib/report');
 const { parseDailyExcel, toReportData } = require('./lib/daily-data');
@@ -19,6 +20,7 @@ const ledgerBackupImport = require('./lib/bookkeeping-import');
 const wecomBot = require('./lib/wecom-bot');
 const staffImport = require('./lib/staff-import');
 const wecomStaffSync = require('./lib/wecom-staff-sync');
+const dingtalkAttendance = require('./lib/dingtalk-attendance');
 const { createBusinessAssistant } = require('./lib/wecom-business-assistant');
 const jwt = require('jsonwebtoken');
 
@@ -682,6 +684,214 @@ app.put('/api/stores/:id', (req, res) => { try { if (!applyStoreUpdate(req.param
 app.delete('/api/stores/:id', (req, res) => { try { const store = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); db.run('DELETE FROM stores WHERE id=?', [req.params.id]); db.run('DELETE FROM store_region_members WHERE store_id=?', [req.params.id]); db.save(); res.json({ ok: true, message: '门店已删除', removed: store }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ==========================================
+//  门店 GLB 模型（分片上传 / 断点续传 / 内容寻址下载）
+//  文件落盘 data/uploads/store-models/<sha256>.glb，数据库只存元数据；
+//  为什么不把 BLOB 存进 sql.js 库、为什么按内容哈希命名、分片怎么选，见 lib/store-models.js 顶部注释。
+// ==========================================
+const storeModels = require('./lib/store-models');
+storeModels.ensureDirs();
+
+/**
+ * 分片走原始二进制：100MB+ 的文件若按项目既有的 base64-JSON 约定（express.json limit 50mb）
+ * 会膨胀 33% 且解析时整串进内存，直接不可用。
+ * 这里只在这一条路由上启用 raw 解析（type 放开，避免前端 content-type 不一致时静默拿到空 body）。
+ */
+const modelChunkBody = express.raw({ type: () => true, limit: '64mb' });
+
+/** 把上传类中间件抛出的错误（如分片超限）转成统一 JSON，别让前端收到 HTML 报错页 */
+function modelUploadErrors(req, res, next) {
+  modelChunkBody(req, res, (error) => {
+    if (!error) return next();
+    const status = error.status || error.statusCode || 500;
+    const message = error.type === 'entity.too.large'
+      ? `单个分片不能超过 ${Math.round((error.limit || 0) / 1024 / 1024)}MB`
+      : error.message;
+    res.status(status).json({ error: message });
+  });
+}
+
+function storeModelFail(res, error) {
+  const status = error.status || 500;
+  if (status >= 500) console.error('[store-model]', error.message);
+  res.status(status).json({ error: error.message });
+}
+
+/** 门店模型总览：列表页一次拿全，25 家门店不必发 25 个请求 */
+app.get('/api/store-models', (req, res) => {
+  try {
+    const models = storeModels.listActiveModels(db).map(row => ({
+      id: row.id,
+      store_id: row.store_id,
+      store_name: row.store_name || '',
+      file_name: row.file_name,
+      bytes: row.bytes,
+      sha256: row.sha256,
+      version: row.version,
+      uploaded_by_name: row.uploaded_by_name,
+      created_at: row.created_at,
+      file_url: `/api/store-models/${row.id}/file`,
+    }));
+    res.json({ ok: true, models, limits: storeModels.stats(db) });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+/** 单个门店的当前模型 + 历史版本 */
+app.get('/api/stores/:id/model', (req, res) => {
+  try {
+    const model = storeModels.getActiveModel(db, Number(req.params.id));
+    res.json({ ok: true, model, history: storeModels.listModelHistory(db, Number(req.params.id)) });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+// 三维空间标注：坐标与模型节点名均存服务端，GLB 本身保持原样；标注严格绑定当前模型版本。
+app.get('/api/store-models/:id/annotations', (req, res) => {
+  try {
+    const model = storeModels.getModelById(db, Number(req.params.id));
+    if (!model) return res.status(404).json({ error: '模型不存在' });
+    const annotations = db.queryAll(`SELECT * FROM store_model_annotations WHERE store_model_id=? ORDER BY id ASC`, [model.id]);
+    res.json({ ok: true, annotations });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+app.post('/api/store-models/:id/annotations', (req, res) => {
+  try {
+    const model = storeModels.getModelById(db, Number(req.params.id));
+    if (!model) return res.status(404).json({ error: '模型不存在' });
+    const body = req.body || {};
+    const title = String(body.title || '').trim().slice(0, 80);
+    if (!title) return res.status(400).json({ error: '请填写空间名称' });
+    const coordinates = ['position_x', 'position_y', 'position_z'];
+    if (!coordinates.every(key => Number.isFinite(Number(body[key])))) return res.status(400).json({ error: '请先在三维模型中选择一个位置' });
+    const id = db.insert(`INSERT INTO store_model_annotations (
+      store_model_id,store_id,zone_key,title,description,node_name,position_x,position_y,position_z,normal_x,normal_y,normal_z,status,created_by_name
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
+      model.id, model.store_id, String(body.zone_key || '').slice(0, 40), title, String(body.description || '').slice(0, 500), String(body.node_name || '').slice(0, 160),
+      Number(body.position_x), Number(body.position_y), Number(body.position_z), Number(body.normal_x) || 0, Number(body.normal_y) || 1, Number(body.normal_z) || 0,
+      String(body.status || '待完善').slice(0, 24), req.user?.display_name || req.user?.username || '',
+    ]);
+    db.save();
+    res.json({ ok: true, annotation: db.queryOne('SELECT * FROM store_model_annotations WHERE id=?', [id]) });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+app.delete('/api/store-models/:id/annotations/:annotationId', (req, res) => {
+  try {
+    const changed = db.run('DELETE FROM store_model_annotations WHERE id=? AND store_model_id=?', [Number(req.params.annotationId), Number(req.params.id)]);
+    if (!changed) return res.status(404).json({ error: '空间标注不存在' });
+    db.save();
+    res.json({ ok: true });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+/** 开上传会话（断点续传的入口） */
+app.post('/api/store-models/uploads', (req, res) => {
+  try {
+    const { store_id, file_name, bytes, chunk_size, fingerprint } = req.body || {};
+    const store = db.queryOne('SELECT id FROM stores WHERE id=?', [store_id]);
+    if (!store) return res.status(404).json({ error: '门店不存在' });
+    const session = storeModels.createSession({
+      storeId: store_id,
+      fileName: file_name,
+      bytes,
+      chunkSize: chunk_size,
+      fingerprint,
+      userId: req.user?.id,
+      userName: req.user?.display_name || req.user?.username || '',
+    });
+    res.json({ ok: true, ...storeModels.describeSession(session) });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+/** 查上传进度 —— 前端据此决定"从第几片接着传" */
+app.get('/api/store-models/uploads/:uploadId', (req, res) => {
+  try {
+    res.json({ ok: true, ...storeModels.describeSession(storeModels.getSession(req.params.uploadId)) });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+/** 上传一个分片（幂等：同序号重传直接覆盖） */
+app.put('/api/store-models/uploads/:uploadId/chunks/:index', modelUploadErrors, (req, res) => {
+  try {
+    const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+    res.json({ ok: true, ...storeModels.saveChunk(req.params.uploadId, req.params.index, body) });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+/** 合并全部分片、校验 GLB、落盘、写库（换版本） */
+app.post('/api/store-models/uploads/:uploadId/complete', async (req, res) => {
+  try {
+    const result = await storeModels.completeSession(db, req.params.uploadId, {
+      userId: req.user?.id,
+      userName: req.user?.display_name || req.user?.username || '',
+    });
+    db.save();
+    res.json({
+      ok: true,
+      model: result.model,
+      store_name: result.store.store_name,
+      version: result.version,
+      deduped: result.deduped,
+      message: `已为「${result.store.store_name}」保存模型 v${result.version}`,
+    });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+/** 放弃上传 */
+app.delete('/api/store-models/uploads/:uploadId', async (req, res) => {
+  try { res.json({ ok: true, ...await storeModels.abortSession(req.params.uploadId) }); }
+  catch (e) { storeModelFail(res, e); }
+});
+
+/**
+ * 下载模型文件。
+ * 走 JWT 鉴权而不是挂在 /uploads 公开目录：模型动辄 135MB，
+ * 公开路径等于任何人拿到 URL 就能拖走（现网 frontend/dist/models/store-demo.glb 就是这个状态）。
+ * 文件名是内容哈希，所以可以放心给浏览器一年期强缓存 + immutable。
+ */
+app.get('/api/store-models/:id/file', (req, res) => {
+  try {
+    const model = storeModels.getModelById(db, Number(req.params.id));
+    if (!model) return res.status(404).json({ error: '模型不存在' });
+    const filePath = storeModels.filePathOf(model.stored_name);
+    if (!filePath || !fs.existsSync(filePath)) return res.status(410).json({ error: '模型文件已丢失，请重新上传' });
+    const asciiName = model.file_name.replace(/[^\x20-\x7e]/g, '_');
+    res.setHeader('Content-Type', 'model/gltf-binary');
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    res.setHeader('Content-Disposition', `inline; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(model.file_name)}`);
+    // ETag 直接用内容哈希，浏览器拿它做条件请求，不可能命中过期版本
+    res.setHeader('ETag', `"${model.sha256}"`);
+    res.sendFile(filePath, { headers: { 'X-Model-Sha256': model.sha256, 'X-Model-Bytes': String(model.bytes) } });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+/** 摘掉模型（软删，自动回退上一版；文件保留，可恢复） */
+app.delete('/api/store-models/:id', (req, res) => {
+  try {
+    const result = storeModels.deactivateModel(db, Number(req.params.id));
+    db.save();
+    res.json({ ok: true, removed: result.removed, fallback: result.fallback });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+/** 磁盘占用与孤儿文件清理（默认只看不删） */
+app.get('/api/store-models/maintenance/orphans', (req, res) => {
+  try { res.json({ ok: true, stats: storeModels.stats(db) }); } catch (e) { storeModelFail(res, e); }
+});
+app.post('/api/store-models/maintenance/purge', async (req, res) => {
+  try {
+    if (req.user?.role !== '管理员') return res.status(403).json({ error: '仅管理员可清理模型磁盘' });
+    const dryRun = req.body?.dry_run !== false;
+    // keep_versions：每个门店保留生效版 + (N-1) 个可回滚的历史版本；默认 1 表示只留生效版
+    const keepVersions = Number(req.body?.keep_versions ?? req.query?.keep_versions ?? 1);
+    const purgeHistory = req.body?.purge_history !== false;
+    const result = await storeModels.purgeOrphans(db, { dryRun, keepVersions, purgeHistory });
+    if (!dryRun && (result.rows_deleted || result.freed_bytes)) db.save();
+    res.json({ ok: true, ...result, stats: storeModels.stats(db) });
+  } catch (e) { storeModelFail(res, e); }
+});
+
+
+// ==========================================
 //  SQLite 版门店管理（新路由，路径 /api/db/stores）
 // ==========================================
 
@@ -933,10 +1143,62 @@ function ageFromIdCard(value) {
   return age >= 0 && age <= 130 ? age : null;
 }
 
+function validateStaffFields({ phone, id_card_number } = {}) {
+  const mobile = String(phone || '').trim();
+  if (mobile && !/^1[3-9]\d{9}$/.test(mobile)) return '手机号应为 11 位中国大陆手机号';
+  const idCard = String(id_card_number || '').trim().toUpperCase();
+  if (!idCard) return '';
+  if (ageFromIdCard(idCard) === null) return '身份证号码格式或出生日期不正确';
+  const weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+  const checks = '10X98765432';
+  const total = idCard.slice(0, 17).split('').reduce((sum, digit, index) => sum + Number(digit) * weights[index], 0);
+  return checks[total % 11] === idCard[17] ? '' : '身份证校验码不正确';
+}
+
+function lifecycleDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : new Date().toISOString().slice(0, 10);
+}
+function addEmployeeLifecycleEvent(employeeId, eventType, eventDate, oldValue = '', newValue = '', note = '', source = '本地维护') {
+  db.insert(`INSERT INTO employee_lifecycle_events (employee_id,event_type,event_date,old_value,new_value,note,source)
+    VALUES (?,?,?,?,?,?,?)`, [employeeId, eventType, lifecycleDate(eventDate), String(oldValue || ''), String(newValue || ''), String(note || ''), source]);
+}
+// C 级只保存长期、固定的薪酬标准。奖罚、扣缴、出勤和加班均为月度工资表数据，不写回员工档案。
+const SALARY_PROFILE_FIELDS = ['base_salary', 'position_allowance', 'performance_salary', 'attendance_bonus', 'housing_allowance', 'weekday_overtime_rate', 'restday_overtime_rate', 'part_time_hourly_rate'];
+function normalizeSalaryProfile(input = {}) {
+  return Object.fromEntries(SALARY_PROFILE_FIELDS.map(field => [field, Math.max(0, Number(input[field]) || 0)]));
+}
+function standardSalaryFromProfile(profile, hireType) {
+  return hireType === '兼职'
+    ? Number(profile.part_time_hourly_rate) || 0
+    : ['base_salary', 'position_allowance', 'performance_salary', 'attendance_bonus', 'housing_allowance'].reduce((sum, field) => sum + (Number(profile[field]) || 0), 0);
+}
+
+function normalizeAttendanceDate(value) {
+  const date = String(value || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(new Date(`${date}T00:00:00`).getTime())) return '';
+  return date;
+}
+function splitIntoChunks(items, size = 50) {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, index * size + size));
+}
+
 function resolveStaffStoreId(storeName) {
   const name = String(storeName || '').trim();
   if (!name) return null;
-  return db.queryOne('SELECT id FROM stores WHERE store_name=? LIMIT 1', [name])?.id || null;
+  const exact = db.queryOne('SELECT id FROM stores WHERE store_name=? LIMIT 1', [name])?.id;
+  if (exact) return exact;
+  const normalized = normalizeStoreName(name);
+  const candidates = db.queryAll('SELECT id,store_name FROM stores');
+  const matched = candidates.filter(store => storeSimilarity(normalized, normalizeStoreName(store.store_name)) <= 1);
+  return matched.length === 1 ? matched[0].id : null;
+}
+function normalizeStoreName(value) { return String(value || '').replace(/[\s（）()·•]/g, '').replace(/烧鹅烧味/g, '烧鹅').trim(); }
+function storeSimilarity(a, b) {
+  if (a === b) return 0;
+  if (!a || !b || Math.abs(a.length - b.length) > 1) return 99;
+  const prev = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) { let last = i - 1; prev[0] = i; for (let j = 1; j <= b.length; j++) { const old = prev[j]; prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, last + (a[i - 1] === b[j - 1] ? 0 : 1)); last = old; } }
+  return prev[b.length];
 }
 
 app.get('/api/stores/:id/employees', (req, res) => {
@@ -1036,9 +1298,11 @@ app.get('/api/staff/stats', (req, res) => {
 // POST /api/staff — 新增员工（本地建档），并异步尝试同步到企微智能表格
 app.post('/api/staff', (req, res) => {
   try {
-    const { name, phone, gender, photo_url, store_name, onboarding_status, status, entry_date, position, role, hire_type, salary, probation_date, leave_date, id_card_number, id_card_front_url, id_card_back_url, bank_name, bank_branch, bank_account_name, bank_card_number, emergency_contact, emergency_phone, health_certificate_url, health_certificate_expiry, remark } = req.body || {};
+    const { name, phone, dingtalk_user_id, gender, photo_url, store_name, onboarding_status, status, entry_date, position, role, hire_type, salary, probation_date, leave_date, id_card_number, id_card_front_url, id_card_back_url, bank_name, bank_branch, bank_account_name, bank_card_number, emergency_contact, emergency_phone, health_certificate_url, health_certificate_expiry, remark } = req.body || {};
     const cleanName = String(name || '').trim();
     if (!cleanName) return res.status(400).json({ error: '姓名不能为空' });
+    const validationError = validateStaffFields({ phone, id_card_number });
+    if (validationError) return res.status(400).json({ error: validationError });
     const cleanStoreName = String(store_name || '').trim();
     const storeId = resolveStaffStoreId(cleanStoreName);
     const calculatedAge = ageFromIdCard(id_card_number) || 0;
@@ -1050,7 +1314,8 @@ app.post('/api/staff', (req, res) => {
         String(position || '').trim(), String(role || '店员').trim(), String(hire_type || '全职').trim(), Number(salary) || 0, String(probation_date || '').trim(), String(leave_date || '').trim(),
         String(id_card_number || '').trim(), String(id_card_front_url || '').trim(), String(id_card_back_url || '').trim(), String(bank_name || '').trim(), String(bank_branch || '').trim(), String(bank_account_name || '').trim(), String(bank_card_number || '').trim(), String(emergency_contact || '').trim(), String(emergency_phone || '').trim(), String(health_certificate_url || '').trim(), String(health_certificate_expiry || '').trim(), String(remark || '').trim(), storeId, '']
     );
-    db.run('UPDATE employees SET photo_url=? WHERE id=?', [String(photo_url || '').trim(), id]);
+    db.run('UPDATE employees SET photo_url=?,dingtalk_user_id=? WHERE id=?', [String(photo_url || '').trim(), String(dingtalk_user_id || '').trim(), id]);
+    addEmployeeLifecycleEvent(id, '入职', entry_date, '', `${cleanName}${position ? ` · ${position}` : ''}`, '建立员工档案');
     db.save();
     const created = db.queryOne('SELECT * FROM employees WHERE id=?', [id]);
     const cfg = loadConfig();
@@ -1209,7 +1474,11 @@ async function syncStaffToSmartsheet(employee, cfg) {
 // PUT /api/staff/:id — 更新员工 + 同步到企微智能表格
 app.put('/api/staff/:id', async (req, res) => {
   try {
-    const fields = ['name', 'phone', 'gender', 'photo_url', 'store_name', 'onboarding_status', 'status', 'entry_date', 'position', 'remark', 'hire_type', 'salary', 'probation_date', 'leave_date', 'id_card_number', 'id_card_front_url', 'id_card_back_url', 'bank_name', 'bank_branch', 'bank_account_name', 'bank_card_number', 'emergency_contact', 'emergency_phone', 'health_certificate_url', 'health_certificate_expiry'];
+    const before = db.queryOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
+    if (!before) return res.status(404).json({ error: '员工不存在' });
+    const validationError = validateStaffFields({ phone: req.body.phone ?? before.phone, id_card_number: req.body.id_card_number ?? before.id_card_number });
+    if (validationError) return res.status(400).json({ error: validationError });
+    const fields = ['name', 'phone', 'dingtalk_user_id', 'gender', 'photo_url', 'store_name', 'onboarding_status', 'status', 'entry_date', 'position', 'remark', 'hire_type', 'salary', 'probation_date', 'leave_date', 'id_card_number', 'id_card_front_url', 'id_card_back_url', 'bank_name', 'bank_branch', 'bank_account_name', 'bank_card_number', 'emergency_contact', 'emergency_phone', 'health_certificate_url', 'health_certificate_expiry'];
     const sets = [];
     const params = [];
 
@@ -1229,6 +1498,18 @@ app.put('/api/staff/:id', async (req, res) => {
     db.save();
 
     const updated = db.queryOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
+    const eventDate = new Date().toISOString().slice(0, 10);
+    if (before.entry_date !== updated.entry_date && updated.entry_date) {
+      const entryEvent = db.queryOne("SELECT id FROM employee_lifecycle_events WHERE employee_id=? AND event_type='入职' ORDER BY id LIMIT 1", [updated.id]);
+      if (entryEvent) db.run("UPDATE employee_lifecycle_events SET event_date=?,new_value=?,note='入职日期校正' WHERE id=?", [updated.entry_date, `${updated.name}${updated.position ? ` · ${updated.position}` : ''}`, entryEvent.id]);
+      else addEmployeeLifecycleEvent(updated.id, '入职', updated.entry_date, '', `${updated.name}${updated.position ? ` · ${updated.position}` : ''}`, '补建入职记录');
+    }
+    if (before.probation_date !== updated.probation_date && updated.probation_date) addEmployeeLifecycleEvent(updated.id, '转正', updated.probation_date, before.probation_date, updated.probation_date, '转正日期变更');
+    if (before.store_name !== updated.store_name) addEmployeeLifecycleEvent(updated.id, '调岗', eventDate, before.store_name, updated.store_name, '所属门店变更');
+    if (before.position !== updated.position) addEmployeeLifecycleEvent(updated.id, '岗位变更', eventDate, before.position, updated.position, '岗位 / 晋升记录');
+    if (Number(before.salary) !== Number(updated.salary) || before.hire_type !== updated.hire_type) addEmployeeLifecycleEvent(updated.id, '工资变化', eventDate, `${before.hire_type} · ${before.salary}`, `${updated.hire_type} · ${updated.salary}`, '薪酬标准变更');
+    if (before.status !== '离职' && updated.status === '离职') addEmployeeLifecycleEvent(updated.id, '离职', updated.leave_date || eventDate, '在职', '离职', '离职状态变更');
+    db.save();
 
     // 异步同步到企微智能表格
     const cfg = loadConfig();
@@ -1238,6 +1519,247 @@ app.put('/api/staff/:id', async (req, res) => {
     }).catch(e => console.error('[staff sync] 同步异常:', e.message));
 
     res.json({ ok: true, staff: updated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/staff/:id/lifecycle', (req, res) => {
+  try {
+    const employee = db.queryOne('SELECT id,name FROM employees WHERE id=?', [req.params.id]);
+    if (!employee) return res.status(404).json({ error: '员工不存在' });
+    const events = db.queryAll('SELECT * FROM employee_lifecycle_events WHERE employee_id=? ORDER BY event_date ASC, id ASC', [employee.id]);
+    res.json({ ok: true, employee, events });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// C 级薪酬档案。银行资料仍由员工档案字段承载，但 UI 只在 B 级显示。
+app.get('/api/staff/:id/salary-profile', (req, res) => {
+  try {
+    const employee = db.queryOne('SELECT id,name,hire_type,salary FROM employees WHERE id=?', [req.params.id]);
+    if (!employee) return res.status(404).json({ error: '员工不存在' });
+    const profile = db.queryOne('SELECT * FROM employee_salary_profiles WHERE employee_id=?', [employee.id]) || { employee_id: employee.id, ...normalizeSalaryProfile() };
+    res.json({ ok: true, employee, profile });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/staff/:id/salary-profile', (req, res) => {
+  try {
+    const employee = db.queryOne('SELECT id,hire_type,salary FROM employees WHERE id=?', [req.params.id]);
+    if (!employee) return res.status(404).json({ error: '员工不存在' });
+    const profile = normalizeSalaryProfile(req.body || {});
+    const columns = SALARY_PROFILE_FIELDS.join(',');
+    const placeholders = SALARY_PROFILE_FIELDS.map(() => '?').join(',');
+    const updates = SALARY_PROFILE_FIELDS.map(field => `${field}=excluded.${field}`).join(',');
+    db.run(`INSERT INTO employee_salary_profiles (employee_id,${columns},updated_at) VALUES (?,${placeholders},datetime('now','localtime'))
+      ON CONFLICT(employee_id) DO UPDATE SET ${updates},updated_at=datetime('now','localtime')`, [employee.id, ...SALARY_PROFILE_FIELDS.map(field => profile[field])]);
+    const salary = standardSalaryFromProfile(profile, employee.hire_type);
+    if (Number(employee.salary) !== salary) {
+      db.run("UPDATE employees SET salary=?,updated_at=datetime('now','localtime') WHERE id=?", [salary, employee.id]);
+      addEmployeeLifecycleEvent(employee.id, '工资变化', new Date().toISOString().slice(0, 10), `${employee.hire_type} · ${employee.salary}`, `${employee.hire_type} · ${salary}`, '薪酬构成更新');
+    }
+    db.save();
+    res.json({ ok: true, profile, standard_salary: salary });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+const PAYROLL_EDITABLE_NUMBERS = ['scheduled_days', 'personal_leave', 'sick_leave', 'join_leave', 'support_days', 'annual_leave', 'weekday_overtime_hours', 'restday_overtime_hours', 'part_time_hours', 'base_salary', 'position_allowance', 'performance_salary', 'attendance_bonus', 'housing_allowance', 'part_time_hourly_rate', 'weekday_overtime_rate', 'restday_overtime_rate', 'reward', 'penalty', 'late_early_deduction', 'other_deduction', 'social_insurance', 'income_tax', 'utilities_fee', 'uniform_deposit'];
+function payrollNumber(value) { return Math.max(0, Number(value) || 0); }
+function formatPayrollRow(input = {}, scheduledDays = 26) {
+  const row = { ...input };
+  PAYROLL_EDITABLE_NUMBERS.forEach(field => { row[field] = payrollNumber(row[field]); });
+  row.scheduled_days = row.scheduled_days || payrollNumber(scheduledDays) || 26;
+  row.actual_days = Math.max(0, row.scheduled_days - row.personal_leave - row.sick_leave - row.join_leave + row.support_days + row.annual_leave);
+  row.standard_salary = row.hire_type === '兼职' ? row.part_time_hourly_rate : row.base_salary + row.position_allowance + row.performance_salary + row.attendance_bonus + row.housing_allowance;
+  const ratio = row.hire_type === '兼职' ? 0 : row.actual_days / row.scheduled_days;
+  row.actual_base_salary = row.base_salary * ratio;
+  row.actual_position_allowance = row.position_allowance * ratio;
+  row.actual_performance_salary = row.performance_salary * ratio;
+  row.actual_attendance_bonus = row.attendance_bonus * ratio;
+  row.actual_housing_allowance = row.housing_allowance * ratio;
+  row.part_time_salary = row.part_time_hours * row.part_time_hourly_rate;
+  row.gross_salary = row.actual_base_salary + row.actual_position_allowance + row.actual_performance_salary + row.actual_attendance_bonus + row.actual_housing_allowance + row.weekday_overtime_hours * row.weekday_overtime_rate + row.restday_overtime_hours * row.restday_overtime_rate + row.part_time_salary + row.reward - row.penalty - row.late_early_deduction - row.other_deduction;
+  row.net_salary = row.gross_salary - row.social_insurance - row.income_tax - row.utilities_fee - row.uniform_deposit;
+  return row;
+}
+function readPayrollSheet(sheet) {
+  const items = db.queryAll('SELECT id,employee_id,sort_order,data FROM payroll_sheet_items WHERE sheet_id=? ORDER BY sort_order,id', [sheet.id]).map(item => ({ id: item.id, employee_id: item.employee_id, ...formatPayrollRow(JSON.parse(item.data || '{}'), sheet.scheduled_days) }));
+  return { ...sheet, items };
+}
+function payrollTemplateRows(storeName, period, scheduledDays) {
+  const [year, month] = period.split('-').map(Number);
+  const startDate = `${period}-01`;
+  const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
+  const store = db.queryOne('SELECT id,store_name FROM stores WHERE store_name=?', [storeName]);
+  const allEmployees = db.queryAll(`SELECT e.*, p.base_salary,p.position_allowance,p.performance_salary,p.attendance_bonus,p.housing_allowance,p.weekday_overtime_rate,p.restday_overtime_rate,p.part_time_hourly_rate
+    FROM employees e LEFT JOIN employee_salary_profiles p ON p.employee_id=e.id
+    WHERE (COALESCE(e.entry_date,'')='' OR e.entry_date<=?) AND (e.status!='离职' OR COALESCE(e.leave_date,'')='' OR e.leave_date>=?) ORDER BY e.position,e.name`, [endDate, startDate]);
+  const normalized = normalizeStoreName(storeName);
+  const employees = allEmployees.filter(employee => Number(employee.store_id) === Number(store?.id) || storeSimilarity(normalized, normalizeStoreName(employee.store_name)) <= 1);
+  // 仅对唯一近似匹配（例如“京基/景基”一字录入差异）归正门店关联，后续任何模块均按门店 ID 精确取数。
+  if (store) employees.filter(employee => Number(employee.store_id) !== Number(store.id) || employee.store_name !== storeName).forEach(employee => db.run("UPDATE employees SET store_id=?,store_name=?,updated_at=datetime('now','localtime') WHERE id=?", [store.id, storeName, employee.id]));
+  return employees.map((employee, index) => formatPayrollRow({
+    employee_id: employee.id, sort_order: index, name: employee.name, position: employee.position || '', entry_date: employee.entry_date || '', hire_type: employee.hire_type || '全职', phone: employee.phone || '', bank_card_number: employee.bank_card_number || '', bank_name: [employee.bank_name, employee.bank_branch].filter(Boolean).join(' '), id_card_number: employee.id_card_number || '',
+    scheduled_days: scheduledDays, base_salary: Number(employee.base_salary) || (employee.hire_type === '兼职' ? 0 : Number(employee.salary) || 0), position_allowance: employee.position_allowance, performance_salary: employee.performance_salary, attendance_bonus: employee.attendance_bonus, housing_allowance: employee.housing_allowance, weekday_overtime_rate: employee.weekday_overtime_rate, restday_overtime_rate: employee.restday_overtime_rate, part_time_hourly_rate: Number(employee.part_time_hourly_rate) || (employee.hire_type === '兼职' ? Number(employee.salary) || 0 : 0),
+  }, scheduledDays));
+}
+function payrollWorkbook(sheet) {
+  const headers = ['序号','姓名','职务','入职日期','用工类型','应出勤','事假','病假','入/离职缺勤','跨店支援','年假','实际出勤','工作日加班','休息日加班','基本工资','岗位补贴','绩效工资','全勤奖','房补','标准工资','兼职小时','统一时薪','兼职工资','奖励','罚款','迟到早退','其他扣款','应发工资','社保','个税','水电','工衣押金','实发工资','银行卡号','开户行','身份证号','手机号'];
+  const rows = [[`${sheet.store_name} ${sheet.period} 工资表`], headers];
+  sheet.items.forEach((row, index) => rows.push([index + 1,row.name,row.position,row.entry_date,row.hire_type,row.scheduled_days,row.personal_leave,row.sick_leave,row.join_leave,row.support_days,row.annual_leave,row.actual_days,row.weekday_overtime_hours,row.restday_overtime_hours,row.base_salary,row.position_allowance,row.performance_salary,row.attendance_bonus,row.housing_allowance,row.standard_salary,row.part_time_hours,row.part_time_hourly_rate,row.part_time_salary,row.reward,row.penalty,row.late_early_deduction,row.other_deduction,row.gross_salary,row.social_insurance,row.income_tax,row.utilities_fee,row.uniform_deposit,row.net_salary,row.bank_card_number,row.bank_name,row.id_card_number,row.phone]));
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!merges'] = [{ s:{ r:0,c:0 }, e:{ r:0,c:headers.length - 1 } }]; ws['!cols'] = headers.map((header, index) => ({ wch: index === 1 || index >= 33 ? 18 : 12 })); ws['!autofilter'] = { ref: `A2:AK${Math.max(2, rows.length)}` };
+  ws.A1.s = { font: { bold:true, sz:16, color:{ rgb:'25476F' } }, alignment:{ horizontal:'center' } };
+  for (let col = 0; col < headers.length; col++) { const cell = ws[XLSX.utils.encode_cell({r:1,c:col})]; cell.s = { fill:{fgColor:{rgb:'315D93'}},font:{color:{rgb:'FFFFFF'},bold:true},alignment:{horizontal:'center',vertical:'center',wrapText:true} }; }
+  const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, ws, '工资表'); workbook.Workbook = { CalcPr:{fullCalcOnLoad:true,forceFullCalc:true,calcMode:'auto'} }; return workbook;
+}
+
+app.get('/api/payroll-sheets', (req, res) => { try { res.json({ ok:true, sheets: db.queryAll(`SELECT s.*,COUNT(i.id) AS employee_count FROM payroll_sheets s LEFT JOIN payroll_sheet_items i ON i.sheet_id=s.id GROUP BY s.id ORDER BY s.period DESC,s.updated_at DESC`) }); } catch (e) { res.status(500).json({ error:e.message }); } });
+app.post('/api/payroll-sheets/prepare', (req, res) => {
+  try {
+    const storeName = String(req.body?.store_name || '').trim(), period = String(req.body?.period || '').trim(), scheduledDays = Math.max(1, Math.min(31, payrollNumber(req.body?.scheduled_days) || 26));
+    if (!storeName || !/^\d{4}-\d{2}$/.test(period)) return res.status(400).json({ error:'请选择门店和工资月份' });
+    let sheet = db.queryOne('SELECT * FROM payroll_sheets WHERE store_name=? AND period=?', [storeName, period]);
+    if (!sheet) {
+      const id = db.insert("INSERT INTO payroll_sheets (store_name,period,scheduled_days,status) VALUES (?,?,?,'草稿')", [storeName,period,scheduledDays]);
+      sheet = db.queryOne('SELECT * FROM payroll_sheets WHERE id=?', [id]);
+    }
+    // 已生成过的空白草稿也要能补入后来纠正了门店归属的员工；已有行保持其当月手工填写内容不变。
+    const templateRows = payrollTemplateRows(storeName, period, sheet.scheduled_days);
+    const existingEmployeeIds = new Set(db.queryAll('SELECT employee_id FROM payroll_sheet_items WHERE sheet_id=? AND employee_id IS NOT NULL', [sheet.id]).map(row => Number(row.employee_id)));
+    const nextSortOrder = Number(db.queryOne('SELECT COALESCE(MAX(sort_order),-1)+1 AS next_sort_order FROM payroll_sheet_items WHERE sheet_id=?', [sheet.id])?.next_sort_order) || 0;
+    templateRows.filter(item => !existingEmployeeIds.has(Number(item.employee_id))).forEach((item, index) => db.insert("INSERT INTO payroll_sheet_items (sheet_id,employee_id,sort_order,data) VALUES (?,?,?,?)", [sheet.id,item.employee_id,nextSortOrder + index,JSON.stringify(item)]));
+    db.save();
+    res.json({ ok:true, sheet:readPayrollSheet(sheet) });
+  } catch (e) { res.status(500).json({ error:e.message }); }
+});
+app.get('/api/payroll-sheets/:id', (req, res) => { try { const sheet=db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[req.params.id]); if(!sheet) return res.status(404).json({error:'工资表不存在'}); res.json({ok:true,sheet:readPayrollSheet(sheet)}); } catch(e){res.status(500).json({error:e.message});} });
+app.put('/api/payroll-sheets/:id', (req, res) => {
+  try {
+    const sheet=db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[req.params.id]); if(!sheet) return res.status(404).json({error:'工资表不存在'});
+    const scheduledDays=Math.max(1,Math.min(31,payrollNumber(req.body?.scheduled_days)||sheet.scheduled_days)); const items=Array.isArray(req.body?.items)?req.body.items:[];
+    db.run("UPDATE payroll_sheets SET scheduled_days=?,status='已保存',updated_at=datetime('now','localtime') WHERE id=?",[scheduledDays,sheet.id]);
+    items.forEach((item,index)=>{ const data=formatPayrollRow(item,scheduledDays); const employeeId=Number(item.employee_id)||null; if(item.id) db.run("UPDATE payroll_sheet_items SET sort_order=?,data=?,updated_at=datetime('now','localtime') WHERE id=? AND sheet_id=?",[index,JSON.stringify(data),item.id,sheet.id]); else db.insert("INSERT INTO payroll_sheet_items (sheet_id,employee_id,sort_order,data) VALUES (?,?,?,?)",[sheet.id,employeeId,index,JSON.stringify(data)]); });
+    db.save(); res.json({ok:true,sheet:readPayrollSheet(db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[sheet.id]))});
+  } catch(e){res.status(400).json({error:e.message});}
+});
+app.get('/api/payroll-sheets/:id/export', (req,res) => { try { const sheet=db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[req.params.id]); if(!sheet)return res.status(404).json({error:'工资表不存在'}); const buffer=XLSX.write(payrollWorkbook(readPayrollSheet(sheet)),{bookType:'xlsx',type:'buffer',cellStyles:true}); const name=`${sheet.store_name}-${sheet.period}工资表.xlsx`.replace(/[\\/:*?"<>|]/g,'_'); res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(name)}`);res.send(buffer); }catch(e){res.status(500).json({error:e.message});} });
+
+// 工资表制作：仅根据员工档案和 C 级薪酬构成生成新的月度工作表，不会改动第三方工资文件或员工薪酬档案。
+app.post('/api/staff/payroll-sheet', (req, res) => {
+  try {
+    const storeName = String(req.body?.store_name || '').trim();
+    const month = String(req.body?.month || '').trim();
+    const scheduledDays = Math.max(1, Math.min(31, Number(req.body?.scheduled_days) || 26));
+    if (!storeName) return res.status(400).json({ error: '请选择门店' });
+    if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: '请选择正确的工资月份' });
+    const endOfMonth = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).toISOString().slice(0, 10);
+    const employees = db.queryAll(`SELECT e.*, p.base_salary,p.position_allowance,p.performance_salary,p.attendance_bonus,p.housing_allowance,
+      p.weekday_overtime_rate,p.restday_overtime_rate,p.part_time_hourly_rate
+      FROM employees e LEFT JOIN employee_salary_profiles p ON p.employee_id=e.id
+      WHERE e.store_name=? AND e.status!='离职' AND (COALESCE(e.entry_date,'')='' OR e.entry_date<=?) ORDER BY e.position,e.name`, [storeName, endOfMonth]);
+    const headers = ['序号','姓名','职务','入职日期','应出勤天数','事假','病假','入/离职缺勤','跨店支援','年假','实际出勤天数','工作日加班时长','休息日加班时长','基本工资','岗位补贴','绩效工资','全勤奖','房租补贴','标准工资','实际基本工资','工作日加班工资','休息日加班工资','实际岗位补贴','实际绩效工资','实际全勤奖','实际房租补贴','兼职小时数','兼职工价','兼职工资','奖励','罚款','迟到/早退','其他扣款','应发工资','社保','个人所得税','水电费','工衣押金','实发工资','银行帐号','开户行','身份证号','电话号码'];
+    const title = `${storeName}${month}工资表`;
+    const rows = [[title], headers];
+    const number = value => Number(value) || 0;
+    employees.forEach((employee, index) => {
+      const profile = employee;
+      const fullTime = employee.hire_type !== '兼职';
+      const base = number(profile.base_salary) || (fullTime ? number(employee.salary) : 0);
+      const position = number(profile.position_allowance), performance = number(profile.performance_salary), attendance = number(profile.attendance_bonus), housing = number(profile.housing_allowance);
+      const weekdayRate = number(profile.weekday_overtime_rate), restdayRate = number(profile.restday_overtime_rate), hourlyRate = number(profile.part_time_hourly_rate) || (!fullTime ? number(employee.salary) : 0);
+      const row = index + 3;
+      rows.push([index + 1, employee.name, employee.position || '', employee.entry_date || '', scheduledDays, 0, 0, 0, 0, 0,
+        { f: `E${row}-F${row}-G${row}-H${row}+I${row}+J${row}`, v: scheduledDays }, 0, 0,
+        base, position, performance, attendance, housing, { f: `SUM(N${row}:R${row})`, v: base + position + performance + attendance + housing },
+        { f: `IFERROR(N${row}*K${row}/E${row},0)`, v: base }, { f: `L${row}*${weekdayRate}`, v: 0 }, { f: `M${row}*${restdayRate}`, v: 0 },
+        { f: `IFERROR(O${row}*K${row}/E${row},0)`, v: position }, { f: `IFERROR(P${row}*K${row}/E${row},0)`, v: performance }, { f: `IFERROR(Q${row}*K${row}/E${row},0)`, v: attendance }, { f: `IFERROR(R${row}*K${row}/E${row},0)`, v: housing },
+        0, hourlyRate, { f: `AA${row}*AB${row}`, v: 0 }, 0, 0, 0, 0,
+        { f: `SUM(T${row}:Z${row})+AC${row}+AD${row}-AE${row}-AF${row}-AG${row}`, v: fullTime ? base + position + performance + attendance + housing : 0 },
+        0, 0, 0, 0,
+        { f: `AH${row}-AI${row}-AJ${row}-AK${row}-AL${row}`, v: 0 }, employee.bank_card_number || '', [employee.bank_name, employee.bank_branch].filter(Boolean).join(' '), employee.id_card_number || '', employee.phone || '']);
+    });
+    const totalRow = employees.length + 3;
+    rows.push(['合计', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
+      { f: `SUM(AH3:AH${totalRow - 1})`, v: 0 }, { f: `SUM(AI3:AI${totalRow - 1})`, v: 0 }, { f: `SUM(AJ3:AJ${totalRow - 1})`, v: 0 }, { f: `SUM(AK3:AK${totalRow - 1})`, v: 0 }, { f: `SUM(AL3:AL${totalRow - 1})`, v: 0 }, { f: `SUM(AM3:AM${totalRow - 1})`, v: 0 }]);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } }];
+    ws['!cols'] = headers.map((header, i) => ({ wch: i === 1 || i === 39 || i === 40 ? 18 : (i >= 13 && i <= 38 ? 14 : 12) }));
+    ws['!rows'] = [{ hpt: 28 }, { hpt: 34 }];
+    Object.keys(ws).filter(key => /^[A-Z]+\d+$/.test(key)).forEach(key => { ws[key].s = { alignment: { vertical: 'center', horizontal: 'center', wrapText: true } }; });
+    for (let col = 0; col < headers.length; col++) { const cell = ws[XLSX.utils.encode_cell({ r: 1, c: col })]; cell.s = { fill: { fgColor: { rgb: '315D93' } }, font: { color: { rgb: 'FFFFFF' }, bold: true }, alignment: { vertical: 'center', horizontal: 'center', wrapText: true } }; }
+    ws.A1.s = { font: { bold: true, sz: 16, color: { rgb: '25476F' } }, alignment: { horizontal: 'center', vertical: 'center' } };
+    const currencyColumns = ['N','O','P','Q','R','S','T','U','V','W','X','Y','Z','AB','AC','AD','AE','AF','AG','AH','AI','AJ','AK','AL','AM'];
+    for (let row = 3; row <= totalRow; row++) currencyColumns.forEach(col => { const cell = ws[`${col}${row}`]; if (cell) cell.z = '#,##0.00'; });
+    ws['!autofilter'] = { ref: `A2:A${totalRow - 1}` };
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, ws, '工资表');
+    workbook.Workbook = { CalcPr: { fullCalcOnLoad: true, forceFullCalc: true, calcMode: 'auto' } };
+    const fileName = `${storeName}-${month}工资表.xlsx`.replace(/[\\/:*?"<>|]/g, '_');
+    const buffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'buffer', cellStyles: true });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.send(buffer);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 钉钉考勤：配置仅读取服务器环境变量，页面只获知“是否已配置”，不会暴露任何密钥。
+app.get('/api/staff/dingtalk/status', (req, res) => {
+  try {
+    const mappedEmployees = db.queryOne("SELECT COUNT(*) AS cnt FROM employees WHERE TRIM(COALESCE(dingtalk_user_id,''))!=''")?.cnt || 0;
+    const latestSync = db.queryOne('SELECT * FROM dingtalk_attendance_sync_runs ORDER BY id DESC LIMIT 1') || null;
+    res.json({ ok: true, ...dingtalkAttendance.publicStatus(mappedEmployees), latestSync });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 只在管理员主动点击“同步”后访问钉钉。默认同步单天，以免意外拉取大范围个人考勤数据。
+app.post('/api/staff/dingtalk/sync', async (req, res) => {
+  const dateFrom = normalizeAttendanceDate(req.body?.date_from) || new Date().toISOString().slice(0, 10);
+  const dateTo = normalizeAttendanceDate(req.body?.date_to) || dateFrom;
+  if (dateTo < dateFrom) return res.status(400).json({ error: '结束日期不能早于开始日期' });
+  const days = Math.round((new Date(`${dateTo}T00:00:00`) - new Date(`${dateFrom}T00:00:00`)) / 86400000) + 1;
+  if (days > 31) return res.status(400).json({ error: '单次最多同步 31 天，请分段同步' });
+  try {
+    const mapped = db.queryAll("SELECT id,name,dingtalk_user_id FROM employees WHERE TRIM(COALESCE(dingtalk_user_id,''))!=''");
+    if (!mapped.length) return res.status(400).json({ error: '暂无已绑定钉钉员工 ID 的员工，请先在员工档案 A 级资料中填写钉钉员工 ID' });
+    const byDingTalkId = new Map(mapped.map(employee => [employee.dingtalk_user_id, employee]));
+    const records = [];
+    for (const ids of splitIntoChunks(mapped.map(item => item.dingtalk_user_id))) {
+      records.push(...await dingtalkAttendance.fetchAttendance({ userIds: ids, dateFrom, dateTo }));
+    }
+    let matchedCount = 0;
+    let unmatchedCount = 0;
+    for (const record of records) {
+      const employee = byDingTalkId.get(record.dingtalkUserId);
+      if (employee) matchedCount += 1; else unmatchedCount += 1;
+      db.run(`INSERT INTO dingtalk_attendance_records
+        (employee_id,dingtalk_user_id,work_date,check_time,check_type,time_result,location_result,source_data,synced_at)
+        VALUES (?,?,?,?,?,?,?,?,datetime('now','localtime'))
+        ON CONFLICT(dingtalk_user_id,check_time,check_type) DO UPDATE SET
+          employee_id=excluded.employee_id,work_date=excluded.work_date,time_result=excluded.time_result,
+          location_result=excluded.location_result,source_data=excluded.source_data,synced_at=excluded.synced_at`,
+        [employee?.id || null, record.dingtalkUserId, record.workDate, record.checkTime, record.checkType, record.timeResult, record.locationResult, JSON.stringify(record.raw)]);
+    }
+    const message = `已同步 ${records.length} 条打卡记录，已匹配 ${matchedCount} 条`;
+    db.insert('INSERT INTO dingtalk_attendance_sync_runs (date_from,date_to,status,record_count,matched_count,unmatched_count,message) VALUES (?,?,?,?,?,?,?)', [dateFrom, dateTo, 'success', records.length, matchedCount, unmatchedCount, message]);
+    db.save();
+    res.json({ ok: true, date_from: dateFrom, date_to: dateTo, record_count: records.length, matched_count: matchedCount, unmatched_count: unmatchedCount, message });
+  } catch (e) {
+    const message = String(e.message || '钉钉同步失败');
+    try { db.insert('INSERT INTO dingtalk_attendance_sync_runs (date_from,date_to,status,message) VALUES (?,?,?,?)', [dateFrom, dateTo, 'failed', message]); db.save(); } catch {}
+    res.status(400).json({ error: message });
+  }
+});
+
+app.get('/api/staff/:id/dingtalk-attendance', (req, res) => {
+  try {
+    const employee = db.queryOne('SELECT id,name,dingtalk_user_id FROM employees WHERE id=?', [req.params.id]);
+    if (!employee) return res.status(404).json({ error: '员工不存在' });
+    const dateFrom = normalizeAttendanceDate(req.query.date_from) || '';
+    const dateTo = normalizeAttendanceDate(req.query.date_to) || '';
+    const where = ['employee_id=?']; const params = [employee.id];
+    if (dateFrom) { where.push('work_date>=?'); params.push(dateFrom); }
+    if (dateTo) { where.push('work_date<=?'); params.push(dateTo); }
+    const records = db.queryAll(`SELECT id,work_date,check_time,check_type,time_result,location_result,synced_at FROM dingtalk_attendance_records WHERE ${where.join(' AND ')} ORDER BY check_time DESC`, params);
+    res.json({ ok: true, employee, records });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1671,163 +2193,29 @@ function normalizeDishSpec(value) {
   return (text === '' || text === '--') ? '' : text;
 }
 
-// 绑定时名称不是唯一标识：上庄、下庄、半只等规格售价不同，必须完整展示为 SKU。
-function withDishMenuSku(menu = {}) {
-  const name = String(menu.name || '').trim();
-  const spec = normalizeDishSpec(menu.spec);
-  const method = String(menu.method || '').trim();
-  const unit = String(menu.spec_unit || '').trim();
-  const weight = String(menu.spec_weight || '').trim();
-  const parts = [];
-  [spec, method && method !== '/' ? method : '', weight || unit].filter(Boolean).forEach(part => {
-    if (!parts.includes(part)) parts.push(part);
-  });
-  const dineInPrice = Number(menu.dine_in_price || menu.price) || 0;
-  const memberPrice = Number(menu.member_price) || 0;
-  const takeoutPrice = Number(menu.takeout_price) || 0;
-  const priceSummary = [
-    dineInPrice ? `堂食 ¥${dineInPrice.toFixed(2)}` : '',
-    memberPrice ? `会员 ¥${memberPrice.toFixed(2)}` : '',
-    takeoutPrice ? `外卖 ¥${takeoutPrice.toFixed(2)}` : '',
-  ].filter(Boolean).join(' / ');
-  return {
-    ...menu,
-    sku_label: `${name}${parts.length ? ` · ${parts.join(' · ')}` : ''}`,
-    sku_variant: parts.join(' · ') || '标准规格',
-    sku_price_summary: priceSummary || '价格未设置',
-  };
-}
-// ===== 本地菜品智能识别（「堂食菜品绑定」与「菜品销量」共用，规则只维护这一处）=====
-// 背景：收银机品项名称本来就取自本地菜品库，绝大多数行应与本地菜品对得上，
-// 不能因为 dish_sales_mappings 里没有手工记录就要求用户「本地菜品绑本地菜品」。
-// 识别优先级：① 手工绑定 → ② 菜品编码=skuid（名称互校，防错归）→ ③ 名称+规格唯一 → ④ 名称唯一。
-// 菜名归一化去掉【】（）[] 与空白 —— 这解决了「【太公推介】金牌烧鸭拼叉烧单人餐」这类前后缀匹配不上的问题。
-function dishMenuKey(value) {
-  return String(value || '').replace(/[【】\[\]（）()\s]/g, '').trim();
-}
-
-/** 构建识别索引：一次性载入在售菜品（排除员工餐），可额外补入已下架但被手工绑定的菜品 */
-function buildDishMenuIndex(extraIds = []) {
-  const menus = db.queryAll(`SELECT id,name,category,method,spec,spec_unit,spec_weight,cost,skuid
-    FROM menu_items WHERE status='在售' AND INSTR(name,'员工餐')=0`).map(withDishMenuSku);
-  const menuById = new Map(menus.map(menu => [Number(menu.id), menu]));
-  // 手工绑定可能指向已下架菜品，也要查得到成本
-  const missing = [...new Set(extraIds.map(Number).filter(Boolean))].filter(id => !menuById.has(id));
-  if (missing.length) {
-    db.queryAll(`SELECT id,name,category,method,spec,spec_unit,spec_weight,cost,skuid FROM menu_items
-      WHERE id IN (${missing.map(() => '?').join(',')})`, missing)
-      .map(withDishMenuSku).forEach(menu => menuById.set(Number(menu.id), menu));
-  }
-  const menuBySkuid = new Map(menus.filter(menu => String(menu.skuid || '').trim()).map(menu => [String(menu.skuid).trim(), menu]));
-  const menusByName = new Map();
-  const menusByNameSpec = new Map();
-  menus.forEach(menu => {
-    const nameKey = dishMenuKey(menu.name);
-    menusByName.set(nameKey, [...(menusByName.get(nameKey) || []), menu]);
-    const specKey = `${nameKey}|${normalizeDishSpec(menu.spec)}`;
-    menusByNameSpec.set(specKey, [...(menusByNameSpec.get(specKey) || []), menu]);
-  });
-  return { menus, menuById, menuBySkuid, menusByName, menusByNameSpec };
-}
-
-/** 按优先级识别单个销售分组；reason: manual | skuid | name_spec | name | ''(未命中) */
-function resolveDishMenuSmart(index, group) {
-  const onlyOne = list => (list && list.length === 1 ? list[0] : null);
-  const manual = group.menu_item_id ? index.menuById.get(Number(group.menu_item_id)) : null;
-  if (manual) return { menu: manual, reason: 'manual' };
-  const nameKey = dishMenuKey(group.product_name);
-  const coded = index.menuBySkuid.get(String(group.product_code || '').trim());
-  // 编码与名称互相校验，避免把「金牌烧鸭饭」错归到另一道菜
-  if (coded && dishMenuKey(coded.name) === nameKey) return { menu: coded, reason: 'skuid' };
-  const bySpec = onlyOne(index.menusByNameSpec.get(`${nameKey}|${normalizeDishSpec(group.spec)}`));
-  if (bySpec) return { menu: bySpec, reason: 'name_spec' };
-  const byName = onlyOne(index.menusByName.get(nameKey));
-  if (byName) return { menu: byName, reason: 'name' };
-  return { menu: null, reason: '' };
-}
-
-const RECOMMEND_REASON_LABELS = {
-  skuid: '菜品编码匹配',
-  name_spec: '名称+规格匹配',
-  name: '名称唯一匹配',
-  manual: '手工绑定',
-};
-
-/** 最长公共连续子串长度（菜名很短，O(n·m) 足够快） */
-function longestCommonSubstring(a, b) {
-  if (!a || !b) return 0;
-  let best = 0;
-  let prev = new Array(b.length + 1).fill(0);
-  for (let i = 1; i <= a.length; i++) {
-    const cur = new Array(b.length + 1).fill(0);
-    for (let j = 1; j <= b.length; j++) {
-      if (a[i - 1] === b[j - 1]) {
-        cur[j] = prev[j - 1] + 1;
-        if (cur[j] > best) best = cur[j];
-      }
-    }
-    prev = cur;
-  }
-  return best;
-}
-
-/**
- * 菜名相似度（0~1），四项加权，对中文菜名稳定且可解释：
- *  ① Jaccard（字符集交并比）—— 基础相似度
- *  ② containment = 交集 ÷ 短名长度 —— 销售名常带套餐描述（含时蔬+靓汤），Jaccard 会被长名稀释
- *  ③ 最长公共连续子串占比 —— **顺序信息**，区分「烧鹅饭 ⊂ 招牌烧鹅饭」（连续命中）与「烧肉拼烧鹅饭」（字符凑巧）
- *  ④ 长度比 —— **防短名噪声**：否则「【太公三宝饭】含时蔬+海咸鸭蛋+例汤」会把「咸鸭蛋」当成候选
- *  整体包含时再加一点权重（最强信号）
- * 实测：「烧鹅饭」→ 招牌烧鹅饭 0.86 / 烧肉拼烧鹅饭 0.70；
- *       「太公三宝饭 x2」→ 太公烧鹅三宝饭 0.77；
- *       「太公白米饭」（0.55）与「咸鸭蛋」噪声（0.54）均被 0.6 阈值挡掉
- */
-function dishNameSimilarity(a, b) {
-  const keyA = dishMenuKey(a);
-  const keyB = dishMenuKey(b);
-  if (!keyA || !keyB) return 0;
-  const setA = new Set(keyA);
-  const setB = new Set(keyB);
-  let inter = 0;
-  setA.forEach(ch => { if (setB.has(ch)) inter += 1; });
-  const jaccard = inter / (setA.size + setB.size - inter);
-  const containment = inter / Math.min(setA.size, setB.size);
-  const lcsRatio = longestCommonSubstring(keyA, keyB) / Math.min(keyA.length, keyB.length);
-  const lengthRatio = Math.min(keyA.length, keyB.length) / Math.max(keyA.length, keyB.length);
-  let score = 0.45 * jaccard + 0.25 * containment + 0.15 * lcsRatio + 0.15 * lengthRatio;
-  if (keyA.includes(keyB) || keyB.includes(keyA)) score = Math.min(1, score + 0.1);
-  return score;
-}
-
-/**
- * 疑似候选：精确规则没命中时，按名称相似度给出候选。
- * ⚠️ **只提示、绝不自动绑定** —— 项目方针：别名/套餐只做推荐不做自动绑，避免把套餐成本算错；
- * 用户在界面上点一下才采用（走正常的绑定接口）。
- */
-function suggestDishCandidates(index, group, limit = 3, threshold = 0.6) {
-  const saleKey = dishMenuKey(group.product_name);
-  if (!saleKey) return [];
-  const scored = [];
-  for (const menu of index.menus) {
-    // 员工餐菜品（「（员工）xxx」）不作为候选 —— 用户要绑的是正常售卖菜品
-    if (String(menu.name || '').includes('员工')) continue;
-    // 候选名远短于销售名时跳过：否则「【太公三宝饭】含时蔬+海咸鸭蛋+例汤」会把「咸鸭蛋」当候选
-    if (dishMenuKey(menu.name).length < saleKey.length * 0.4) continue;
-    const score = dishNameSimilarity(group.product_name, menu.name);
-    if (score >= threshold) scored.push({ menu, score });
-  }
-  // 同分时名称更短的排前面：收银名多为简称（「烧鹅饭」），短档案名更可能是它的对应菜
-  scored.sort((x, y) => (y.score - x.score) || (String(x.menu.name).length - String(y.menu.name).length));
-  return scored.slice(0, limit).map(({ menu, score }) => ({
-    menu_item_id: menu.id,
-    menu_name: menu.name,
-    sku_label: menu.sku_label,
-    category: menu.category || '',
-    cost: Number(menu.cost) || 0,
-    score: Math.round(score * 1000) / 1000,
-  }));
-}
-
+// ===== 本地菜品智能识别 =====
+// 规则实现已抽到 lib/dish-matching.js（「堂食菜品绑定」「团购/外卖菜品绑定」「菜品销量」三处共用，
+// 规则只维护那一处）。这里只做引用与调用，不再各自维护一份。
+const {
+  RECOMMEND_REASON_LABELS,
+  dishMenuKey,
+  withDishMenuSku,
+  buildDishMenuIndex: buildDishIndex,
+  resolveDishMenuSmart,
+  suggestDishCandidates,
+  productBindingNameKey,
+  deliveryBindingNameKey,
+  isProtectedDeliveryMultiSpecProduct,
+  isDeliveryCompositeProduct,
+  productBindingSpecKey,
+  productBindingDishCoreKey,
+  uniqueContainedMenuId,
+  uniqueDishAndSpecMenuId,
+  shortCoreMenuCandidates,
+  uniqueShortCoreMenuId,
+  productBindingSignature,
+} = require('./lib/dish-matching');
+const buildDishMenuIndex = (extraIds = []) => buildDishIndex(db, extraIds);
 // 绑定列表：dish_sales 按菜品聚合 + 关联本地菜品（含成本/毛利估算），支持搜索与分页
 app.get('/api/dish-sales/mappings', (req, res) => {
   try {
@@ -2087,55 +2475,104 @@ app.delete('/api/dish-sales/mappings/:id', (req, res) => {
 app.get('/api/dish-sales/analytics', (req, res) => {
   try {
     const { date_from, date_to, store_id, store_ids, keyword, limit = 20, sort = 'income', page = 1, page_size = 20 } = req.query;
-    let where = 'WHERE 1=1';
-    const params = [];
-    if (date_from) { where += ' AND order_time>=?'; params.push(date_from); }
-    if (date_to) { where += ' AND order_time<=?'; params.push(`${date_to} 23:59:59`); }
+    const sortKey = { income: 'income_amount', quantity: 'quantity', amount: 'amount_total' }[sort] || 'income_amount';
+    const psize = Math.min(100, Math.max(1, parseInt(page_size) || 20));
+    const pg = Math.max(1, parseInt(page) || 1);
+    const round2 = value => Math.round(value * 100) / 100;
+
+    // ===== 取数口径（2026-09-14 定，用户拍板：按区间分段、重叠以 POS 为准）=====
+    //   · dish_sales：菜品销售明细，覆盖 5/1–8/9 + 9/1–9/10（8 月只有 1–9 日）
+    //   · pos_product_sale_details：收银机品项销售明细（带 channel，含堂食/团购/外卖），覆盖 8/10–9/10
+    //   两者在 9/1–9/10 重叠 → POS 起始日(**posFrom**)及之后只用 POS，之前只用 dish_sales，避免重复计数。
+    const posFrom = (db.queryOne('SELECT MIN(biz_date) AS m FROM pos_product_sale_details') || {}).m || '';
+
+    // 门店筛选：两边都存的是门店名称
+    const storeNames = [];
     if (store_id) {
       const name = db.queryOne('SELECT store_name FROM stores WHERE id=?', [Number(store_id)])?.store_name;
-      if (name) { where += ' AND store_name=?'; params.push(name); }
+      if (name) storeNames.push(name);
     }
     if (store_ids) {
       const ids = String(store_ids).split(',').map(Number).filter(id => Number.isInteger(id) && id > 0);
       if (ids.length) {
-        const names = db.queryAll(`SELECT store_name FROM stores WHERE id IN (${ids.map(() => '?').join(',')})`, ids).map(r => r.store_name);
-        if (names.length) { where += ` AND store_name IN (${names.map(() => '?').join(',')})`; params.push(...names); }
+        db.queryAll(`SELECT store_name FROM stores WHERE id IN (${ids.map(() => '?').join(',')})`, ids)
+          .forEach(r => storeNames.push(r.store_name));
       }
     }
-    if (keyword) { where += ' AND (product_name LIKE ? OR product_code LIKE ?)'; params.push(`%${keyword}%`, `%${keyword}%`); }
-    const sortKey = { income: 'income_amount', quantity: 'quantity', amount: 'amount_total' }[sort] || 'income_amount';
-    const psize = Math.min(100, Math.max(1, parseInt(page_size) || 20));
-    const pg = Math.max(1, parseInt(page) || 1);
-    // 取数分两段：SQL 只做分组汇总（不设 LIMIT，分组数在千级），本地 SKU 识别、排序、翻页都在 JS 做。
-    const groups = db.queryAll(`
+    const keywordLike = keyword ? `%${keyword}%` : '';
+
+    // ---- A 段：dish_sales（仅 posFrom 之前）----
+    let legacyWhere = 'WHERE 1=1';
+    const legacyParams = [];
+    if (date_from) { legacyWhere += ' AND d.order_time>=?'; legacyParams.push(date_from); }
+    if (date_to) { legacyWhere += ' AND d.order_time<=?'; legacyParams.push(`${date_to} 23:59:59`); }
+    if (storeNames.length) { legacyWhere += ` AND d.store_name IN (${storeNames.map(() => '?').join(',')})`; legacyParams.push(...storeNames); }
+    if (keywordLike) { legacyWhere += ' AND (d.product_name LIKE ? OR d.product_code LIKE ?)'; legacyParams.push(keywordLike, keywordLike); }
+    if (posFrom) { legacyWhere += ' AND substr(d.order_time,1,10) < ?'; legacyParams.push(posFrom); }
+    const legacyGroups = db.queryAll(`
       SELECT d.product_code, d.product_name, d.spec,
         SUM(d.quantity) as quantity,
         SUM(d.amount_total) as amount_total,
         SUM(d.discount_amount) as discount_amount,
         SUM(d.income_amount) as income_amount,
         SUM(d.refund_amount) as refund_amount,
-        COUNT(DISTINCT d.order_no) as order_count,
-        SUM(CASE WHEN d.refunded='部分退' THEN 1 ELSE 0 END) as refunded_count,
-        MAX(m.id) as mapping_id,
-        MAX(m.menu_item_id) as menu_item_id
-      FROM dish_sales d
-      LEFT JOIN dish_sales_mappings m ON m.product_code = d.product_code AND m.product_name = d.product_name
-        AND m.spec = CASE WHEN d.spec IN ('', '--') THEN '' ELSE d.spec END
-      ${where}
-      GROUP BY d.product_code, d.product_name, d.spec`, params);
-    // 识别规则已抽到 buildDishMenuIndex / resolveDishMenuSmart（与「堂食菜品绑定」共用，规则只维护一处）
-    const index = buildDishMenuIndex(groups.map(g => g.menu_item_id));
-    const round2 = value => Math.round(value * 100) / 100;
+        COUNT(DISTINCT COALESCE(NULLIF(TRIM(d.store_name),''),'未知门店') || '|' || COALESCE(d.order_no,'')) as order_count,
+        SUM(CASE WHEN d.refunded='部分退' THEN 1 ELSE 0 END) as refunded_count
+      FROM dish_sales d ${legacyWhere}
+      GROUP BY d.product_code, d.product_name, d.spec`, legacyParams);
+
+    // ---- B 段：pos_product_sale_details（posFrom 起）----
+    let posWhere = 'WHERE 1=1';
+    const posParams = [];
+    if (posFrom) { posWhere += ' AND p.biz_date >= ?'; posParams.push(posFrom); } else { posWhere += ' AND 1=0'; }
+    if (date_from) { posWhere += ' AND p.biz_date >= ?'; posParams.push(String(date_from).slice(0, 10)); }
+    if (date_to) { posWhere += ' AND p.biz_date <= ?'; posParams.push(String(date_to).slice(0, 10)); }
+    if (storeNames.length) { posWhere += ` AND p.store_name IN (${storeNames.map(() => '?').join(',')})`; posParams.push(...storeNames); }
+    if (keywordLike) { posWhere += ' AND (p.product_name LIKE ? OR p.product_code LIKE ?)'; posParams.push(keywordLike, keywordLike); }
+    const posGroups = db.queryAll(`
+      SELECT p.product_code, p.product_name, p.spec,
+        SUM(p.quantity) as quantity,
+        SUM(p.sales_amount) as amount_total,
+        SUM(p.discount_amount) as discount_amount,
+        SUM(p.income_amount) as income_amount,
+        SUM(CASE WHEN p.sales_mode='退菜' OR p.quantity<0 OR p.sales_amount<0 THEN ABS(p.income_amount) ELSE 0 END) as refund_amount,
+        COUNT(DISTINCT COALESCE(NULLIF(TRIM(p.store_name),''),'未知门店') || '|' || COALESCE(p.order_id,'')) as order_count,
+        SUM(CASE WHEN p.sales_mode='退菜' THEN 1 ELSE 0 END) as refunded_count
+      FROM pos_product_sale_details p ${posWhere}
+      GROUP BY p.product_code, p.product_name, p.spec`, posParams);
+
+    const groups = [...legacyGroups, ...posGroups];
+
+    // ===== 识别：显式绑定（dish_sales_mappings，两段通用）→ 编码/名称/规格 =====
+    // dish_sales_mappings 是「菜品销售分析」行内绑定与「堂食菜品绑定」共用的唯一键表，
+    // 这里改成内存查找（而不是 SQL JOIN），POS 那段也能享受同样的手工绑定。
+    const manualMap = new Map();
+    db.queryAll(`SELECT dm.id, dm.product_code, dm.product_name, dm.spec, dm.menu_item_id
+      FROM dish_sales_mappings dm JOIN menu_items m ON m.id=dm.menu_item_id AND m.status='在售'`)
+      .forEach(r => manualMap.set(`${r.product_code}|${r.product_name}|${normalizeDishSpec(r.spec)}`, r));
+    const index = buildDishMenuIndex(groups.map(g => (manualMap.get(`${g.product_code}|${g.product_name}|${normalizeDishSpec(g.spec)}`) || {}).menu_item_id));
+
+    // 非菜品（包装耗材等）：不排除，但单独分组、不参与菜品成本与毛利
+    const NON_DISH_KEYWORDS = ['打包盒', '餐盒', '筷子', '餐具', '袋子', '胶袋', '环保袋', '汤勺', '吸管', '一次性', '纸巾', '湿巾'];
+    const isNonDishName = name => {
+      const text = String(name || '').replace(/[\s\*\.。]/g, '');
+      return NON_DISH_KEYWORDS.some(word => text.includes(word));
+    };
+
     const items = groups.map(group => {
-      const { menu, reason } = resolveDishMenuSmart(index, group);
+      const manual = manualMap.get(`${group.product_code}|${group.product_name}|${normalizeDishSpec(group.spec)}`) || null;
+      const { menu, reason } = resolveDishMenuSmart(index, {
+        ...group,
+        menu_item_id: manual ? manual.menu_item_id : null,
+      });
       const quantity = Number(group.quantity) || 0;
       const income = Number(group.income_amount) || 0;
       const unitCost = menu ? Number(menu.cost) || 0 : 0;
       return {
         ...group,
         mapped: !!menu,
-        mapping_id: group.mapping_id || null,
         auto_matched: !!menu && reason !== 'manual',
+        mapping_id: manual ? manual.id : null,
         menu_item_id: menu ? menu.id : null,
         menu_name: menu ? menu.name : '',
         menu_category: menu ? menu.category : '',
@@ -2146,45 +2583,94 @@ app.get('/api/dish-sales/analytics', (req, res) => {
         cost_available: menu ? 1 : 0,
         estimated_cost: menu ? round2(quantity * unitCost) : null,
         net_income: menu ? round2(income - quantity * unitCost) : null,
+        // 新增（纯附加，前端可逐步采用）
+        is_non_dish: isNonDishName(group.product_name),
+        matched_by: menu ? reason : '',
       };
     });
     // 已关联的排前面，未关联的自动沉到列表末尾（与外卖/团购看板一致），再按所选指标倒序。
-    items.sort((a, b) => Number(b.mapped) - Number(a.mapped)
+    items.sort((a, b) => Number(a.is_non_dish) - Number(b.is_non_dish)
+      || Number(b.mapped) - Number(a.mapped)
       || (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0));
     const total = items.length;
-    const mappedItems = items.filter(item => item.mapped);
-    const summaryRow = db.queryOne(`
-      SELECT COUNT(DISTINCT d.product_code) as product_count,
-        SUM(d.quantity) as quantity,
-        SUM(d.amount_total) as amount_total,
-        SUM(d.discount_amount) as discount_amount,
-        SUM(d.income_amount) as income_amount,
-        SUM(d.refund_amount) as refund_amount,
-        COUNT(DISTINCT d.order_no) as order_count
-      FROM dish_sales d ${where}`, params) || {};
+    const dishItems = items.filter(item => !item.is_non_dish);
+    const nonDishItems = items.filter(item => item.is_non_dish);
+    const mappedItems = dishItems.filter(item => item.mapped);
+    const sumBy = (list, key) => list.reduce((sum, item) => sum + Number(item[key] || 0), 0);
     const summary = {
-      ...summaryRow,
-      // 订单量是全区间去重值，不能由分组行相加；成本三项则按识别后的本地菜品汇总。
+      product_count: new Set(dishItems.map(item => item.product_code)).size,
+      quantity: round2(sumBy(items, 'quantity')),
+      amount_total: round2(sumBy(items, 'amount_total')),
+      discount_amount: round2(sumBy(items, 'discount_amount')),
+      income_amount: round2(sumBy(items, 'income_amount')),
+      refund_amount: round2(sumBy(items, 'refund_amount')),
+      order_count: list => 0,
       cost_covered_product_count: mappedItems.length,
       estimated_cost: round2(mappedItems.reduce((sum, item) => sum + Number(item.estimated_cost || 0), 0)),
       net_income: round2(mappedItems.reduce((sum, item) => sum + Number(item.net_income || 0), 0)),
+      // 非菜品单独汇总（不参与上面的成本与毛利）
+      non_dish_count: nonDishItems.length,
+      non_dish_quantity: round2(sumBy(nonDishItems, 'quantity')),
+      non_dish_amount: round2(sumBy(nonDishItems, 'amount_total')),
     };
+    delete summary.order_count;
+    // 订单量是全区间去重值，不能由分组行相加：两段各自去重后相加（跨表无法再合并同一单）
+    const legacyOrders = Number(db.queryOne(`SELECT COUNT(DISTINCT COALESCE(NULLIF(TRIM(d.store_name),''),'未知门店') || '|' || COALESCE(d.order_no,'')) AS n FROM dish_sales d ${legacyWhere}`, legacyParams)?.n) || 0;
+    const posOrders = posFrom
+      ? Number(db.queryOne(`SELECT COUNT(DISTINCT COALESCE(NULLIF(TRIM(p.store_name),''),'未知门店') || '|' || COALESCE(p.order_id,'')) AS n FROM pos_product_sale_details p ${posWhere}`, posParams)?.n) || 0
+      : 0;
+    summary.order_count = legacyOrders + posOrders;
+
     // 按下单时刻聚合，固定补齐 00:00–23:00，便于跨日、周、月观察高峰时段。
+    // ⚠️ 收银机品项明细没有下单时刻（order_time 全空），所以时段趋势只能来自 dish_sales 那段。
     const hourlyRows = db.queryAll(`
-      SELECT substr(order_time, 12, 2) as hour,
+      SELECT substr(d.order_time, 12, 2) as hour,
         COUNT(DISTINCT CASE
-          WHEN TRIM(COALESCE(order_no, '')) <> '' THEN COALESCE(NULLIF(TRIM(store_name), ''), '未知门店') || '|' || TRIM(order_no)
-          ELSE '__row__' || id
+          WHEN TRIM(COALESCE(d.order_no, '')) <> '' THEN COALESCE(NULLIF(TRIM(d.store_name), ''), '未知门店') || '|' || TRIM(d.order_no)
+          ELSE '__row__' || d.id
         END) as order_count
-      FROM dish_sales ${where} AND length(order_time) >= 13
-      GROUP BY substr(order_time, 12, 2)`, params);
+      FROM dish_sales d ${legacyWhere} AND length(d.order_time) >= 13
+      GROUP BY substr(d.order_time, 12, 2)`, legacyParams);
     const hourlyMap = new Map(hourlyRows.map(row => [String(row.hour || '').padStart(2, '0'), Number(row.order_count) || 0]));
     const hourly_trend = Array.from({ length: 24 }, (_, hour) => {
       const key = String(hour).padStart(2, '0');
       return { hour, period: `${key}:00`, order_count: hourlyMap.get(key) || 0 };
     });
+
     const pageItems = items.slice((pg - 1) * psize, pg * psize);
-    res.json({ ok: true, summary, top: pageItems, total, page: pg, page_size: psize, hourly_trend });
+    res.json({
+      ok: true, summary, top: pageItems, total, page: pg, page_size: psize, hourly_trend,
+      // 取数口径透明化：哪一段来自哪张表
+      source_split: {
+        pos_from: posFrom,
+        legacy_groups: legacyGroups.length,
+        pos_groups: posGroups.length,
+        legacy_rows: legacyProducts => 0,
+        hourly_scope: 'dish_sales_only',
+        note: posFrom
+          ? `5/1–${posFrom} 前取自「菜品销售明细」，${posFrom} 起取自收银机「品项销售明细」（重叠区间以品项明细为准）；时段趋势仅覆盖菜品销售明细那段。`
+          : '未导入收银机品项明细，全部取自菜品销售明细。',
+      },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 总视角「菜品销售分析」（合并口径）：双表按区间分段 → 按标准菜品聚合 + 来源明细 + 滞后区。
+// 与旧接口 /api/dish-sales/analytics 的区别：返回 dishes（一个标准菜品一行，跨平台/跨规格合并）、
+// unbound（未绑定，滞后、不计成本毛利）、non_dish（包装耗材，单独分组），供页面直出。
+app.get('/api/dish-sales/dish-analytics', (req, res) => {
+  try {
+    const result = businessAnalytics.getMergedDishSalesAnalytics(db, req.query || {});
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.page_size) || 20));
+    res.json({
+      ok: true,
+      ...result,
+      dishes: result.dishes.slice((page - 1) * pageSize, page * pageSize),
+      total: result.dishes.length,
+      page,
+      page_size: pageSize,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2284,26 +2770,26 @@ app.get('/api/poultry/accounting', (req, res) => {
   try { res.json(poultryAccounting.calculate(req.query)); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.get('/api/poultry/accounting/purchase-comparison', (req, res) => {
-  try { res.json(poultryAccounting.purchaseComparison(req.query)); }
+app.get('/api/poultry/accounting/consumption-comparison', (req, res) => {
+  try { res.json(poultryAccounting.consumptionComparison(req.query)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-// 采购校准：模型理论只数 vs 门店录入的实际只数，按月对比算 MAPE（评价参数好坏的真实依据）
+// 消耗校准：模型理论只数 vs 门店录入的实际消耗只数，按月对比算 MAPE（评价参数好坏的真实依据）
 app.get('/api/poultry/calibration', (req, res) => {
   try { res.json(poultryAccounting.calibrationReport(req.query)); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-app.get('/api/poultry/purchases', (req, res) => {
-  try { res.json({ ok: true, purchases: poultryAccounting.listPurchases(req.query) }); }
+app.get('/api/poultry/consumption', (req, res) => {
+  try { res.json({ ok: true, consumption: poultryAccounting.listConsumption(req.query) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
-app.post('/api/poultry/purchases', (req, res) => {
-  try { res.json({ ok: true, ...poultryAccounting.savePurchase(req.body) }); }
+app.post('/api/poultry/consumption', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.saveConsumption(req.body) }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
-app.delete('/api/poultry/purchases/:id', (req, res) => {
-  try { res.json({ ok: true, ...poultryAccounting.deletePurchase(Number(req.params.id)) }); }
+app.delete('/api/poultry/consumption/:id', (req, res) => {
+  try { res.json({ ok: true, ...poultryAccounting.deleteConsumption(Number(req.params.id)) }); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -2485,6 +2971,17 @@ app.get('/api/push-logs', (req, res) => { try { const { status, limit } = req.qu
 app.post('/api/push-logs', (req, res) => { try { const { push_type, target, content_preview, status, error_msg } = req.body; const id = db.insert('INSERT INTO push_logs (push_type,target,content_preview,status,error_msg) VALUES (?,?,?,?,?)', [push_type||'', target||'', content_preview||'', status||'success', error_msg||'']); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 认证 =====
+function getAuthUserById(id) {
+  return db.queryOne(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.store_id,s.store_name
+    FROM users u LEFT JOIN stores s ON u.store_id=s.id WHERE u.id=?`, [id]);
+}
+function issueAuthToken(user) {
+  return jwt.sign({
+    id: user.id, username: user.username, role: user.role,
+    display_name: user.display_name, avatar_url: user.avatar_url,
+    store_id: user.store_id, store_name: user.store_name || '',
+  }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+}
 app.post('/api/auth/login', (req, res) => {
   try {
     const { username, password } = req.body;
@@ -2493,27 +2990,62 @@ app.post('/api/auth/login', (req, res) => {
     const user = db.queryOne(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.store_id,s.store_name
       FROM users u LEFT JOIN stores s ON u.store_id=s.id WHERE u.username=? AND u.password_hash=?`, [username, hash]);
     if (!user) return res.status(401).json({ error: '用户名或密码错误' });
-    const token = jwt.sign({
-      id: user.id,
-      username: user.username,
-      role: user.role,
-      display_name: user.display_name,
-      avatar_url: user.avatar_url,
-      store_id: user.store_id,
-      store_name: user.store_name || '',
-    }, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+    const token = issueAuthToken(user);
     res.json({ ok: true, token, user });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/auth/me', (req, res) => {
-  // 补充最新的 store 信息
-  const u = req.user;
-  if (u.store_id) {
-    const s = db.queryOne('SELECT store_name FROM stores WHERE id=?', [u.store_id]);
-    if (s) u.store_name = s.store_name;
+  const user = getAuthUserById(req.user.id);
+  if (!user) return res.status(401).json({ error: '账号不存在或已被停用' });
+  res.json({ ok: true, user });
+});
+
+// 当前登录用户的个人设置：用户名和密码变更必须验证当前密码，避免登录态被盗用后直接接管账号。
+app.put('/api/auth/profile', (req, res) => {
+  try {
+    const current = db.queryOne('SELECT id,username,password_hash,display_name,avatar_url FROM users WHERE id=?', [req.user.id]);
+    if (!current) return res.status(404).json({ error: '账号不存在' });
+    const username = String(req.body?.username ?? current.username).trim();
+    const displayName = String(req.body?.display_name ?? current.display_name ?? '').trim();
+    const currentPassword = String(req.body?.current_password || '');
+    const newPassword = String(req.body?.new_password || '');
+    const changingCredential = username !== current.username || Boolean(newPassword);
+    if (!username || username.length > 50) return res.status(400).json({ error: '账号不能为空且不能超过 50 个字符' });
+    if (newPassword && newPassword.length < 6) return res.status(400).json({ error: '新密码至少需要 6 位' });
+    if (changingCredential) {
+      const currentHash = crypto.createHash('md5').update(currentPassword).digest('hex');
+      if (!currentPassword || currentHash !== current.password_hash) return res.status(400).json({ error: '修改账号或密码前，请先填写正确的当前密码' });
+    }
+    const sets = ['username=?', 'display_name=?'];
+    const values = [username, displayName || username];
+    if (newPassword) { sets.push('password_hash=?'); values.push(crypto.createHash('md5').update(newPassword).digest('hex')); }
+    let newAvatarUrl = current.avatar_url || '';
+    const avatarData = req.body?.avatar_data;
+    if (avatarData) {
+      const match = String(avatarData).match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=\r\n]+)$/);
+      if (!match) return res.status(400).json({ error: '仅支持 PNG、JPEG 或 WebP 图片' });
+      const buffer = Buffer.from(match[2].replace(/\s/g, ''), 'base64');
+      if (!buffer.length || buffer.length > 2 * 1024 * 1024 || !hasValidImageSignature(buffer, match[1])) return res.status(400).json({ error: '头像文件无效或超过 2MB' });
+      const ext = match[1] === 'jpeg' ? 'jpg' : match[1];
+      const filename = `user-${current.id}-${Date.now()}.${ext}`;
+      fs.writeFileSync(path.join(AVATAR_DIR, filename), buffer);
+      newAvatarUrl = `/uploads/avatars/${filename}`;
+      sets.push('avatar_url=?'); values.push(newAvatarUrl);
+    } else if (req.body?.remove_avatar) {
+      newAvatarUrl = '';
+      sets.push('avatar_url=?'); values.push('');
+    }
+    values.push(current.id);
+    db.run(`UPDATE users SET ${sets.join(',')} WHERE id=?`, values);
+    db.save();
+    if (newAvatarUrl !== current.avatar_url) removeAvatarFile(current.avatar_url);
+    const user = getAuthUserById(current.id);
+    res.json({ ok: true, user, token: issueAuthToken(user) });
+  } catch (e) {
+    if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '账号已被使用' });
+    res.status(500).json({ error: e.message });
   }
-  res.json({ ok: true, user: u });
 });
 
 // ===== 记账本 =====
@@ -3586,6 +4118,54 @@ app.get('/api/business-analytics/meituan-operation', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+const DELIVERY_EXPENSE_PLATFORMS = ['美团外卖', '淘宝闪购', '京东外卖'];
+const DELIVERY_EXPENSE_TYPES = ['霸王餐', '第三方推广'];
+app.get('/api/business-analytics/external-expenses', (req, res) => {
+  try {
+    const storeId = Number(req.query.store_id);
+    const platform = String(req.query.platform || '').trim();
+    if (!storeId || !DELIVERY_EXPENSE_PLATFORMS.includes(platform)) return res.status(400).json({ error: '请选择门店和外卖平台' });
+    const clauses = ['store_id=?', 'platform=?']; const values = [storeId, platform];
+    if (req.query.date_from) { clauses.push('expense_date>=?'); values.push(String(req.query.date_from).slice(0, 10)); }
+    if (req.query.date_to) { clauses.push('expense_date<=?'); values.push(String(req.query.date_to).slice(0, 10)); }
+    const expenses = db.queryAll(`SELECT * FROM delivery_external_expenses WHERE ${clauses.join(' AND ')} ORDER BY expense_date DESC,id DESC`, values);
+    const totals = expenses.reduce((sum, item) => { sum.total += Number(item.amount) || 0; sum[item.expense_type] = (sum[item.expense_type] || 0) + (Number(item.amount) || 0); return sum; }, { total: 0, '霸王餐': 0, '第三方推广': 0 });
+    res.json({ ok: true, expenses, totals });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/business-analytics/external-expenses', (req, res) => {
+  try {
+    const storeId = Number(req.body?.store_id), platform = String(req.body?.platform || '').trim(), expenseDate = String(req.body?.expense_date || '').slice(0, 10), expenseType = String(req.body?.expense_type || '').trim(), amount = Number(req.body?.amount), remark = String(req.body?.remark || '').trim();
+    if (!storeId || !db.queryOne('SELECT id FROM stores WHERE id=?', [storeId])) return res.status(400).json({ error: '门店不存在' });
+    if (!DELIVERY_EXPENSE_PLATFORMS.includes(platform) || !DELIVERY_EXPENSE_TYPES.includes(expenseType)) return res.status(400).json({ error: '仅可录入外卖平台的霸王餐或第三方推广' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate) || !Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: '请填写正确的日期和大于 0 的金额' });
+    const id = db.insert('INSERT INTO delivery_external_expenses (store_id,platform,expense_date,expense_type,amount,remark,created_by,created_by_name) VALUES (?,?,?,?,?,?,?,?)', [storeId, platform, expenseDate, expenseType, amount, remark, req.user?.id || null, req.user?.display_name || req.user?.username || '']);
+    db.save(); res.status(201).json({ ok: true, expense: db.queryOne('SELECT * FROM delivery_external_expenses WHERE id=?', [id]) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+// 月度矩阵录入：一个门店/平台/日期/类型只保留一个金额；填空或 0 即移除该日记录。
+app.put('/api/business-analytics/external-expenses/daily', (req, res) => {
+  try {
+    const storeId = Number(req.body?.store_id), platform = String(req.body?.platform || '').trim(), expenseDate = String(req.body?.expense_date || '').slice(0, 10), expenseType = String(req.body?.expense_type || '').trim(), amount = Number(req.body?.amount || 0);
+    if (!storeId || !db.queryOne('SELECT id FROM stores WHERE id=?', [storeId])) return res.status(400).json({ error: '门店不存在' });
+    if (!DELIVERY_EXPENSE_PLATFORMS.includes(platform) || !DELIVERY_EXPENSE_TYPES.includes(expenseType)) return res.status(400).json({ error: '仅可录入外卖平台的霸王餐或第三方推广' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate) || !Number.isFinite(amount) || amount < 0) return res.status(400).json({ error: '请填写正确的日期和非负金额' });
+    const where = 'store_id=? AND platform=? AND expense_date=? AND expense_type=?'; const keys = [storeId, platform, expenseDate, expenseType];
+    if (amount === 0) { db.run(`DELETE FROM delivery_external_expenses WHERE ${where}`, keys); db.save(); return res.json({ ok: true, deleted: true }); }
+    const existing = db.queryOne(`SELECT id FROM delivery_external_expenses WHERE ${where} ORDER BY id DESC LIMIT 1`, keys);
+    if (existing) {
+      db.run("UPDATE delivery_external_expenses SET amount=?,updated_at=datetime('now','localtime') WHERE id=?", [amount, existing.id]);
+      // 清理旧版本可能留下的同日重复行，防止利润重复扣除。
+      db.run(`DELETE FROM delivery_external_expenses WHERE ${where} AND id<>?`, [...keys, existing.id]);
+    } else db.insert('INSERT INTO delivery_external_expenses (store_id,platform,expense_date,expense_type,amount,created_by,created_by_name) VALUES (?,?,?,?,?,?,?)', [...keys, amount, req.user?.id || null, req.user?.display_name || req.user?.username || '']);
+    db.save(); res.json({ ok: true, amount });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.delete('/api/business-analytics/external-expenses/:id', (req, res) => {
+  try { const affected = db.run('DELETE FROM delivery_external_expenses WHERE id=?', [Number(req.params.id)]); if (!affected) return res.status(404).json({ error: '记录不存在' }); db.save(); res.json({ ok: true }); }
+  catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 app.get('/api/business-analytics/products/:scope', (req, res) => {
   try {
     const scope = req.params.scope;
@@ -3746,95 +4326,37 @@ app.post('/api/business-analytics/mappings/batch', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// 绑定名称标准化：忽略平台的展示符号、常见营销标签与空格，但保留菜品主体和规格。
-function productBindingNameKey(value) {
-  return String(value || '').toLowerCase()
-    // 【太公三宝饭】是菜品主名，不能和【招牌】这类营销标签一样整体删除。
-    .replace(/[【\[](?:新客专享|外卖专享|限时特惠|热销推荐|招牌|人气|爆款|新品)[】\]]/g, '')
-    .replace(/[【】\[\]]/g, '')
-    .replace(/(?:新客专享|外卖专享|限时特惠|热销推荐|招牌|人气|爆款|新品)/g, '')
-    .replace(/[\s·•_—\-－，,。.!！:：/\\]/g, '')
-    .trim();
-}
-
-// 外卖名称经常把赠品、是否配饭写在主菜名后面。这里仅剥离明确不会改变
-// 主菜身份的信息；不能识别或可能对应多规格的名称仍交由人工处理。
-function deliveryBindingNameKey(value) {
-  let text = String(value || '').trim();
-  const noRice = /不含(?:米饭|白饭)/.test(text);
-  // “XXX + 例汤/靓汤”中的汤为赠品，不应影响主菜绑定。
-  text = text
-    .replace(/[+＋]\s*(?:例汤|靓汤)(?=\s*(?:[（(].*[）)])?\s*$)/g, '')
-    .replace(/[（(]\s*(?:含)?(?:例汤|靓汤)\s*[）)]/g, '')
-    .replace(/不含(?:米饭|白饭)/g, '')
-    .trim();
-  // 平台的“烧肉/例（不含米饭）”和本地的“烧肉例牌”是同一售卖形态。
-  if (noRice) text = text.replace(/(?:[/／\s])?例(?=\s*(?:[（(].*[）)])?\s*$)/, '例牌');
-  return productBindingNameKey(text);
-}
-
-// 这三类在本地存在多规格/组合配置，单品自动绑定会绕开规格选择，必须保留人工处理。
-function isProtectedDeliveryMultiSpecProduct(value) {
-  const text = String(value || '');
-  return /太公烧鹅|烧鸭|咸鸡|咸香鸡|咸香靓鸡/.test(text);
-}
-
-// 组合套餐、双拼和“濑粉/面”这类仍需选择内容或规格，不能因为名称里包含一个菜名就自动绑定。
-function isDeliveryCompositeProduct(value) {
-  const text = String(value || '')
-    .replace(/[+＋]\s*(?:例汤|靓汤)(?=\s*(?:[（(].*[）)])?\s*$)/g, '');
-  return /(?:套餐|双拼|三拼|自选|二选一|濑粉\s*[/／]|干捞面|[+＋])/.test(text);
-}
-
-function productBindingSignature(binding) {
-  if (binding.type === 'spec') return `spec:${binding.items.map(item => `${item.menu_item_id}@${Number(item.platform_price)}`).sort().join('|')}`;
-  return `single:${binding.menu_item_id}`;
-}
-
-// 平台常在本地菜品主名之前/之后加三拼、超值、套餐等描述。主名长度至少 4，且在
-// 平台名称内唯一时，视为安全的“菜品系列”匹配；若同长度主名有多个，仍交给人工校正。
-function uniqueContainedMenuId(menus, platformNameKey) {
-  const candidates = (menus || []).filter(menu => {
-    const menuKey = productBindingNameKey(menu.name);
-    return menuKey.length >= 4 && platformNameKey.includes(menuKey);
-  });
-  const longest = Math.max(0, ...candidates.map(menu => productBindingNameKey(menu.name).length));
-  const ids = [...new Set(candidates.filter(menu => productBindingNameKey(menu.name).length === longest).map(menu => Number(menu.id)).filter(Boolean))];
-  return ids.length === 1 ? ids[0] : 0;
-}
-
-const PRODUCT_BINDING_SPECS = ['上庄', '下庄', '半只', '一只', '整只', '大份', '小份', '大盒', '小盒', '单人', '双人'];
-function productBindingSpecKey(value) {
-  const text = productBindingNameKey(value);
-  return PRODUCT_BINDING_SPECS.find(spec => text.includes(spec)) || '';
-}
-function productBindingDishCoreKey(value) {
-  return productBindingNameKey(value)
-    .replace(/(?:上庄|下庄|半只|一只|整只|大份|小份|大盒|小盒|单人|双人)/g, '')
-    .replace(/(?:金牌|现烤|招牌|太公|至尊|经典|超值|烧味)/g, '')
-    .replace(/(?:约)?\d+(?:g|克|斤|两|ml|毫升)/g, '')
-    .replace(/(?:不含|含)(?:米饭|白饭|靓汤|饮品|柠檬茶)/g, '')
-    .trim();
-}
-function uniqueDishAndSpecMenuId(menus, productName) {
-  const productSpec = productBindingSpecKey(productName);
-  const productCore = productBindingDishCoreKey(productName);
-  if (!productSpec || productCore.length < 2) return 0;
-  const ids = [...new Set((menus || []).filter(menu => productBindingSpecKey(menu.spec || '') === productSpec && productBindingDishCoreKey(menu.name) === productCore)
-    .map(menu => Number(menu.id)).filter(Boolean))];
-  return ids.length === 1 ? ids[0] : 0;
-}
-// 对“米饭”这类平台简写，允许从本地“白米饭 / 太公白米饭”中联想；只有唯一时自动绑定，
-// 多个候选则带入人工校正，不会猜测。
-function shortCoreMenuCandidates(menus, productName) {
-  const core = productBindingDishCoreKey(productName);
-  if (!['米饭', '白饭'].includes(core)) return [];
-  return (menus || []).filter(menu => productBindingDishCoreKey(menu.name).includes('米饭'));
-}
-function uniqueShortCoreMenuId(menus, productName) {
-  const ids = [...new Set(shortCoreMenuCandidates(menus, productName).map(menu => Number(menu.id)).filter(Boolean))];
-  return ids.length === 1 ? ids[0] : 0;
-}
+// 一键采用全部推荐（团购 / 外卖）：与「堂食菜品绑定」的「智能采用全部推荐」同一套规则
+// （识别实现统一在 lib/dish-matching.js）。只采用**精确命中**的推荐；相似度候选一律不自动采用。
+app.post('/api/business-analytics/mappings/adopt-recommendations', (req, res) => {
+  try {
+    const scope = String(req.body?.scope || '').trim();
+    const view = scope === 'delivery' ? 'delivery' : 'group-buy';
+    const group = view === 'delivery' ? 'delivery' : 'group_buy';
+    const { products } = businessAnalytics.getProductMappings(db, view, {});
+    const pending = (products || []).filter(p => !p.mapped && p.binding_mode !== 'spec');
+    const targets = pending.filter(p => p.recommend_menu_item_id);
+    const reasons = {};
+    let bound = 0;
+    db.run('BEGIN');
+    try {
+      for (const p of targets) {
+        db.run(`INSERT INTO business_product_mappings (platform,channel_group,external_product_name,menu_item_id)
+          VALUES (?,?,?,?) ON CONFLICT(platform,external_product_name)
+          DO UPDATE SET channel_group=excluded.channel_group,menu_item_id=excluded.menu_item_id,updated_at=datetime('now','localtime')`,
+          [String(p.platform || '').trim(), group, String(p.product_name || '').trim(), Number(p.recommend_menu_item_id)]);
+        reasons[p.recommend_reason] = (reasons[p.recommend_reason] || 0) + 1;
+        bound += 1;
+      }
+      db.run('COMMIT');
+    } catch (error) {
+      try { db.run('ROLLBACK'); } catch {}
+      throw error;
+    }
+    if (bound) db.save();
+    res.json({ ok: true, bound, skipped: pending.length - bound, reasons, reason_labels: RECOMMEND_REASON_LABELS });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 
 // 一键绑定：优先复用其他平台的相同菜品绑定，其次匹配本地菜品；只有候选唯一时才自动落库。
 app.post('/api/business-analytics/mappings/auto-bind', (req, res) => {
@@ -4442,8 +4964,9 @@ app.get('/api/bot/status', (_req, res) => {
     const admin = db.queryOne("SELECT * FROM users WHERE username='admin'");
     if (!admin) {
       db.insert("INSERT INTO users (username,password_hash,role,display_name) VALUES ('admin',?,'管理员','系统管理员')", [adminHash]);
-    } else if (admin.password_hash !== adminHash || admin.role !== '管理员') {
-      db.run("UPDATE users SET password_hash=?, role='管理员', display_name='系统管理员' WHERE username='admin'", [adminHash]);
+    } else if (admin.role !== '管理员') {
+      // 仅修复角色，不覆盖用户自行设置的账号名称、头像或密码。
+      db.run("UPDATE users SET role='管理员' WHERE username='admin'");
     }
     db.save();
   })();

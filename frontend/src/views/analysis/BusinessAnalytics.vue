@@ -201,6 +201,12 @@
           >退出环比</el-button
         ></template
       >
+      <el-button
+        v-if="canManageDeliveryExternalExpenses"
+        class="external-expense-button"
+        @click="openExternalExpenseDialog"
+        >+ 额外开销</el-button
+      >
       <div class="filter-summary">
         <span class="live-dot"></span>{{ rangeLabel }}
       </div>
@@ -367,66 +373,47 @@
       class="delivery-settlement-chain"
       :aria-label="`${scopeChip}数据口径拆解`"
     >
-      <template v-if="!isDirectSettlementOperation">
-        <div>
-          <span>营业额</span><strong>{{ money(chainGross) }}</strong
-          ><small>{{ settlementSource.daily }}</small>
-        </div>
-        <b>−</b>
-        <div>
-          <span>客户优惠</span><strong>{{ money(chainDiscount) }}</strong
-          ><small>{{ settlementSource.daily }}</small>
-        </div>
-        <b>=</b>
-        <div>
-          <span>优惠后收入</span><strong>{{ money(chainIncome) }}</strong
-          ><small>{{ settlementSource.income }}</small>
-        </div>
-        <b>−</b>
-        <div>
-          <span>平台费用</span><strong>{{ money(chainFees) }}</strong
-          ><small>{{ settlementSource.fee }}</small>
-        </div>
-        <b>=</b>
-        <div class="settlement-result">
-          <span>实际到账</span><strong>{{ money(chainActual) }}</strong
-          ><small>{{ settlementSource.settled }}</small>
-        </div>
-      </template>
-      <template v-else>
-        <template v-if="isJdOperation">
-          <div>
-            <span>订单实收</span><strong>{{ money(chainIncome) }}</strong
-            ><small>H 列“正向订单”</small>
-          </div>
-          <b>→</b>
-          <div>
-            <span>第三方费用</span><strong>{{ money(chainFees) }}</strong
-            ><small>I 列费用明细，仅展示不重复扣减</small>
-          </div>
-          <b>→</b>
-          <div class="settlement-result">
-            <span>实际到账</span><strong>{{ money(chainActual) }}</strong
-            ><small>X 列应结金额，账单最终结算结果</small>
+      <div>
+        <span>营业额</span><strong>{{ money(chainGross) }}</strong>
+      </div>
+      <b>−</b>
+      <el-tooltip
+        effect="light"
+        placement="bottom"
+        :show-after="140"
+        popper-class="delivery-expense-tooltip"
+      >
+        <template #content>
+          <div class="delivery-expense-detail">
+            <header><strong>支出构成</strong><span>{{ deliveryExpenseItems.length }} 项</span></header>
+            <div v-for="item in deliveryExpenseItems" :key="item.key" class="delivery-expense-line">
+              <span>{{ item.label }}</span><b>{{ money(item.amount) }}</b>
+            </div>
+            <p v-if="!deliveryExpenseItems.length">当前范围暂无支出明细</p>
+            <footer>支出合计 <b>{{ money(chainExpenses) }}</b></footer>
           </div>
         </template>
-        <template v-else>
-          <div>
-            <span>营业额</span><strong>{{ money(chainGross) }}</strong
-            ><small>优惠前总额（平台日报）</small>
-          </div>
-          <b>−</b>
-          <div>
-            <span>客户优惠</span><strong>{{ money(chainDiscount) }}</strong
-            ><small>优惠及让利</small>
-          </div>
-          <b>=</b>
-          <div class="settlement-result">
-            <span>实际到账</span><strong>{{ money(chainActual) }}</strong
-            ><small>美团营业收入已含第三方费用扣减</small>
-          </div>
-        </template>
-      </template>
+        <div class="settlement-expense">
+          <span>支出</span><strong>{{ money(chainExpenses) }}</strong><small>悬停查看构成</small>
+        </div>
+      </el-tooltip>
+      <b>=</b>
+      <div class="settlement-result">
+        <span>实际到账</span><strong>{{ money(chainActual) }}</strong>
+      </div>
+      <b>−</b>
+      <el-tooltip effect="light" placement="bottom" :show-after="140" popper-class="delivery-expense-tooltip">
+        <template #content><div class="delivery-expense-detail"><header><strong>第三方成本构成</strong><span>{{ externalExpenseItems.length }} 项</span></header><div v-for="item in externalExpenseItems" :key="item.key" class="delivery-expense-line"><span>{{ item.label }}</span><b>{{ money(item.amount) }}</b></div><p v-if="!externalExpenseItems.length">当前范围暂无霸王餐或第三方推广记录</p><footer>第三方成本 <b>{{ money(chainExternalCost) }}</b></footer></div></template>
+        <div class="settlement-expense"><span>第三方成本</span><strong>{{ money(chainExternalCost) }}</strong><small>悬停查看构成</small></div>
+      </el-tooltip>
+      <b>−</b>
+      <div>
+        <span>成本</span><strong>{{ money(chainCost) }}</strong><small>当前为菜品成本</small>
+      </div>
+      <b>=</b>
+      <div class="settlement-take-home">
+        <span>实际到手</span><strong>{{ money(chainTakeHome) }}</strong>
+      </div>
     </section>
 
     <section
@@ -646,9 +633,21 @@
               </button>
             </div>
             <div class="mt-metric-group mt-metric-funnel">
-              <span class="mt-metric-label">漏斗</span>
+             <span class="mt-metric-label">漏斗</span>
               <button
-                v-for="item in mtMetricOptions.filter((item) => !item.group)"
+                v-for="item in mtMetricOptions.filter((item) => !item.group && item.unit !== 'rating')"
+                :key="item.key"
+                type="button"
+                :class="{ active: mtIsActive(item.key) }"
+                @click="switchMtMetric(item.key)"
+              >
+                {{ item.label }}
+              </button>
+            </div>
+            <div class="mt-metric-group mt-metric-rating">
+              <span class="mt-metric-label">评分</span>
+              <button
+                v-for="item in mtMetricOptions.filter((item) => item.unit === 'rating')"
                 :key="item.key"
                 type="button"
                 :class="{ active: mtIsActive(item.key) }"
@@ -723,22 +722,20 @@
         ]"
       >
         <article>
-          <span>{{ isGroupOperationView ? "营业额" : "营业收入" }}</span
+          <span>营业额</span
           ><strong>{{
             money(
-              isGroupOperationView
-                ? meituanOpTotals.totals.gross_amount
-                : meituanOpTotals.totals.income_amount,
+              meituanOpTotals.totals.gross_amount,
             )
           }}</strong>
         </article>
         <article>
-          <span>{{ isGroupOperationView ? "收入" : "优惠前总额" }}</span
+          <span>{{ isGroupOperationView ? "收入" : "实收" }}</span
           ><strong>{{
             money(
               isGroupOperationView
                 ? meituanOpTotals.totals.income_amount
-                : meituanOpTotals.totals.gross_amount,
+                : (meituanOpTotals.totals.actual_amount ?? meituanOpTotals.totals.income_amount),
             )
           }}</strong>
         </article>
@@ -799,9 +796,7 @@
               ? percent(meituanOpTotals.totals.visit_rate)
               : "—"
           }}</strong
-          ><small>{{
-            isGroupOperationView ? "Σ访问 ÷ Σ曝光" : "Σ入店 ÷ Σ曝光"
-          }}</small>
+          >
         </article>
         <article class="op-rate">
           <span>{{
@@ -812,9 +807,14 @@
               ? percent(meituanOpTotals.totals.order_rate)
               : "—"
           }}</strong
-          ><small>{{
-            isGroupOperationView ? "Σ购买 ÷ Σ访问" : "Σ下单 ÷ Σ入店"
-          }}</small>
+          >
+        </article>
+        <article v-if="!isGroupOperationView">
+          <span>门店评分</span><strong>{{
+            meituanOpTotals.totals.store_rating != null
+              ? Number(meituanOpTotals.totals.store_rating).toFixed(1)
+              : "—"
+          }}</strong>
         </article>
       </div>
       <el-table
@@ -837,7 +837,8 @@
           :prop="item.key"
           :label="item.label"
           min-width="122"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             formatGroupMetric(row[item.key], item)
@@ -847,19 +848,53 @@
           v-if="isMeituanGroupBuyView"
           prop="gross_profit"
           label="预估毛利"
-          min-width="112"
-          align="right"
+          min-width="132"
+          align="center"
+          header-align="center"
           sortable
-          ><template #default="{ row }">{{
-            money(row.gross_profit)
-          }}</template></el-table-column
+          ><template #default="{ row }"
+            ><el-tooltip
+              effect="light"
+              placement="top"
+              :show-after="120"
+              popper-class="gross-profit-tooltip"
+              ><template #content
+                ><div class="gross-profit-detail">
+                  <header>
+                    <strong>预估毛利构成</strong
+                    ><span>{{ row.store_name }}</span>
+                  </header>
+                  <div
+                    v-for="line in storeGrossProfitLines(row)"
+                    :key="line.label"
+                    class="gross-profit-line"
+                  >
+                    <span
+                      >{{ line.label
+                      }}<small v-if="line.note">{{ line.note }}</small></span
+                    ><b>{{ line.value }}</b>
+                  </div>
+                  <footer>
+                    预估毛利 <b>{{ money(row.gross_profit) }}</b>
+                  </footer>
+                  <p>
+                    成本 = Σ（已绑定团购菜品单份成本 × 核销量），未绑定菜品按 0
+                    计；毛利占比 = 预估毛利 ÷ 实际到账金额。
+                  </p>
+                </div></template
+              >
+              <span class="profit-hover">{{ money(row.gross_profit) }}</span
+              ></el-tooltip
+            ></template
+          ></el-table-column
         >
         <el-table-column
           v-if="isMeituanGroupBuyView"
           prop="gross_profit_rate"
           label="毛利占比"
           min-width="92"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             row.gross_profit_rate != null ? percent(row.gross_profit_rate) : "—"
@@ -881,10 +916,22 @@
           show-overflow-tooltip
         />
         <el-table-column
+          prop="gross_amount"
+          label="营业额"
+          min-width="128"
+          align="center"
+          header-align="center"
+          sortable
+          ><template #default="{ row }">{{
+            money(row.gross_amount)
+          }}</template></el-table-column
+        >
+        <el-table-column
           prop="income_amount"
-          :label="isTaobaoOperation ? '优惠后收入' : '营业收入（实收）'"
+          label="实收"
           min-width="122"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             isJdOperation && row.actual_amount != null
@@ -897,7 +944,8 @@
           prop="actual_amount"
           label="实际到账"
           min-width="112"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             row.actual_amount == null ? "待导入账单" : money(row.actual_amount)
@@ -906,17 +954,49 @@
         <el-table-column
           prop="gross_profit"
           label="预估毛利"
-          min-width="112"
-          align="right"
+          min-width="132"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }"
-            ><span
-              :class="
-                Number(row.gross_profit) >= 0
-                  ? 'profit-positive'
-                  : 'profit-negative'
-              "
-              >{{ money(row.gross_profit) }}</span
+            ><el-tooltip
+              effect="light"
+              placement="top"
+              :show-after="120"
+              popper-class="gross-profit-tooltip"
+              ><template #content
+                ><div class="gross-profit-detail">
+                  <header>
+                    <strong>预估毛利构成</strong
+                    ><span>{{ row.store_name }}</span>
+                  </header>
+                  <div
+                    v-for="line in storeGrossProfitLines(row)"
+                    :key="line.label"
+                    class="gross-profit-line"
+                  >
+                    <span
+                      >{{ line.label
+                      }}<small v-if="line.note">{{ line.note }}</small></span
+                    ><b>{{ line.value }}</b>
+                  </div>
+                  <footer>
+                    预估毛利 <b>{{ money(row.gross_profit) }}</b>
+                  </footer>
+                  <p>
+                    预估毛利 = 实际到账 − 已绑定菜品成本 − 当前范围录入的第三方成本；未绑定菜品成本按 0 计。
+                  </p>
+                </div></template
+              >
+              <span
+                class="profit-hover"
+                :class="
+                  Number(row.gross_profit) >= 0
+                    ? 'profit-positive'
+                    : 'profit-negative'
+                "
+                >{{ money(row.gross_profit) }}</span
+              ></el-tooltip
             ></template
           ></el-table-column
         >
@@ -924,27 +1004,19 @@
           prop="gross_profit_rate"
           label="毛利占比"
           min-width="92"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             row.gross_profit_rate != null ? percent(row.gross_profit_rate) : "—"
           }}</template></el-table-column
         >
         <el-table-column
-          prop="gross_amount"
-          label="优惠前总额（营业额）"
-          min-width="128"
-          align="right"
-          sortable
-          ><template #default="{ row }">{{
-            money(row.gross_amount)
-          }}</template></el-table-column
-        >
-        <el-table-column
           prop="order_count"
           label="有效订单"
           width="88"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             numberText(row.order_count)
@@ -953,7 +1025,8 @@
         <el-table-column
           label="客单价"
           min-width="92"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           :sort-method="(a, b) => avgOrderValue(a) - avgOrderValue(b)"
           ><template #default="{ row }">{{
@@ -964,7 +1037,8 @@
           prop="impression_users"
           label="曝光人数"
           width="96"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             numberText(row.impression_users)
@@ -974,7 +1048,8 @@
           prop="visit_users"
           label="入店人数"
           width="90"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             numberText(row.visit_users)
@@ -984,7 +1059,8 @@
           prop="ordering_users"
           label="下单人数"
           width="90"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             numberText(row.ordering_users)
@@ -994,7 +1070,8 @@
           prop="visit_rate"
           label="入店转化率"
           width="100"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             row.visit_rate != null ? percent(row.visit_rate) : "—"
@@ -1004,11 +1081,21 @@
           prop="order_rate"
           label="下单转化率"
           width="100"
-          align="right"
+          align="center"
+          header-align="center"
           sortable
           ><template #default="{ row }">{{
             row.order_rate != null ? percent(row.order_rate) : "—"
           }}</template></el-table-column
+        >
+        <el-table-column
+          prop="store_rating"
+          label="门店评分"
+          min-width="104"
+          align="center"
+          header-align="center"
+          sortable
+          ><template #default="{ row }"><el-tooltip v-if="row.store_rating != null" effect="light" :content="row.rating_date ? `取 ${row.rating_date} 的评分` : '评分日期缺失'"><span>{{ Number(row.store_rating).toFixed(1) }}</span></el-tooltip><span v-else>—</span></template></el-table-column
         >
       </el-table>
       <div
@@ -1169,17 +1256,24 @@
               <h3>时段订单走势图</h3>
               <p>
                 {{ rangeLabel }} · 从 00:00 至次日
-                00:00，每小时统计一次实际订单量
+                00:00，每小时统计一次实际订单量<span
+                  v-if="dishAnalytics.notes.hourly"
+                  class="merged-source-note"
+                  >{{ dishAnalytics.notes.hourly }}</span
+                >
               </p>
             </div>
             <span class="panel-badge">24 个时段</span>
           </header>
           <div
-            v-if="dishAnalytics.hourly_trend?.length"
+            v-if="hourlyOrderTotal > 0"
             ref="hourlyOrderChartRef"
             class="hourly-order-chart"
           ></div>
-          <el-empty v-else description="暂无带下单时间的菜品销售数据" />
+          <el-empty
+            v-else
+            description="当前区间的数据不带下单时刻（收银机“品项销售明细”没有该字段），无法按小时统计"
+          />
         </section>
       </template>
       <template v-else>
@@ -1247,7 +1341,11 @@
         <div v-if="data.trend.length" ref="trendChartRef" class="chart"></div>
         <el-empty v-else :description="emptyDescription" />
       </section>
-      <section v-if="analysisMode === 'store'" class="panel custom-store-panel">
+      <!-- 外卖/团购视角的门店视角已由上方「门店经营指标」表覆盖同样字段，此处仅保留总数据视角的门店对比表。 -->
+      <section
+        v-if="analysisMode === 'store' && analysisScope === 'total'"
+        class="panel custom-store-panel"
+      >
         <header>
           <div>
             <h3>门店经营结果</h3>
@@ -1435,28 +1533,71 @@
         >
           <el-table-column type="expand" width="48"><template #default="{ row }"
             ><div class="total-product-breakdown">
-              <div
-                v-if="dishSourceDetails(row).length"
-                class="total-product-breakdown-title"
-              >
-                来源订单明细
+              <!-- 每道菜明细自己的筛选：平台 / 规格，点「全部」即不过滤；多选可叠加 -->
+              <div class="src-filter-row">
+                <span class="src-filter-label">平台</span>
+                <button
+                  type="button" class="src-chip"
+                  :class="{ active: !detailFilterFor(row).platforms.length }"
+                  @click="toggleDetailFilter(row, 'platforms', '')"
+                >全部</button>
+                <button
+                  v-for="p in detailPlatformOptions(row)" :key="`p-${p}`" type="button" class="src-chip"
+                  :class="{ active: detailFilterFor(row).platforms.includes(p) }"
+                  @click="toggleDetailFilter(row, 'platforms', p)"
+                >{{ p }}</button>
+                <span class="src-filter-label spec">规格</span>
+                <button
+                  type="button" class="src-chip"
+                  :class="{ active: !detailFilterFor(row).specs.length }"
+                  @click="toggleDetailFilter(row, 'specs', '')"
+                >全部</button>
+                <button
+                  v-for="s in detailSpecOptions(row)" :key="`s-${s}`" type="button" class="src-chip"
+                  :class="{ active: detailFilterFor(row).specs.includes(s) }"
+                  @click="toggleDetailFilter(row, 'specs', s)"
+                >{{ s }}</button>
+                <span class="src-filter-count">
+                  {{ filteredSources(row).length }}/{{ (row.sources || []).length }} 条
+                </span>
+              </div>
+              <!-- 表头一行带走「销量/销售额/收入/成本」，数值右对齐，一屏即可全览，不用横向滚动 -->
+              <div class="src-grid src-head">
+                <span>平台</span>
+                <span>平台上的原始菜名</span>
+                <span>规格</span>
+                <span class="num">销量</span>
+                <span class="num">销售额</span>
+                <span class="num">收入</span>
+                <span class="num">成本</span>
               </div>
               <div
-                v-for="detail in dishSourceDetails(row)"
-                :key="`${detail.source_name}-${detail.product_code}-${detail.product_name}`"
-                class="total-product-breakdown-row"
+                v-for="src in filteredSources(row)"
+                :key="`${src.platform}-${src.platform_product_name}-${src.spec}`"
+                class="src-grid"
               >
-                <span class="total-product-source">{{ detail.source_name }}</span>
-                <span class="total-product-origin">{{ detail.product_name }}</span>
-                <b>销量 {{ numberText(detail.quantity) }}</b>
-                <span>销售额 {{ money(detail.sales_amount) }}</span>
-                <span>收入 {{ money(detail.income_amount) }}</span>
-                <span>订单 {{ numberText(detail.order_count) }}</span>
+                <span class="src-platform">{{ src.platform }}</span>
+                <span class="src-name" :title="src.platform_product_name">{{ src.platform_product_name }}</span>
+                <span class="src-spec">{{ src.spec === "--" ? "无规格" : src.spec }}</span>
+                <span class="num">{{ numberText(src.quantity) }}</span>
+                <span class="num">{{ money(src.sales_amount) }}</span>
+                <span class="num">{{ money(src.income_amount) }}</span>
+                <span class="num">{{ money(src.cost) }}</span>
               </div>
-              <div v-if="!dishSourceDetails(row).length" class="total-product-breakdown-row">
-                <span class="total-product-origin"
-                  >暂无对应来源明细，请确认该区间已导入收银机“品项销售明细”</span
-                >
+              <div v-if="!filteredSources(row).length" class="src-grid">
+                <span class="src-name">当前筛选下没有来源明细</span>
+              </div>
+              <!-- 筛选后的合计：选了下庄就能直接看到下庄的总销量/销售额/收入/成本 -->
+              <div v-if="(row.sources || []).length" class="src-grid src-total">
+                <span class="src-total-label">
+                  {{ detailFilterFor(row).platforms.length || detailFilterFor(row).specs.length ? "筛选后合计" : "合计" }}
+                </span>
+                <span class="src-name"></span>
+                <span class="src-spec"></span>
+                <span class="num">{{ numberText(detailSubtotal(row).quantity) }}</span>
+                <span class="num">{{ money(detailSubtotal(row).sales_amount) }}</span>
+                <span class="num">{{ money(detailSubtotal(row).income_amount) }}</span>
+                <span class="num">{{ money(detailSubtotal(row).cost) }}</span>
               </div>
             </div></template
           ></el-table-column>
@@ -1466,12 +1607,15 @@
             label="排名"
             width="62"
           />
-          <el-table-column
-            prop="product_name"
-            label="菜品"
-            min-width="200"
-            show-overflow-tooltip
-          />
+          <el-table-column label="菜品" min-width="186" show-overflow-tooltip
+            ><template #default="{ row }"
+              ><div class="merged-dish-cell">
+                <b>{{ row.product_name }}</b>
+                <small v-if="Number(row.platform_count) > 1">跨 {{ row.platform_count }} 个平台合并</small>
+                <small v-else-if="row.spec_pending" class="merged-pending">规格待定（成本按菜品均价估）</small>
+              </div></template
+            ></el-table-column
+          >
           <el-table-column label="规格" min-width="90"
             ><template #default="{ row }">{{
               row.spec && row.spec !== "--" ? row.spec : "—"
@@ -1551,73 +1695,6 @@
               row.refunded_count || 0
             }}</template></el-table-column
           >
-          <el-table-column label="本地菜品 SKU" min-width="270"
-            ><template #default="{ row }"
-              ><el-popover
-                trigger="click"
-                placement="bottom-start"
-                :width="390"
-                popper-class="analytics-sku-picker"
-                @show="refreshLocalMenuItems"
-                ><template #reference
-                  ><button
-                    type="button"
-                    class="inline-sku-picker"
-                    :class="{ 'is-bound': row.mapped && row.menu_item_id }"
-                    :title="
-                      row.mapped
-                        ? row.auto_matched
-                          ? '已按菜品编码/名称自动识别，点击可改绑'
-                          : '点击替换本地菜品 SKU'
-                        : '选择本地菜品 SKU'
-                    "
-                  >
-                    <span>{{
-                      row.mapped
-                        ? row.menu_sku_label || row.menu_name
-                        : "选择本地菜品 SKU"
-                    }}</span
-                    ><i>⌄</i>
-                  </button></template
-                >
-                <div class="analytics-sku-picker-body">
-                  <el-input
-                    v-model="inlineSkuSearch[productRowKey(row)]"
-                    clearable
-                    :loading="menuItemsLoading"
-                    placeholder="搜索菜品名、规格或做法"
-                  />
-                  <div
-                    v-if="
-                      recommendedMenusFor(row).length &&
-                      !inlineSkuSearch[productRowKey(row)]
-                    "
-                    class="analytics-picker-caption"
-                  >
-                    智能推荐 · 请确认后绑定
-                  </div>
-                  <div class="analytics-sku-options">
-                    <button
-                      v-for="menu in inlineMenuOptionsFor(row)"
-                      :key="menu.id"
-                      type="button"
-                      :class="{
-                        recommended: recommendedMenuIds(row).includes(menu.id),
-                      }"
-                      @click="bindDishRowFromAnalytics(row, menu.id)"
-                    >
-                      <b>{{ menu.label }}</b
-                      ><small>{{ menu.category }}</small></button
-                    ><span
-                      v-if="!inlineMenuOptionsFor(row).length"
-                      class="analytics-picker-empty"
-                      >没有匹配的本地 SKU，请输入名称搜索</span
-                    >
-                  </div>
-                </div></el-popover
-              ></template
-            ></el-table-column
-          >
         </el-table>
         <el-empty
           v-if="!dishLoading && !dishAnalytics.top?.length"
@@ -1625,9 +1702,10 @@
         />
         <footer v-if="dishTotal > 0" class="dish-footer">
           <span
-            >共 {{ dishTotal }} 个菜品 · 按{{
+            >共 {{ dishTotal }} 个标准菜品 · 按{{
               { income: "收入", quantity: "销量", amount: "金额" }[dishSort]
-            }}排序</span
+            }}排序<span v-if="dishAnalytics.notes.source" class="merged-source-note">{{ dishAnalytics.notes.source }}</span>
+            </span
           >
           <el-pagination
             v-model:current-page="dishPage"
@@ -1643,6 +1721,90 @@
             "
           />
         </footer>
+
+        <!-- 滞后区：未绑定的第三方/收银机品项。不参与上面的成本与毛利，绑好后会并进对应标准菜品 -->
+        <section v-if="dishAnalytics.unbound?.length" class="merged-lag-section">
+          <header class="merged-lag-head" @click="showUnbound = !showUnbound">
+            <div>
+              <b>未绑定品项 {{ dishAnalytics.summary.unbound_count || 0 }} 项</b>
+              <span
+                >{{ numberText(dishAnalytics.summary.unbound_quantity || 0) }} 份 ·
+                {{ money(dishAnalytics.summary.unbound_sales_amount || 0) }}
+                <em>未计入菜品成本与毛利</em></span
+              >
+            </div>
+            <el-button link type="primary">{{ showUnbound ? "收起" : "展开" }}</el-button>
+          </header>
+          <div v-show="showUnbound" class="merged-lag-body">
+            <p class="merged-lag-hint">
+              这些品项在本地菜品档案里找不到对应菜（或只是平台上的别名）。绑定后会自动并进对应标准菜品，
+              不再滞留在本区。
+            </p>
+            <el-table :data="dishAnalytics.unbound" size="small" border max-height="420" class="merged-lag-table">
+              <el-table-column label="来源平台" width="160" show-overflow-tooltip>
+                <template #default="{ row }">{{ (row.platforms || []).join(" / ") }}</template>
+              </el-table-column>
+              <el-table-column prop="product_name" label="平台/收银机上的原始菜名" min-width="240" show-overflow-tooltip />
+              <el-table-column label="规格" width="90">
+                <template #default="{ row }">{{ row.spec === "--" ? "—" : row.spec }}</template>
+              </el-table-column>
+              <el-table-column label="销量" width="90" align="right">
+                <template #default="{ row }">{{ numberText(row.quantity) }}</template>
+              </el-table-column>
+              <el-table-column label="销售额" width="110" align="right">
+                <template #default="{ row }">{{ money(row.sales_amount) }}</template>
+              </el-table-column>
+              <el-table-column label="疑似本地菜品" min-width="230">
+                <template #default="{ row }">
+                  <span v-if="trustedCandidate(row)" class="merged-candidate">
+                    {{ trustedCandidate(row).menu_name }}
+                    <i>{{ Math.round(trustedCandidate(row).score * 100) }}%</i>
+                  </span>
+                  <span v-else-if="(row.recommend_candidates || []).length" class="total-product-unmapped">
+                    不够可靠（最高 {{ Math.round(row.recommend_candidates[0].score * 100) }}%），需手动选
+                  </span>
+                  <span v-else class="total-product-unmapped">无候选，需人工指定</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="绑定" width="112" align="center">
+                <template #default="{ row }">
+                  <el-button size="small" type="primary" plain @click="bindUnboundItem(row)">
+                    {{ trustedCandidate(row) ? '确认 / 改选' : '手动选择' }}
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </section>
+
+        <!-- 非菜品：包装耗材等，同样不参与菜品成本与毛利 -->
+        <section v-if="dishAnalytics.non_dish?.length" class="merged-lag-section non-dish">
+          <header class="merged-lag-head" @click="showNonDish = !showNonDish">
+            <div>
+              <b>非菜品 {{ dishAnalytics.summary.non_dish_count || 0 }} 项</b>
+              <span
+                >{{ numberText(dishAnalytics.summary.non_dish_quantity || 0) }} 份 ·
+                {{ money(dishAnalytics.summary.non_dish_sales_amount || 0) }}
+                <em>包装耗材等，不计入菜品口径</em></span
+              >
+            </div>
+            <el-button link type="primary">{{ showNonDish ? "收起" : "展开" }}</el-button>
+          </header>
+          <div v-show="showNonDish" class="merged-lag-body">
+            <el-table :data="dishAnalytics.non_dish" size="small" border max-height="280">
+              <el-table-column prop="product_name" label="品项" min-width="220" show-overflow-tooltip />
+              <el-table-column label="来源平台" width="200" show-overflow-tooltip>
+                <template #default="{ row }">{{ (row.platforms || []).join(" / ") }}</template>
+              </el-table-column>
+              <el-table-column label="销量" width="100" align="right">
+                <template #default="{ row }">{{ numberText(row.quantity) }}</template>
+              </el-table-column>
+              <el-table-column label="销售额" width="120" align="right">
+                <template #default="{ row }">{{ money(row.sales_amount) }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </section>
       </template>
       <template v-else>
         <header>
@@ -1692,7 +1854,7 @@
               isMeituanGroupProductBoard ? "流水类型：消费" : "已关联门店的销量"
             }}</small>
           </article>
-          <article>
+          <article v-if="!requiresPlatformRecord">
             <span>{{
               isTotalProductBoard
                 ? "营业额（含赠品）"
@@ -1710,7 +1872,9 @@
                 ? "流水类型：撤销"
                 : isTotalProductBoard
                   ? "收银机品项明细口径"
-                  : `按${platformProductName}商品报表口径`
+                  : productAnalytics.totals.date_from
+                    ? `商品明细 ${productAnalytics.totals.date_from} 至 ${productAnalytics.totals.date_to} · 不含打包费`
+                    : `按${platformProductName}商品报表口径`
             }}</small>
           </article>
           <article v-if="isTotalProductBoard">
@@ -1850,15 +2014,24 @@
                   ><button
                     type="button"
                     class="inline-sku-picker"
-                    :class="{ 'is-bound': row.mapped && row.menu_item_id }"
+                    :class="{
+                      'is-bound': row.mapped && row.menu_item_id,
+                      'is-spec': row.spec_reverse,
+                    }"
                     :title="
-                      row.mapped ? '点击替换本地菜品 SKU' : '选择本地菜品 SKU'
+                      !row.mapped
+                        ? '选择本地菜品 SKU'
+                        : row.spec_reverse
+                          ? `多规格关联：按平台价反解到 ${row.spec_links?.length || 0} 个规格核算成本；点击改为单品绑定会清除现有规格配置`
+                          : '点击替换本地菜品 SKU'
                     "
                   >
                     <span>{{
-                      row.mapped
-                        ? row.menu_sku_label || row.menu_name
-                        : "选择本地菜品 SKU"
+                      row.spec_reverse
+                        ? specBindingLabel(row)
+                        : row.mapped
+                          ? row.menu_sku_label || row.menu_name
+                          : "选择本地菜品 SKU"
                     }}</span
                     ><i>⌄</i>
                   </button></template
@@ -1900,21 +2073,107 @@
                 </div></el-popover
               ></template
             ></el-table-column
+          ><el-table-column width="172" align="right"
+            ><template #header
+              ><el-tooltip
+                effect="light"
+                placement="top"
+                content="成本 = 绑定本地菜品 SKU 的单份成本（元）；多规格关联商品按平台价反解，逐个列出各规格成本；预估成本 = 成本 × 净销量"
+                ><span>成本</span></el-tooltip
+              ></template
+            ><template #default="{ row }"
+              ><el-tooltip
+                v-if="row.spec_reverse && row.spec_links?.length"
+                effect="light"
+                placement="top"
+                :show-after="120"
+                popper-class="spec-cost-tooltip"
+                ><template #content
+                  ><div class="spec-cost-detail">
+                    <header>
+                      <strong>多规格关联成本</strong
+                      ><span>{{ row.spec_links.length }} 个规格</span>
+                    </header>
+                    <div
+                      v-for="link in row.spec_links"
+                      :key="`${link.menu_item_id}-${link.platform_price}`"
+                      class="spec-cost-line"
+                    >
+                      <span
+                        >{{ link.menu_name
+                        }}{{ link.menu_spec ? ` · ${link.menu_spec}` : ""
+                        }}<small>平台价 {{ money(link.platform_price) }}</small></span
+                      ><b>{{ money(link.unit_cost) }}</b>
+                    </div>
+                    <footer>
+                      预估成本合计 <b>{{ money(row.total_cost) }}</b>
+                    </footer>
+                    <p>
+                      该商品绑定了多个规格，按平台价反解到对应规格核算成本；预估成本 =
+                      各规格成本合计。
+                    </p>
+                  </div></template
+                >
+                <button type="button" class="spec-cost-button">{{
+                  specCostText(row)
+                }}</button></el-tooltip
+              ><span v-else-if="row.mapped" class="dish-cost-text">{{
+                money(row.unit_cost)
+              }}</span
+              ><span v-else class="dish-cost-pending">—</span></template
+            ></el-table-column
           ><el-table-column label="预估成本" width="140" align="right"
             ><template #default="{ row }"
               ><span v-if="row.mapped">{{ money(row.total_cost) }}</span
               ><span v-else>—</span></template
             ></el-table-column
-          ><el-table-column label="预估毛利" width="140" align="right"
+          ><el-table-column
+            v-if="isMeituanGroupProductBoard"
+            label="预估毛利"
+            width="140"
+            align="right"
             ><template #default="{ row }"
-              ><span
+              ><el-tooltip
                 v-if="row.mapped"
-                :class="
-                  Number(row.gross_profit) >= 0
-                    ? 'profit-positive'
-                    : 'profit-negative'
-                "
-                >{{ signedMoney(row.gross_profit) }}</span
+                effect="light"
+                placement="top"
+                :show-after="120"
+                popper-class="gross-profit-tooltip"
+                ><template #content
+                  ><div class="gross-profit-detail">
+                    <header>
+                      <strong>预估毛利构成</strong
+                      ><span>{{ row.product_name }}</span>
+                    </header>
+                    <div
+                      v-for="line in dishGrossProfitLines(row)"
+                      :key="line.label"
+                      class="gross-profit-line"
+                    >
+                      <span
+                        >{{ line.label
+                        }}<small v-if="line.note">{{ line.note }}</small></span
+                      ><b>{{ line.value }}</b>
+                    </div>
+                    <footer>
+                      预估毛利
+                      <b>{{ money(row.gross_profit) }}</b>
+                    </footer>
+                    <p>
+                      商家应得来自美团团购收益明细（真实值）；成本来自已绑定的本地菜品
+                      SKU，未绑定菜品按 0 计。
+                    </p>
+                  </div></template
+                >
+                <span
+                  class="profit-hover"
+                  :class="
+                    Number(row.gross_profit) >= 0
+                      ? 'profit-positive'
+                      : 'profit-negative'
+                  "
+                  >{{ signedMoney(row.gross_profit) }}</span
+                ></el-tooltip
               ><span v-else>—</span></template
             ></el-table-column
           ></el-table
@@ -2039,6 +2298,47 @@
         />
       </div>
     </section>
+
+    <el-dialog
+      v-model="externalExpenseDialog.visible"
+      title="外卖额外开销"
+      width="840px"
+      class="external-expense-dialog"
+      destroy-on-close
+    >
+      <div class="external-expense-scope">
+        <b>{{ externalExpenseStoreSummary }} · {{ effectivePlatform }}</b>
+        <span>{{ externalExpenseRangeLabel }}</span>
+        <small>已加入当前选择的全部 {{ selectedExternalExpenseStores.length }} 家门店。先确认录入时间，再填写每日金额；填写后点击其他位置自动保存，清空金额即可删除该日记录。</small>
+      </div>
+      <div class="external-expense-range-picker">
+        <span>录入时间</span>
+        <el-date-picker v-model="externalExpenseDialog.range" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :clearable="false" @change="externalExpenseDialog.rangeConfirmed = false" />
+        <el-button type="primary" :loading="externalExpenseDialog.loading" @click="confirmExternalExpenseRange">确定</el-button>
+      </div>
+      <template v-if="externalExpenseDialog.rangeConfirmed">
+      <div class="external-expense-summary">
+        <span>霸王餐 <b>{{ money(externalExpenseMonthlyTotals.freeMeal) }}</b></span>
+        <span>推广充值 <b>{{ money(externalExpenseMonthlyTotals.promotion) }}</b></span>
+        <strong>所选期间合计 {{ money(externalExpenseMonthlyTotals.total) }}</strong>
+      </div>
+      <el-tabs v-model="externalExpenseDialog.activeStoreId" v-loading="externalExpenseDialog.loading" class="external-expense-store-tabs">
+        <el-tab-pane v-for="sheet in externalExpenseSheets" :key="sheet.storeId" :name="sheet.storeId" :label="sheet.storeName">
+          <el-table :data="sheet.days" max-height="500" size="small" class="external-expense-matrix">
+            <el-table-column prop="label" label="时间" width="130" />
+            <el-table-column label="霸王餐" min-width="220">
+              <template #default="{ row }"><el-input v-model="row.freeMeal" inputmode="decimal" placeholder="—" :disabled="externalExpenseDialog.savingKey === `${sheet.storeId}:${row.date}:freeMeal`" @blur="saveDailyExternalExpense(sheet, row, 'freeMeal')"><template #append>元</template></el-input></template>
+            </el-table-column>
+            <el-table-column label="推广充值（第三方费用）" min-width="280">
+              <template #default="{ row }"><el-input v-model="row.promotion" inputmode="decimal" placeholder="—" :disabled="externalExpenseDialog.savingKey === `${sheet.storeId}:${row.date}:promotion`" @blur="saveDailyExternalExpense(sheet, row, 'promotion')"><template #append>元</template></el-input></template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
+      </template>
+      <el-empty v-else description="请选择开始和结束日期后，点击“确定”生成录入明细" :image-size="72" />
+      <template #footer><el-button @click="externalExpenseDialog.visible = false">关闭</el-button></template>
+    </el-dialog>
 
     <el-dialog
       v-model="storeDetailVisible"
@@ -2320,6 +2620,86 @@
         ></template
       >
     </el-dialog>
+
+    <!-- 滞后区绑定：先让人看清、再让人自己选，避免"顺手确认"把销量并进错菜 -->
+    <el-dialog
+      v-model="bindDialog.visible"
+      title="绑定到本地菜品"
+      width="620px"
+      align-center
+      class="bind-dialog"
+      destroy-on-close
+    >
+      <div class="bind-target">
+        <div><span>平台/收银机菜名</span><b>{{ bindDialog.productName }}</b></div>
+        <div><span>规格</span><b>{{ bindDialog.spec || "—" }}</b></div>
+        <div><span>来源平台</span><b>{{ (bindDialog.platforms || []).join(" / ") || "—" }}</b></div>
+        <div><span>销量 / 销售额</span><b>{{ numberText(bindDialog.quantity) }} 份 · {{ money(bindDialog.salesAmount) }}</b></div>
+      </div>
+
+      <el-alert
+        v-if="bindDialog.mode === 'manual'"
+        type="warning"
+        :closable="false"
+        show-icon
+        title="没有足够可靠的匹配（最高相似度低于 80%），请自己选。绑错会把这批销量并进错误菜品，直接影响成本与毛利。"
+      />
+      <el-alert
+        v-else
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`已按相似度预选「${bindDialog.preselectedName}」（${bindDialog.preselectedScore}%）。确认前请核对，也可换成别的菜品。`"
+      />
+
+      <div v-if="bindDialog.candidates.length" class="bind-candidates">
+        <span>候选（点一下即选中）：</span>
+        <div class="bind-candidate-list">
+          <el-button
+            v-for="item in bindDialog.candidates"
+            :key="item.menu_item_id"
+            size="small"
+            :type="Number(bindDialog.menuItemId) === Number(item.menu_item_id) ? 'primary' : 'default'"
+            @click="bindDialog.menuItemId = item.menu_item_id"
+          >
+            {{ item.menu_name }} {{ Math.round(item.score * 100) }}%
+          </el-button>
+        </div>
+      </div>
+
+      <el-form label-position="top" class="bind-form">
+        <el-form-item label="绑定到本地菜品（可搜索名称 / 规格）">
+          <el-select
+            v-model="bindDialog.menuItemId"
+            filterable
+            clearable
+            placeholder="搜索并选择本地菜品"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="item in localMenuSkuOptions"
+              :key="item.id"
+              :label="item.label"
+              :value="item.id"
+            />
+          </el-select>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <span class="bind-footer-tip">
+          将写入 {{ (bindDialog.row?.binding_keys || []).length }} 条绑定关系（不同平台/编码各自一条）
+        </span>
+        <el-button @click="bindDialog.visible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :disabled="!bindDialog.menuItemId"
+          :loading="bindDialog.saving"
+          @click="confirmBindUnbound"
+          >确认绑定</el-button
+        >
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -2333,19 +2713,22 @@ import {
   ref,
   watch,
 } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import * as echarts from "echarts";
 import { Search } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import {
   generateBusinessDiagnosis,
   getBusinessAnalytics,
   getBusinessDiagnosis,
+  getDeliveryExternalExpenses,
   getBusinessProductAnalytics,
   getDishSalesAnalytics,
+  getMergedDishAnalytics,
   getMeituanOperation,
   getMenuItems,
   getStores,
+  saveDeliveryExternalExpenseDaily,
   saveBusinessProductMapping,
   saveDishSalesMapping,
 } from "@/api";
@@ -2353,6 +2736,7 @@ import StoreRegionSelect from "@/components/StoreRegionSelect.vue";
 import { groupOperationMetrics } from "@/utils/group-operation";
 
 const route = useRoute();
+const router = useRouter();
 const pageMeta = Object.freeze({ ...route.meta, routePath: route.path });
 const timeModes = [
   { label: "日数据", value: "day" },
@@ -2547,12 +2931,18 @@ const data = reactive({
   fee_detail_breakdown: [],
   meituan_group_fee_categories: [],
 });
-const dishAnalytics = reactive({ summary: {}, top: [], hourly_trend: [] });
+const dishAnalytics = reactive({ summary: {}, top: [], unbound: [], non_dish: [], hourly_trend: [], notes: {} });
 const dishLoading = ref(false);
+const showUnbound = ref(true);
+// 每道菜明细内的筛选：{ [dish_key]: { platforms: [], specs: [] } }，空数组 = 该维度不过滤
+const dishDetailFilters = ref({});
+const showNonDish = ref(false);
 const dishSort = ref("income");
 const dishPage = ref(1);
 const dishPageSize = ref(20);
 const dishTotal = ref(0);
+// 时段走势：24 个槽位即使全 0 也算“有数组”，所以要按订单合计判断是否真有数据
+const hourlyOrderTotal = computed(() => (dishAnalytics.hourly_trend || []).reduce((sum, row) => sum + (Number(row.order_count) || 0), 0));
 const productAnalytics = reactive({ products: [], totals: {} });
 const productLoading = ref(false);
 const productPage = ref(1);
@@ -2643,8 +3033,30 @@ const hasProductBoard = computed(
     requiresPlatformRecord.value ||
     isMeituanGroupProductBoard.value,
 );
-const tabs = computed(() =>
-  hasProductBoard.value
+// ⚠️ 这两个 computed 必须留在 overviewTabHasPanels 之前：overviewTabHasPanels → tabs → watch(tabs)
+// 会在 setup 期间就求值一次，若定义在其后，会触发
+// "Cannot access 'isMeituanOperationView' before initialization"（TDZ）导致整页白屏。
+const isGroupOperationView = computed(
+  () =>
+    analysisScope.value === "group-buy" &&
+    ["美团团购", "抖音团购"].includes(effectivePlatform.value),
+);
+const isMeituanOperationView = computed(
+  () =>
+    (analysisScope.value === "delivery" &&
+      deliveryPlatforms.includes(effectivePlatform.value)) ||
+    isGroupOperationView.value,
+);
+// 「经营总览」里还剩什么可渲染：总数据视角的全部内容、非平台看板的实收趋势/渠道构成、
+// 品牌与平台视角的门店实收排名、团购视角的渠道构成。
+// 外卖视角·门店视角下这些都不渲染（经营指标已上移到页面上方），分组会完全空白 → 直接从页签里去掉。
+const overviewTabHasPanels = computed(() => {
+  if (analysisScope.value === "total") return true;
+  if (!isMeituanOperationView.value) return true;
+  return analysisScope.value !== "delivery" || analysisMode.value !== "store";
+});
+const tabs = computed(() => {
+  const list = hasProductBoard.value
     ? [
         baseTabs[0],
         // 总数据视角的菜品销量已由「菜品销售分析」取代（字段口径更完整），
@@ -2655,8 +3067,16 @@ const tabs = computed(() =>
         },
         baseTabs[1],
       ]
-    : baseTabs,
-);
+    : baseTabs;
+  return list.filter(
+    (tab) => tab.value !== "overview" || overviewTabHasPanels.value,
+  );
+});
+// 页签被隐藏时（如切到外卖视角·门店视角）不能停留在一个已经消失的空白分组上。
+watch(tabs, (list) => {
+  if (!list.some((tab) => tab.value === activeTab.value))
+    activeTab.value = list[0]?.value || "overview";
+});
 const showPlatformSelect = computed(
   () => analysisMode.value === "store" && scopedPlatforms.value.length > 0,
 );
@@ -2768,17 +3188,7 @@ const isMeituanGroupBuyView = computed(
     analysisScope.value === "group-buy" &&
     effectivePlatform.value === "美团团购",
 );
-const isGroupOperationView = computed(
-  () =>
-    analysisScope.value === "group-buy" &&
-    ["美团团购", "抖音团购"].includes(effectivePlatform.value),
-);
-const isMeituanOperationView = computed(
-  () =>
-    (analysisScope.value === "delivery" &&
-      deliveryPlatforms.includes(effectivePlatform.value)) ||
-    isGroupOperationView.value,
-);
+// isGroupOperationView / isMeituanOperationView 定义在 overviewTabHasPanels 之前（见上方说明）。
 const operationPlatformName = computed(
   () => effectivePlatform.value || "外卖平台",
 );
@@ -2844,6 +3254,7 @@ const mtMetricOptions = [
   { key: "impression_users", label: "曝光人数", unit: "count" },
   { key: "visit_users", label: "入店人数", unit: "count" },
   { key: "ordering_users", label: "下单人数", unit: "count" },
+  { key: "store_rating", label: "门店评分", unit: "rating" },
   { key: "visit_rate", label: "入店转化率", unit: "percent" },
   { key: "order_rate", label: "下单转化率", unit: "percent" },
 ];
@@ -2890,6 +3301,7 @@ async function loadMeituanOperation() {
     const result = await getMeituanOperation({
       ...currentStoreScope(),
       platform,
+      include_external_expenses: analysisScope.value === "delivery" ? "1" : undefined,
       date_from: range[0],
       date_to: range[1],
     });
@@ -3178,10 +3590,13 @@ function renderMeituanTrends() {
   if (single) {
     // 单独模式：只渲染该字段
     const isPercent = single.unit === "percent";
+    const isRating = single.unit === "rating";
     const data = isPercent
       ? rows.map(
           (row) => Math.round(Number(row[single.key] || 0) * 10000) / 100,
         )
+      : isRating
+        ? rows.map((row) => row[single.key] == null ? null : Number(Number(row[single.key]).toFixed(1)))
       : mtNumSeries(rows, single.key);
     const color =
       single.unit === "count"
@@ -3194,12 +3609,12 @@ function renderMeituanTrends() {
       tooltip: {
         ...baseOption.tooltip,
         valueFormatter: (value) =>
-          isPercent ? `${value}%` : numberText(value),
+          isPercent ? `${value}%` : isRating ? Number(value).toFixed(1) : numberText(value),
       },
       yAxis: [
         {
           type: "value",
-          name: isPercent ? "转化率" : single.label,
+          name: isPercent ? "转化率" : isRating ? "评分" : single.label,
           nameLocation: "end",
           nameGap: 10,
           nameTextStyle: { color: "#94a3b8", fontSize: 10, align: "right" },
@@ -3211,6 +3626,8 @@ function renderMeituanTrends() {
             formatter: (value) =>
               isPercent
                 ? `${value}%`
+                : isRating
+                  ? Number(value).toFixed(1)
                 : single.unit === "money"
                   ? moneyAxis(value)
                   : numberText(value),
@@ -3483,6 +3900,20 @@ const chainActual = computed(() =>
       : mtOpActualRaw.value || mtOpIncomeRaw.value
     : Number(scopeIncome.value || 0),
 );
+// 三个平台统一的利润公式：营业额 − 全部支出 = 实际到账 − 成本 = 实际到手。
+// 以最终结算到账反推支出，确保公式始终严格平衡；明细由优惠与各费用字段组成。
+const chainExpenses = computed(() =>
+  Math.round((chainGross.value - chainActual.value) * 100) / 100,
+);
+const chainCost = computed(() =>
+  Math.round(Number(mtOpTot.value.cost_amount || 0) * 100) / 100,
+);
+const chainExternalCost = computed(() =>
+  Math.round(Number(mtOpTot.value.external_expense_amount || 0) * 100) / 100,
+);
+const chainTakeHome = computed(() =>
+  Math.round((chainActual.value - chainExternalCost.value - chainCost.value) * 100) / 100,
+);
 const douyinSettlementIncome = computed(() =>
   Number(data.totals.gross_amount || 0),
 );
@@ -3532,6 +3963,30 @@ const feeBreakdownItems = computed(() => {
     },
   ];
   return list.filter((item) => Math.abs(item.amount) > 0.005);
+});
+const deliveryExpenseItems = computed(() => {
+  const breakdown = mtOpView.value
+    ? mtOpTot.value.fee_breakdown || {}
+    : data.totals.fee_breakdown || {};
+  const items = [
+    { key: "customer_discount", label: "客户优惠", amount: Number(chainDiscount.value || 0) },
+    { key: "promotion_fee", label: "推广费", amount: Number(breakdown.promotion_fee || 0) },
+    { key: "service_fee", label: "服务费", amount: Number(breakdown.service_fee || 0) },
+    { key: "insurance_fee", label: "保障 / 保险", amount: Number(breakdown.insurance_fee || 0) },
+    { key: "refund_amount", label: "退款及赔付", amount: Number(breakdown.refund_amount || 0) },
+  ].filter((item) => Math.abs(item.amount) > 0.005);
+  const knownTotal = items.reduce((sum, item) => sum + item.amount, 0);
+  const adjustment = Math.round((chainExpenses.value - knownTotal) * 100) / 100;
+  if (Math.abs(adjustment) > 0.005)
+    items.push({ key: "settlement_adjustment", label: "其他结算调整", amount: adjustment });
+  return items;
+});
+const externalExpenseItems = computed(() => {
+  const breakdown = mtOpTot.value.external_expense_breakdown || {};
+  return [
+    { key: "free_meal", label: "霸王餐", amount: Number(breakdown["霸王餐"] || 0) },
+    { key: "third_party_promotion", label: "第三方推广", amount: Number(breakdown["第三方推广"] || 0) },
+  ].filter((item) => Math.abs(item.amount) > 0.005);
 });
 const MEITUAN_GROUP_FEE_CATEGORY_DEFAULTS = [
   { key: "promotion", label: "促销费" },
@@ -3892,6 +4347,47 @@ const canQuery = computed(
     !(filters.timeMode === "custom" && activeRange.value?.length !== 2) &&
     (!requiresInitialStoreSelection.value || hasRequiredInitialStore.value),
 );
+const selectedExternalExpenseStoreIds = computed(() =>
+  analysisMode.value === "store" && analysisScope.value === "delivery"
+    ? filters.deliveryStoreIds.map(Number).filter(Boolean)
+    : [],
+);
+const selectedExternalExpenseStores = computed(() => selectedExternalExpenseStoreIds.value.map((storeId) => {
+  const store = storeOptions.value.find((item) => Number(item.id) === storeId);
+  return { storeId, storeName: store?.store_name || `门店 ${storeId}` };
+}));
+const externalExpenseStoreSummary = computed(() => selectedExternalExpenseStores.value.length === 1
+  ? selectedExternalExpenseStores.value[0].storeName
+  : `已选 ${selectedExternalExpenseStores.value.length} 家门店`);
+const canManageDeliveryExternalExpenses = computed(() =>
+  hasQueried.value &&
+  analysisMode.value === "store" &&
+  analysisScope.value === "delivery" &&
+  deliveryPlatforms.includes(effectivePlatform.value) &&
+  selectedExternalExpenseStoreIds.value.length > 0,
+);
+const externalExpenseDialog = reactive({
+  visible: false, loading: false, savingKey: "", sheets: [], activeStoreId: null, range: [], rangeConfirmed: false,
+});
+const externalExpenseEntryRange = computed(() => {
+  const range = externalExpenseDialog.range;
+  return Array.isArray(range) && range.length === 2 && /^\d{4}-\d{2}-\d{2}$/.test(range[0] || "") && /^\d{4}-\d{2}-\d{2}$/.test(range[1] || "")
+    ? range
+    : [];
+});
+const externalExpenseRangeLabel = computed(() => {
+  const range = externalExpenseEntryRange.value;
+  if (!range.length) return "请选择录入时间";
+  const display = (date) => `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`;
+  return externalExpenseDialog.rangeConfirmed ? `${display(range[0])} 至 ${display(range[1])} 每日明细` : `待确认：${display(range[0])} 至 ${display(range[1])}`;
+});
+const externalExpenseMonthlyTotals = computed(() => {
+  const rows = externalExpenseDialog.sheets.flatMap((sheet) => sheet.days || []);
+  const freeMeal = rows.reduce((sum, row) => sum + (Number(row.freeMeal) || 0), 0);
+  const promotion = rows.reduce((sum, row) => sum + (Number(row.promotion) || 0), 0);
+  return { freeMeal, promotion, total: freeMeal + promotion };
+});
+const externalExpenseSheets = computed(() => externalExpenseDialog.sheets);
 const compareRangesReady = computed(
   () =>
     compareCurrentRange.value?.length === 2 &&
@@ -3943,6 +4439,83 @@ function numberText(value) {
   return Number(value || 0).toLocaleString("zh-CN", {
     maximumFractionDigits: 0,
   });
+}
+// 预估毛利的收入基数：后端在存在结算实际到账（淘宝/京东账单）时以实际到账为准，否则用优惠后收入。
+function profitIncomeOf(row) {
+  if (!row) return 0;
+  const value = row.actual_amount == null ? row.income_amount : row.actual_amount;
+  return Number(value || 0);
+}
+// 门店经营指标「预估毛利」构成：收入基数 − 已绑定菜品成本合计（后端 cost_amount），与后端 gross_profit 口径一致。
+function storeGrossProfitLines(row) {
+  return [
+    {
+      label: isGroupOperationView.value ? "实际到账金额" : "实际到账",
+      value: money(profitIncomeOf(row)),
+    },
+    {
+      label: "减：菜品成本合计",
+      value: `-${money(row?.cost_amount)}`,
+      note: "Σ（单份成本 × 销量）",
+    },
+    {
+      label: "减：第三方成本",
+      value: `-${money(row?.external_expense_amount)}`,
+      note: `霸王餐 ${money(row?.external_expense_breakdown?.["霸王餐"])} · 第三方推广 ${money(row?.external_expense_breakdown?.["第三方推广"])}`,
+    },
+  ];
+}
+// 菜品销量「预估毛利」构成：美团团购用商家应得，其余平台用分摊实收，再减去菜品成本。
+function dishGrossProfitLines(row) {
+  const groupBuy = isMeituanGroupProductBoard.value;
+  const lines = [
+    {
+      label: groupBuy ? "商家应得（实际到账）" : "分摊实收（菜品收入）",
+      value: money(groupBuy ? row?.merchant_income : row?.actual_income),
+    },
+  ];
+  if (row?.spec_reverse) {
+    lines.push({
+      label: "减：规格拆分成本合计",
+      value: `-${money(row?.total_cost)}`,
+      note: "按已配置规格反解成本",
+    });
+  } else {
+    lines.push({
+      label: "减：菜品成本",
+      value: `-${money(row?.total_cost)}`,
+      note: `单份成本 ${money(row?.unit_cost)} × 净销量 ${numberText(
+        row?.quantity,
+      )}`,
+    });
+  }
+  return lines;
+}
+// 多规格关联商品没有单品绑定，主产品名取自规格行（多行规格通常指向同一个本地菜品）。
+function specBindingLabel(row) {
+  const links = row?.spec_links || [];
+  const names = [
+    ...new Set(
+      links.map((link) => String(link.menu_name || "").trim()).filter(Boolean),
+    ),
+  ];
+  if (!names.length) return "多规格关联";
+  const head = names.length === 1 ? names[0] : `${names[0]} 等 ${names.length} 个菜品`;
+  return `${head} · 多规格（${links.length}）`;
+}
+// 多规格关联商品（外卖多规格）：成本列把各规格单份成本并排列出，如 ¥42.5/¥42.5/¥80/¥160；
+// 完整规格名与平台价在悬停提示里。没有规格明细时退回文字说明。
+function specCostText(row) {
+  const links = row?.spec_links || [];
+  if (!links.length) return "按规格拆分";
+  return links
+    .map(
+      (link) =>
+        `¥${Number(link.unit_cost || 0).toLocaleString("zh-CN", {
+          maximumFractionDigits: 2,
+        })}`,
+    )
+    .join(" / ");
 }
 function signedMoney(value) {
   const number = Number(value || 0);
@@ -4001,6 +4574,66 @@ function currentStoreScope() {
           ? filters.platformStoreIds.join(",") || undefined
           : undefined,
   };
+}
+async function loadExternalExpenses() {
+  const entryRange = externalExpenseEntryRange.value;
+  const stores = selectedExternalExpenseStores.value;
+  if (!stores.length || !effectivePlatform.value || entryRange.length !== 2) return;
+  externalExpenseDialog.loading = true;
+  try {
+    const responses = await Promise.all(stores.map((store) => getDeliveryExternalExpenses({ store_id: store.storeId, platform: effectivePlatform.value, date_from: entryRange[0], date_to: entryRange[1] })));
+    const start = new Date(`${entryRange[0]}T12:00:00`);
+    const end = new Date(`${entryRange[1]}T12:00:00`);
+    const dates = [];
+    for (const cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+      const year = cursor.getFullYear();
+      const month = cursor.getMonth() + 1;
+      const day = cursor.getDate();
+      dates.push({ date: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`, label: `${month}.${day}` });
+    }
+    externalExpenseDialog.sheets = stores.map((store, storeIndex) => {
+      const values = new Map((responses[storeIndex].expenses || []).map((item) => [`${item.expense_date}:${item.expense_type}`, Number(item.amount) || 0]));
+      const days = dates.map(({ date, label }) => {
+        const freeMeal = values.get(`${date}:霸王餐`) || "";
+        const promotion = values.get(`${date}:第三方推广`) || "";
+        return { date, label, freeMeal, promotion, saved: { freeMeal, promotion } };
+      });
+      return { ...store, days };
+    });
+    externalExpenseDialog.activeStoreId = externalExpenseDialog.sheets[0]?.storeId ?? null;
+  } catch (error) { ElMessage.error(error.message || "额外开销记录读取失败"); }
+  finally { externalExpenseDialog.loading = false; }
+}
+async function openExternalExpenseDialog() {
+  if (!canManageDeliveryExternalExpenses.value) { ElMessage.warning("请在外卖门店视角选择一个门店并完成查询后再录入"); return; }
+  externalExpenseDialog.visible = true;
+  externalExpenseDialog.range = reportRange.value?.length === 2 ? [...reportRange.value] : [];
+  externalExpenseDialog.rangeConfirmed = false;
+  externalExpenseDialog.sheets = [];
+  externalExpenseDialog.activeStoreId = null;
+}
+async function confirmExternalExpenseRange() {
+  const range = externalExpenseEntryRange.value;
+  if (range.length !== 2 || range[0] > range[1]) { ElMessage.warning("请选择正确的开始和结束日期"); return; }
+  externalExpenseDialog.rangeConfirmed = true;
+  await loadExternalExpenses();
+}
+async function saveDailyExternalExpense(sheet, row, field) {
+  const rawValue = String(row[field] ?? "").trim();
+  const amount = rawValue === "" ? 0 : Number(rawValue);
+  const previous = row.saved?.[field] ?? "";
+  if (rawValue === String(previous)) return;
+  if (!Number.isFinite(amount) || amount < 0) { ElMessage.warning("金额请填写非负数字"); row[field] = previous; return; }
+  const expenseType = field === "freeMeal" ? "霸王餐" : "第三方推广";
+  externalExpenseDialog.savingKey = `${sheet.storeId}:${row.date}:${field}`;
+  try {
+    await saveDeliveryExternalExpenseDaily({ store_id: sheet.storeId, platform: effectivePlatform.value, expense_date: row.date, expense_type: expenseType, amount });
+    const saved = amount === 0 ? "" : String(amount);
+    row[field] = saved;
+    row.saved[field] = saved;
+    await loadMeituanOperation();
+  } catch (error) { ElMessage.error(error.message || "额外开销保存失败"); }
+  finally { externalExpenseDialog.savingKey = ""; }
 }
 function clearData() {
   Object.assign(data, {
@@ -4515,6 +5148,70 @@ async function bindProductFromAnalytics(row, menuId) {
     ElMessage.error(error.message || "菜品绑定失败");
   }
 }
+// 滞后区「去绑定」：打开弹窗让人看清品项、自己选菜品（不再只认候选第一名、不再一键确认）。
+// 相似度低于 BIND_TRUST_SCORE 的候选不预选、界面也不叫「疑似」，强制人工选择 ——
+// 否则"顺手确认"就会把这批销量并进错菜，直接影响菜品成本与毛利。
+const BIND_TRUST_SCORE = 0.8;
+function trustedCandidate(row) {
+  const top = (row?.recommend_candidates || [])[0];
+  return top && Number(top.score) >= BIND_TRUST_SCORE ? top : null;
+}
+const bindDialog = reactive({
+  visible: false, row: null, productName: "", spec: "", platforms: [], quantity: 0, salesAmount: 0,
+  candidates: [], menuItemId: null, mode: "manual", preselectedName: "", preselectedScore: 0, saving: false,
+});
+
+async function bindUnboundItem(row) {
+  const candidates = row?.recommend_candidates || [];
+  const trusted = trustedCandidate(row);
+  // 选择器要能搜到全部菜品，先确保本地菜品库已加载（菜品管理可能在另一页刚新建过）
+  await ensureLocalMenuItems();
+  Object.assign(bindDialog, {
+    row,
+    productName: row?.product_name || "",
+    spec: row?.spec === "--" ? "" : (row?.spec || ""),
+    platforms: row?.platforms || [],
+    quantity: row?.quantity || 0,
+    salesAmount: row?.sales_amount || 0,
+    candidates,
+    mode: trusted ? "preselect" : "manual",
+    preselectedName: trusted ? trusted.menu_name : "",
+    preselectedScore: trusted ? Math.round(Number(trusted.score) * 100) : 0,
+    menuItemId: trusted ? trusted.menu_item_id : null,
+    saving: false,
+    visible: true,
+  });
+}
+
+async function confirmBindUnbound() {
+  const row = bindDialog.row;
+  const menuItemId = Number(bindDialog.menuItemId);
+  if (!row || !menuItemId) return;
+  const keys = row.binding_keys || [];
+  if (!keys.length) {
+    ElMessage.warning("这条品项没有可写入的绑定键，请到「堂食菜品绑定」处理");
+    return;
+  }
+  bindDialog.saving = true;
+  try {
+    for (const key of keys) {
+      await saveDishSalesMapping({
+        product_code: key.product_code,
+        product_name: key.product_name,
+        spec: key.spec,
+        menu_item_id: menuItemId,
+      });
+    }
+    const picked = localMenuSkuOptions.value.find((item) => Number(item.id) === menuItemId);
+    ElMessage.success(`已绑定「${row.product_name}」→ ${picked?.name || "所选菜品"}（${keys.length} 条绑定关系）`);
+    bindDialog.visible = false;
+    await loadDishAnalytics();
+  } catch (error) {
+    ElMessage.error(error.message || "绑定失败");
+  } finally {
+    bindDialog.saving = false;
+  }
+}
 // 总数据「菜品销售分析」的行内绑定：写 dish_sales_mappings（与「堂食菜品绑定」同一张表、同一唯一键）。
 async function bindDishRowFromAnalytics(row, menuId) {
   const menuItemId = Number(menuId);
@@ -4575,12 +5272,49 @@ const dishGiftMap = computed(() => {
   return map;
 });
 function dishGift(row) {
+  // 合并口径的行自带赠品字段（来自收银机品项明细），优先用它；
+  // 旧映射表（按 编码|名称）只在老接口的数据上才有意义。
+  if (row && (row.gift_quantity !== undefined || row.gift_amount !== undefined)) {
+    return {
+      quantity: Number(row.gift_quantity) || 0,
+      amount: Number(row.gift_amount) || 0,
+    };
+  }
   return (
     dishGiftMap.value.get(
       `${row?.product_code || ""}|${row?.product_name || ""}`,
     ) || { quantity: 0, amount: 0 }
   );
 }
+/** 把合并口径的一行「标准菜品」规范成表格原本就认识的字段名，避免大改模板 */
+function normalizeMergedDish(row) {
+  const quantity = Number(row.quantity) || 0;
+  const income = Number(row.income_amount) || 0;
+  return {
+    ...row,
+    // 表格/KPI 原本用的字段名（兼容映射）
+    product_name: row.dish_name || row.product_name || "",
+    spec: row.spec_label || "",
+    amount_total: Number(row.sales_amount) || 0,
+    cost_available: 1,
+    mapped: true,
+    refunded_count: row.refunded_count || 0,
+    menu_sku_label:
+      row.menu_sku_label ||
+      (row.specs && row.specs.length > 1
+        ? `${row.dish_name} · ${row.specs.length} 个规格`
+        : row.dish_name),
+    // 供展开用
+    sources: row.sources || [],
+    sku_breakdown: row.sku_breakdown || [],
+    platform_label: row.platforms ? row.platforms.join(" / ") : "",
+    gift_quantity: Number(row.gift_quantity) || 0,
+    gift_amount: Number(row.gift_amount) || 0,
+    _quantity: quantity,
+    _income: income,
+  };
+}
+
 async function loadDishAnalytics() {
   const range = reportRange.value;
   if (
@@ -4589,7 +5323,14 @@ async function loadDishAnalytics() {
     !range[0] ||
     !range[1]
   ) {
-    Object.assign(dishAnalytics, { summary: {}, top: [], hourly_trend: [] });
+    Object.assign(dishAnalytics, {
+      summary: {},
+      top: [],
+      hourly_trend: [],
+      unbound: [],
+      non_dish: [],
+      notes: {},
+    });
     dishTotal.value = 0;
     return;
   }
@@ -4605,19 +5346,109 @@ async function loadDishAnalytics() {
     // 品牌视角不带门店筛选；门店视角支持单店或多店，统一通过 store_ids 汇总。
     if (analysisMode.value === "store" && filters.storeIds.length)
       params.store_ids = filters.storeIds.join(",");
-    const result = await getDishSalesAnalytics(params);
+    // 合并口径：5/1–8/9 取「菜品销售明细」、8/10 起取收银机「品项销售明细」，按标准菜品聚合
+    const result = await getMergedDishAnalytics(params);
+    const s = result.summary || {};
     Object.assign(dishAnalytics, {
-      summary: result.summary || {},
-      top: result.top || [],
+      summary: {
+        product_count: s.dish_count || 0,
+        quantity: s.quantity || 0,
+        amount_total: s.sales_amount || 0,
+        discount_amount: s.discount_amount || 0,
+        income_amount: s.income_amount || 0,
+        refund_amount: s.refund_amount || 0,
+        order_count: s.order_count || 0,
+        gift_quantity: s.gift_quantity || 0,
+        gift_amount: s.gift_amount || 0,
+        estimated_cost: s.estimated_cost || 0,
+        net_income: s.net_income || 0,
+        cost_covered_product_count: s.cost_covered_dish_count || 0,
+        cost_estimated_dish_count: s.cost_estimated_dish_count || 0,
+        merged_dish_count: s.merged_dish_count || 0,
+        multi_platform_dish_count: s.multi_platform_dish_count || 0,
+        // 未绑定 / 非菜品（都不参与上面的成本与毛利）
+        unbound_count: s.unbound_count || 0,
+        unbound_quantity: s.unbound_quantity || 0,
+        unbound_sales_amount: s.unbound_sales_amount || 0,
+        unbound_income_amount: s.unbound_income_amount || 0,
+        non_dish_count: s.non_dish_count || 0,
+        non_dish_quantity: s.non_dish_quantity || 0,
+        non_dish_sales_amount: s.non_dish_sales_amount || 0,
+      },
+      top: (result.dishes || []).map(normalizeMergedDish),
+      spec_options: s.spec_options || [],
+      platform_options: s.platform_options || [],
+      unbound: result.unbound || [],
+      non_dish: result.non_dish || [],
       hourly_trend: result.hourly_trend || [],
+      notes: {
+        source: result.source_note || "",
+        hourly: result.hourly_note || "",
+        hourly_scope: result.hourly_scope || "",
+      },
     });
     dishTotal.value = Number(result.total) || 0;
+    await nextTick();
+    renderHourlyOrderChart();
   } catch (error) {
-    Object.assign(dishAnalytics, { summary: {}, top: [], hourly_trend: [] });
+    Object.assign(dishAnalytics, {
+      summary: {},
+      top: [],
+      hourly_trend: [],
+      unbound: [],
+      non_dish: [],
+      notes: {},
+    });
     dishTotal.value = 0;
+    ElMessage.error(error.message || "菜品销售分析加载失败");
   } finally {
     dishLoading.value = false;
   }
+}
+function detailFilterKey(row) {
+  return String(row?.dish_key || row?.product_name || "");
+}
+/** 取该道菜的明细筛选（未设置时返回空数组 = 不过滤） */
+function detailFilterFor(row) {
+  return dishDetailFilters.value[detailFilterKey(row)] || { platforms: [], specs: [] };
+}
+/** 点芯片：value 为空串表示「全部」（清空该维度）；已是选中则取消，否则追加（可多选） */
+function toggleDetailFilter(row, kind, value) {
+  const key = detailFilterKey(row);
+  const current = dishDetailFilters.value[key] || { platforms: [], specs: [] };
+  let list = [...(current[kind] || [])];
+  if (value === "") list = [];
+  else if (list.includes(value)) list = list.filter(item => item !== value);
+  else list.push(value);
+  dishDetailFilters.value = { ...dishDetailFilters.value, [key]: { ...current, [kind]: list } };
+}
+function detailPlatformOptions(row) {
+  return [...new Set((row?.sources || []).map(src => src.platform))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+}
+function detailSpecOptions(row) {
+  return [...new Set((row?.sources || []).map(src => (src.spec === "--" ? "无规格" : src.spec)))];
+}
+/** 按该道菜自己的筛选条件过滤来源明细 */
+function filteredSources(row) {
+  const filter = detailFilterFor(row);
+  return (row?.sources || []).filter(src => {
+    const spec = src.spec === "--" ? "无规格" : src.spec;
+    if (filter.platforms.length && !filter.platforms.includes(src.platform)) return false;
+    if (filter.specs.length && !filter.specs.includes(spec)) return false;
+    return true;
+  });
+}
+/** 筛选后的合计（选了下庄就能直接看到下庄的总量） */
+function detailSubtotal(row) {
+  return filteredSources(row).reduce(
+    (acc, src) => ({
+      quantity: acc.quantity + (Number(src.quantity) || 0),
+      sales_amount: acc.sales_amount + (Number(src.sales_amount) || 0),
+      income_amount: acc.income_amount + (Number(src.income_amount) || 0),
+      cost: acc.cost + (Number(src.cost) || 0),
+    }),
+    { quantity: 0, sales_amount: 0, income_amount: 0, cost: 0 },
+  );
 }
 function changeDishSort() {
   dishPage.value = 1;
@@ -4731,7 +5562,8 @@ function renderHourlyOrderChart() {
   if (!hourlyOrderChartRef.value || analysisScope.value !== "total") return;
   hourlyOrderChart = reuseChart(hourlyOrderChart, hourlyOrderChartRef.value);
   const rows = dishAnalytics.hourly_trend || [];
-  if (!rows.length) {
+  // 24 个槽位即使全为 0 也算「有数组」，所以按合计判断是否真有数据；无数据时清空，避免残留上一次的图
+  if (!rows.length || hourlyOrderTotal.value <= 0) {
     hourlyOrderChart.clear();
     return;
   }
@@ -5024,7 +5856,7 @@ watch(compareThemeActive, async () => {
   queueChartRender();
 });
 onMounted(async () => {
-  const result = await getStores({ page: 1, pageSize: 200 }).catch(() => ({
+  const result = await getStores({ page: 1, page_size: 200 }).catch(() => ({
     stores: [],
   }));
   storeOptions.value = result.stores || [];
@@ -5047,6 +5879,22 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.external-expense-scope { display: grid; gap: 4px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid #dbeafe; border-radius: 10px; background: #f8fbff; }
+.external-expense-scope b { color: #26415f; }
+.external-expense-scope span { color: #3d6baf; font-size: 13px; }
+.external-expense-scope small { color: #7b8da5; line-height: 1.55; }
+.external-expense-range-picker { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; padding: 10px 12px; border: 1px solid #e1e9f4; border-radius: 10px; background: #fff; }
+.external-expense-range-picker > span { color: #52677f; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.external-expense-range-picker :deep(.el-date-editor) { width: 280px; }
+.external-expense-summary { display: flex; align-items: center; gap: 18px; margin-bottom: 12px; color: #697a91; font-size: 13px; }
+.external-expense-summary b { margin-left: 4px; color: #a16207; }
+.external-expense-summary strong { margin-left: auto; color: #21674e; }
+.external-expense-store-tabs :deep(.el-tabs__header) { margin-bottom: 10px; }
+.external-expense-store-tabs :deep(.el-tabs__nav-wrap) { overflow-x: auto; }
+.external-expense-store-tabs :deep(.el-tabs__item) { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.external-expense-matrix :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px #e0e8f2 inset; }
+.external-expense-matrix :deep(.el-input__wrapper:hover), .external-expense-matrix :deep(.el-input__wrapper.is-focus) { box-shadow: 0 0 0 1px #4f86ee inset; }
+@media (max-width: 700px) { .external-expense-range-picker { align-items: stretch; flex-wrap: wrap; } .external-expense-range-picker :deep(.el-date-editor) { width: 100%; } }
 .business-analytics-page {
   --ink: #162033;
   --line: #e6eaf0;
@@ -6221,15 +7069,16 @@ onBeforeUnmount(() => {
 }
 .dish-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  padding: 14px 18px;
+  /* 10 张卡片排 2 行：5 列 × 2 行（原来 4 列要占 3 行） */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 14px;
 }
 .dish-metrics > div {
-  min-height: 66px;
-  padding: 12px 14px;
+  min-height: 52px;
+  padding: 8px 11px;
   border: 1px solid #e6ebf2;
-  border-radius: 10px;
+  border-radius: 9px;
   background: #f8fbff;
 }
 .dish-metrics span,
@@ -6242,13 +7091,13 @@ onBeforeUnmount(() => {
   font-size: 11px;
 }
 .dish-metrics strong {
-  margin-top: 6px;
+  margin-top: 3px;
   color: #1f5fb9;
-  font-size: 18px;
+  font-size: 16px;
   font-variant-numeric: tabular-nums;
 }
 .dish-metrics small {
-  margin-top: 4px;
+  margin-top: 2px;
   color: #98a3b4;
   font-size: 9px;
   white-space: nowrap;
@@ -6486,6 +7335,15 @@ onBeforeUnmount(() => {
   gap: 3px;
   padding: 2px 10px;
 }
+.delivery-settlement-chain .settlement-expense {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 10px;
+  cursor: help;
+}
 .delivery-settlement-chain span {
   color: #63748d;
   font-size: 11px;
@@ -6512,6 +7370,13 @@ onBeforeUnmount(() => {
 .delivery-settlement-chain .settlement-result strong {
   color: #13845b;
 }
+.delivery-settlement-chain .settlement-take-home {
+  border-radius: 9px;
+  background: #fff0f0;
+}
+.delivery-settlement-chain .settlement-take-home strong {
+  color: #c53b3f;
+}
 .compare-mode .delivery-settlement-chain {
   border-color: rgba(118, 157, 213, 0.26);
   background: rgba(13, 30, 53, 0.92);
@@ -6534,6 +7399,12 @@ onBeforeUnmount(() => {
 .compare-mode .delivery-settlement-chain .settlement-result strong {
   color: #55d8a6;
 }
+.compare-mode .delivery-settlement-chain .settlement-take-home {
+  background: rgba(164, 55, 62, 0.24);
+}
+.compare-mode .delivery-settlement-chain .settlement-take-home strong {
+  color: #ff9ca0;
+}
 @media (max-width: 900px) {
   .delivery-settlement-chain {
     display: grid;
@@ -6544,9 +7415,12 @@ onBeforeUnmount(() => {
     display: grid;
     place-items: center;
   }
-  .delivery-settlement-chain > div {
-    padding: 5px 8px;
-  }
+.delivery-settlement-chain > div {
+  padding: 5px 8px;
+}
+.delivery-settlement-chain .settlement-expense {
+  padding: 5px 8px;
+}
 }
 @media (max-width: 560px) {
   .delivery-settlement-chain {
@@ -6558,9 +7432,56 @@ onBeforeUnmount(() => {
   .delivery-settlement-chain > div {
     border-bottom: 1px dashed #dbe4ef;
   }
-  .delivery-settlement-chain > div:last-child {
-    border-bottom: 0;
-  }
+.delivery-settlement-chain > div:last-child {
+  border-bottom: 0;
+}
+}
+.delivery-expense-detail {
+  min-width: 218px;
+  color: #31435b;
+}
+.delivery-expense-detail header,
+.delivery-expense-detail footer,
+.delivery-expense-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.delivery-expense-detail header {
+  padding-bottom: 7px;
+}
+.delivery-expense-detail header strong {
+  color: #243e65;
+  font-size: 13px;
+}
+.delivery-expense-detail header span {
+  color: #7890ac;
+  font-size: 11px;
+}
+.delivery-expense-line {
+  padding: 5px 0;
+  border-top: 1px dashed #e6ecf4;
+  color: #617289;
+  font-size: 12px;
+}
+.delivery-expense-line b,
+.delivery-expense-detail footer b {
+  flex: none;
+  color: #a46118;
+  font-variant-numeric: tabular-nums;
+}
+.delivery-expense-detail p {
+  margin: 8px 0;
+  color: #97a3b2;
+  font-size: 12px;
+}
+.delivery-expense-detail footer {
+  margin-top: 5px;
+  padding-top: 8px;
+  border-top: 1px solid #dbe5f0;
+  color: #536983;
+  font-size: 12px;
 }
 .meituan-group-settlement {
   gap: 8px;
@@ -6782,6 +7703,13 @@ onBeforeUnmount(() => {
   font-weight: 700;
   background: #f5fbf8;
   border-color: #cde9db;
+}
+/* 多规格关联（外卖多规格商品）：用紫色与普通单品绑定区分 */
+.inline-sku-picker.is-spec {
+  color: #7a3fd4;
+  font-weight: 700;
+  background: #faf6ff;
+  border-color: #e0d2f8;
 }
 .inline-sku-picker:hover,
 .inline-sku-picker:focus-visible {
@@ -7067,7 +7995,7 @@ onBeforeUnmount(() => {
 }
 .meituan-op-tiles {
   display: grid;
-  grid-template-columns: repeat(9, minmax(0, 1fr));
+  grid-template-columns: repeat(10, minmax(0, 1fr));
   gap: 10px;
   padding: 16px 18px;
   border-bottom: 1px solid #edf1f5;
@@ -7227,6 +8155,7 @@ onBeforeUnmount(() => {
 .mt-trend-toolbar {
   display: flex;
   align-items: center;
+  min-height: 36px;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
@@ -7234,6 +8163,8 @@ onBeforeUnmount(() => {
 .mt-metric-group {
   display: flex;
   align-items: center;
+  box-sizing: border-box;
+  height: 36px;
   gap: 3px;
   padding: 4px;
   border: 1px solid #e3eaf3;
@@ -7244,6 +8175,11 @@ onBeforeUnmount(() => {
   background: #fbfcfe;
 }
 .mt-metric-label {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  line-height: 26px;
+  box-sizing: border-box;
   padding: 0 5px;
   color: #8a97a7;
   font-size: 10px;
@@ -7251,9 +8187,15 @@ onBeforeUnmount(() => {
   letter-spacing: 0.04em;
 }
 .mt-metric-group button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  min-height: 26px;
+  box-sizing: border-box;
   border: 1px solid transparent;
   border-radius: 6px;
-  padding: 5px 8px;
+  padding: 0 8px;
   background: transparent;
   color: #66778e;
   font-size: 11px;
@@ -7276,6 +8218,11 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 .mt-trend-toolbar .panel-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  line-height: 28px;
+  box-sizing: border-box;
   margin-left: 2px;
 }
 .mt-trend-body {
@@ -7546,6 +8493,180 @@ onBeforeUnmount(() => {
   color: #0b8064;
   font-size: 14px;
 }
+/* 预估毛利悬停构成：与结算构成提示同一视觉语言，便于在表格里直接核算。 */
+:global(.gross-profit-tooltip) {
+  max-width: min(360px, calc(100vw - 30px));
+  padding: 10px 12px !important;
+  border-color: #cfe8e4 !important;
+  box-shadow: 0 14px 34px rgba(20, 95, 85, 0.15) !important;
+}
+.gross-profit-detail {
+  min-width: 268px;
+  color: #40506a;
+}
+.gross-profit-detail header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 7px;
+}
+.gross-profit-detail header strong {
+  color: #176d5e;
+  font-size: 13px;
+}
+.gross-profit-detail header span {
+  max-width: 158px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 9px;
+  background: #eaf8f1;
+  color: #16865a;
+  font-size: 10px;
+  font-weight: 700;
+}
+.gross-profit-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 5px 0;
+  border-top: 1px dashed #dceee9;
+  font-size: 12px;
+}
+.gross-profit-line > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gross-profit-line small {
+  display: block;
+  color: #8a9aa8;
+  font-size: 10px;
+}
+.gross-profit-line b {
+  flex: none;
+  color: #197764;
+  font-variant-numeric: tabular-nums;
+}
+.gross-profit-detail p {
+  margin: 7px 0 0;
+  color: #7e918f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.gross-profit-detail footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+  padding-top: 8px;
+  border-top: 1px solid #cfe7df;
+  font-size: 12px;
+}
+.gross-profit-detail footer b {
+  color: #0b8064;
+  font-size: 14px;
+}
+/* 可悬停查看构成的数值：虚线提示可交互，不改变原有正负色。 */
+.profit-hover {
+  cursor: help;
+  text-decoration: underline dotted rgba(94, 153, 237, 0.55);
+  text-underline-offset: 3px;
+}
+/* 多规格关联商品的成本列：并排显示各规格单份成本，悬停看规格明细 */
+.spec-cost-button {
+  padding: 0 0 1px;
+  border: 0;
+  background: none;
+  color: #c47c12;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  text-align: right;
+  cursor: help;
+  text-decoration: underline dotted rgba(196, 124, 18, 0.5);
+  text-underline-offset: 3px;
+  word-break: break-all;
+}
+.spec-cost-button:hover,
+.spec-cost-button:focus-visible {
+  color: #9a5c05;
+  outline: 0;
+}
+:global(.spec-cost-tooltip) {
+  max-width: min(360px, calc(100vw - 30px));
+  padding: 10px 12px !important;
+  border-color: #eddcc4 !important;
+  box-shadow: 0 14px 34px rgba(120, 84, 20, 0.16) !important;
+}
+.spec-cost-detail {
+  min-width: 258px;
+  color: #40506a;
+}
+.spec-cost-detail header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 7px;
+}
+.spec-cost-detail header strong {
+  color: #9a5c05;
+  font-size: 13px;
+}
+.spec-cost-detail header span {
+  padding: 3px 7px;
+  border-radius: 9px;
+  background: #fdf4e6;
+  color: #b4761a;
+  font-size: 10px;
+  font-weight: 700;
+}
+.spec-cost-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 5px 0;
+  border-top: 1px dashed #f0e2cc;
+  font-size: 12px;
+}
+.spec-cost-line > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spec-cost-line small {
+  display: block;
+  color: #8a9aa8;
+  font-size: 10px;
+}
+.spec-cost-line b {
+  flex: none;
+  color: #b4761a;
+  font-variant-numeric: tabular-nums;
+}
+.spec-cost-detail p {
+  margin: 7px 0 0;
+  color: #7e918f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.spec-cost-detail footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 7px;
+  padding-top: 8px;
+  border-top: 1px solid #eddfc8;
+  font-size: 12px;
+}
+.spec-cost-detail footer b {
+  color: #9a5c05;
+  font-size: 13px;
+}
 .group-operation-tiles {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
@@ -7570,7 +8691,7 @@ onBeforeUnmount(() => {
   }
 }
 .meituan-op-tiles.group-operation-tiles {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 14px;
   padding: 18px;
   background: #f7f9fd;
@@ -7659,6 +8780,11 @@ onBeforeUnmount(() => {
     min-height: 108px;
   }
 }
+@media (min-width: 901px) and (max-width: 1280px) {
+  .meituan-op-tiles.group-operation-tiles {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
 .total-product-local-sku {
   color: #087f5b;
   font-weight: 700;
@@ -7697,4 +8823,58 @@ onBeforeUnmount(() => {
   .total-product-breakdown { margin: 2px 0; overflow-x: auto; }
   .total-product-breakdown-row { min-width: 680px; }
 }
+
+/* ===== 合并口径：标准菜品行 / 来源明细 / 滞后区 / 非菜品区 ===== */
+.merged-source-note { display: block; margin-top: 4px; color: #94a3b8; font-size: 12px; font-weight: 400; }
+.merged-spec-chip { padding: 2px 7px; border-radius: 4px; background: #eef4ff; color: #3d66ae; font-size: 11px; }
+.merged-sku-breakdown { margin-top: 8px; color: #64748b; font-size: 12px; }
+.merged-sku-breakdown span { display: inline-block; margin: 0 10px 4px 0; padding: 2px 8px; border-radius: 4px; background: #f4f6fa; }
+.merged-dish-cell { display: flex; flex-direction: column; gap: 3px; }
+.merged-dish-cell b { color: #344054; font-size: 13px; }
+.merged-dish-cell small { color: #7e899a; font-size: 11px; }
+.merged-dish-cell small.merged-pending { color: #b3760e; }
+.merged-lag-section { margin-top: 16px; border: 1px solid #e6ebf2; border-radius: 12px; background: #fff; overflow: hidden; }
+.merged-lag-section.non-dish { border-color: #eceff4; }
+.merged-lag-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 16px; background: #fbfcfe; cursor: pointer; }
+.merged-lag-head b { color: #344054; font-size: 14px; }
+.merged-lag-head span { display: block; margin-top: 3px; color: #7e899a; font-size: 12px; }
+.merged-lag-head em { margin-left: 8px; padding: 1px 7px; border-radius: 9px; background: #fff5e6; color: #b3760e; font-style: normal; font-size: 11px; }
+.merged-lag-body { padding: 0 16px 14px; }
+.merged-lag-hint { margin: 10px 0; color: #8b95a5; font-size: 12px; line-height: 1.6; }
+.merged-lag-table :deep(.cell) { font-size: 12px; }
+.merged-candidate { color: #4572cf; font-weight: 600; }.merged-candidate i { margin-left: 4px; padding: 1px 6px; border-radius: 8px; background: #eef4ff; font-style: normal; font-size: 11px; font-weight: 600; }
+/* 来源明细：表头一行带走「销量/销售额/收入/成本」，数值右对齐，一屏全览不用横向滚动 */
+.src-grid { display: grid; grid-template-columns: 104px minmax(0, 1fr) 76px 82px 104px 100px 96px; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid #f2f5f9; font-size: 12px; }
+.src-grid.src-head { border-bottom: 1px solid #e3e9f2; background: #f7f9fc; color: #7e899a; font-weight: 650; }
+.src-grid:last-child { border-bottom: 0; }
+.src-grid .num { text-align: right; font-variant-numeric: tabular-nums; color: #344054; }
+.src-head .num { color: #7e899a; }
+.src-platform { color: #4572cf; }
+.src-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #344054; }
+.src-spec { color: #3d66ae; }
+.dish-spec-filter { width: 168px; }
+.dish-spec-filter :deep(.el-select__tags) { flex-wrap: nowrap; overflow: hidden; }
+.merged-spec-note { color: #b3760e; }
+
+/* 每道菜明细内的筛选芯片 */
+.src-filter-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 8px 10px 6px; }
+.src-filter-label { color: #7e899a; font-size: 11px; font-weight: 650; }
+.src-filter-label.spec { margin-left: 8px; }
+.src-chip { padding: 2px 9px; border: 1px solid #e2e8f2; border-radius: 11px; background: #fff; color: #5b6b82; font-size: 11px; cursor: pointer; transition: all .15s; }
+.src-chip:hover { border-color: #b9cdf0; color: #2764ca; }
+.src-chip.active { border-color: #bcd3f7; background: #eef4ff; color: #2764ca; font-weight: 650; }
+.src-filter-count { margin-left: auto; color: #98a3b4; font-size: 11px; }
+.src-grid.src-total { border-top: 1px solid #e3e9f2; border-bottom: 0; background: #fbfcfe; font-weight: 650; }
+.src-total-label { color: #344054; }
+/* 滞后区绑定弹窗：把"要绑什么 / 现在绑哪条 / 还能选谁"摊开给人看 */
+.bind-target { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 16px; margin-bottom: 13px; padding: 13px 15px; border: 1px solid #e4ebf4; border-radius: 10px; background: #fbfdff; }
+.bind-target > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.bind-target span { color: #8b99aa; font-size: 11px; }
+.bind-target b { overflow: hidden; color: #2b4467; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.bind-candidates { margin-top: 13px; }
+.bind-candidates > span { display: block; margin-bottom: 7px; color: #61748b; font-size: 12px; font-weight: 650; }
+.bind-candidate-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.bind-candidate-list :deep(.el-button + .el-button) { margin-left: 0; }
+.bind-form { margin-top: 15px; }
+.bind-footer-tip { float: left; color: #98a3b4; font-size: 11px; line-height: 32px; }
 </style>
