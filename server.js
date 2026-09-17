@@ -3954,13 +3954,17 @@ function buildResolvedIncomeComposition(monthRows, dayRows, resolvedRows, cutoff
     storeSalesMeta.label = '纯堂食外带';
     storeSalesMeta.note = '已剔除第三方团购';
   } else if (removedGroups.length || partiallyReplacedGroups.length) {
-    storeSalesMeta.label = '店内销售（团购部分替换）';
+    // 命名要点：没有任何团购值来自收银机时才走上面的「纯堂食外带」；
+    // 到这里说明至少还有一个渠道完全回退到收银机，因此标成「团购仅部分替换」。
+    // 不能写成「团购部分替换」——那会被读成"替换了团购的一部分"，与事实不符。
+    storeSalesMeta.label = '店内销售（团购仅部分替换）';
     const removedNames = [...removedGroups, ...partiallyReplacedGroups].map(item => item.label).join('、');
     const retainedNames = retainedGroups.map(item => item.label).join('、');
     storeSalesMeta.note = retainedNames ? `已替换${removedNames}；仍含${retainedNames}` : `已替换${removedNames}`;
   } else if (activeGroupStates.some(item => item.requested_platform)) {
-    storeSalesMeta.label = '店内销售（团购待拆分）';
-    storeSalesMeta.note = '第三方团购记录未就绪';
+    // 口径是「第三方」，但一条第三方团购记录都没用上，店内销售仍是收银机值（未替换）。
+    storeSalesMeta.label = '店内销售（团购未替换）';
+    storeSalesMeta.note = '未取得第三方团购记录，暂用收银机值';
   } else {
     storeSalesMeta.label = '店内销售（含收银机团购）';
     storeSalesMeta.note = '收银机数据';
