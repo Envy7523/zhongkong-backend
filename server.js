@@ -3904,13 +3904,25 @@ function buildResolvedIncomeComposition(monthRows, dayRows, resolvedRows, cutoff
   const groupStates = new Map([...GROUP_BUY_COMPOSITION_CHANNELS].map(key => [key, {
     requested_platform: revenuePolicy.sourceFor(key) === 'platform', platform_applied: false, fallback_to_pos: false,
   }]));
+  // 由店内销售行的标记汇总而来：是否真的用平台团购值替换过、是否发生过回退。
+  let storeSalesSplitApplied = false;
+  let storeSalesSplitFallback = false;
   // 只有“该团购选择第三方且第三方记录实际可用”时，解析器才会从店内销售
   // 扣掉对应收银机团购金额并加入第三方金额。收银机来源或回退收银机时都不拆分。
   resolvedRows.forEach(row => {
     const state = groupStates.get(row.channel);
-    if (!state) return;
-    if (row.source_used === 'platform' && !row.exclude_from_sales) state.platform_applied = true;
-    if (state.requested_platform && row.source_used !== 'platform') state.fallback_to_pos = true;
+    if (state) {
+      if (row.source_used === 'platform' && !row.exclude_from_sales) state.platform_applied = true;
+      if (state.requested_platform && row.source_used !== 'platform') state.fallback_to_pos = true;
+      return;
+    }
+    // 店内销售行携带解析器打的拆分标记：团购值已按平台值替换进店内销售。
+    // 团购行自身始终带 exclude_from_sales（避免重复计入），不能用它判断，
+    // 否则状态会永远是“待拆分”。
+    if (row.channel === 'store_sales') {
+      if (row.group_platform_applied) storeSalesSplitApplied = true;
+      if (row.group_platform_fallback) storeSalesSplitFallback = true;
+    }
   });
   resolvedRows.filter(row => !row.exclude_from_sales).forEach(row => {
     const item = amounts.get(row.channel);
@@ -3922,7 +3934,17 @@ function buildResolvedIncomeComposition(monthRows, dayRows, resolvedRows, cutoff
   });
   const activeGroupStates = SALES_COMPOSITION_CHANNELS
     .filter(meta => GROUP_BUY_COMPOSITION_CHANNELS.has(meta.key))
-    .map(meta => ({ ...meta, ...groupStates.get(meta.key) }));
+    .map(meta => {
+      const state = { ...meta, ...groupStates.get(meta.key) };
+      // 拆分标记来自店内销售行：只要真的用平台值替换过，就算已拆分成功；
+      // 同时出现回退说明只有部分门店/日期有平台记录。
+      const applied = state.platform_applied || (storeSalesSplitApplied && state.requested_platform);
+      return {
+        ...state,
+        platform_applied: applied,
+        fallback_to_pos: applied ? storeSalesSplitFallback : state.fallback_to_pos,
+      };
+    });
   const removedGroups = activeGroupStates.filter(item => item.platform_applied && !item.fallback_to_pos);
   const partiallyReplacedGroups = activeGroupStates.filter(item => item.platform_applied && item.fallback_to_pos);
   const retainedGroups = activeGroupStates.filter(item => !item.platform_applied || item.fallback_to_pos);
