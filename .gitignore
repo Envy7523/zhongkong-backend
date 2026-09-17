@@ -35,6 +35,9 @@ npm-debug.log*
 /tools/_*.js
 /scripts/_*.js
 
+# ===== 同步机器人部署产物（含服务器地址、安装脚本，绝不入库）=====
+/_syncbot/
+
 # ===== 未压缩的大型 3D 模型（135MB，代码中未引用）=====
 # 如确需入库请改用 git lfs：git lfs track "*.glb"
 frontend/public/models/
