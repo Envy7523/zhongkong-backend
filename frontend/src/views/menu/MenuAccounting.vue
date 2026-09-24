@@ -583,34 +583,56 @@
       </template>
     </el-dialog>
 
-    <!-- ===== 实际消耗只数录入 ===== -->
-    <el-dialog v-model="consumptionVisible" title="录入实际消耗只数" width="560px" align-center class="menu-dialog">
+    <!-- ===== 实际消耗只数录入（门店+日期一次，鸡鸭鹅一起填） ===== -->
+    <el-dialog v-model="consumptionVisible" title="录入实际消耗只数" width="600px" align-center class="menu-dialog">
       <el-alert type="info" :closable="false" showIcon
-        title="按「门店 + 日期 + 禽类」唯一，同一天同一组合重复保存会覆盖原值。填的是实际用掉的只数，不是进货量——进货受库存进出影响，与理论用量口径不一致。" />
+        title="门店与日期选一次，下面把所有禽类一起填。留空表示这次不录该禽类；填了 0 就是当天没用。按「门店 + 日期 + 禽类」唯一，重复保存覆盖原值。" />
       <el-form label-position="top" class="consumption-form">
-        <el-form-item label="门店">
-          <el-select v-model="consumptionForm.store_id" filterable placeholder="请选择门店" style="width: 100%;">
-            <el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" />
-          </el-select>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="门店">
+              <el-select v-model="consumptionForm.store_id" filterable placeholder="请选择门店" style="width: 100%;" @change="loadExistingConsumption">
+                <el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="日期">
+              <el-date-picker v-model="consumptionForm.date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%;" @change="loadExistingConsumption" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-form-item label="各禽类实际消耗只数">
+          <div class="consumption-grid">
+            <div v-for="entry in consumptionForm.entries" :key="entry.bird_id" class="consumption-row">
+              <span class="consumption-row__label" :title="entry.label">{{ entry.label }}</span>
+              <el-input-number
+                v-model="entry.quantity"
+                :min="0"
+                :precision="2"
+                :step="1"
+                controls-position="right"
+                placeholder="留空=不录"
+                class="consumption-row__input"
+              />
+              <small v-if="entry.existing !== null && entry.existing !== undefined" class="consumption-row__existing">
+                已录 {{ entry.existing }}
+              </small>
+              <small v-else class="consumption-row__existing empty">未录</small>
+            </div>
+            <p v-if="!consumptionForm.entries.length" class="consumption-empty">还没有禽类档案，请先到「基础档案 → 禽类档案」录入品种</p>
+          </div>
         </el-form-item>
-        <el-form-item label="日期">
-          <el-date-picker v-model="consumptionForm.date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%;" />
-        </el-form-item>
-        <el-form-item label="禽类品种">
-          <el-select v-model="consumptionForm.bird_id" placeholder="请选择品种" style="width: 100%;">
-            <el-option v-for="bird in birds" :key="bird.id" :label="`${bird.animal} · ${bird.breed_name}`" :value="bird.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="实际消耗只数">
-          <el-input-number v-model="consumptionForm.quantity" :min="0" :precision="2" :step="1" style="width: 100%;" />
-        </el-form-item>
+
         <el-form-item label="备注">
-          <el-input v-model="consumptionForm.remark" placeholder="选填" />
+          <el-input v-model="consumptionForm.remark" placeholder="选填，对这一天的整批记录生效" />
         </el-form-item>
       </el-form>
       <template #footer>
+        <span class="consumption-footer-hint">{{ consumptionFilledCount ? `已填 ${consumptionFilledCount} 个禽类` : '请至少填一个禽类' }}</span>
         <el-button @click="consumptionVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveConsumption">保存</el-button>
+        <el-button type="primary" :loading="saving" :disabled="!consumptionFilledCount" @click="saveConsumption">保存</el-button>
       </template>
     </el-dialog>
 
@@ -1225,7 +1247,7 @@ import {
   getPoultryAccounting, getPoultrySpecies, createPoultrySpecies, updatePoultrySpecies, deletePoultrySpecies,
   getPoultryYields, savePoultryYields,
   getPoultryDishUsageOverview, getPoultryDishUsage, savePoultryDishUsage, batchSavePoultryDishUsage,
-  getPoultryConsumptionComparison, savePoultryConsumption,
+  getPoultryConsumptionComparison, savePoultryConsumption, getPoultryConsumption,
   getPoultryTemplate, importPoultryWorkbook,
   getPoultryScope, savePoultryScopeKeywords, savePoultryScopeDishes, getPoultryScopePreview,
   getPoultryCalibration,
@@ -1947,27 +1969,57 @@ async function saveBatchUsage() {
   finally { saving.value = false }
 }
 
-// ===== 实际消耗只数录入 =====
+// ===== 实际消耗只数录入（批量：门店+日期一次，各禽类一行） =====
 const consumptionVisible = ref(false)
-const consumptionForm = reactive({ store_id: '', date: dayjs().format('YYYY-MM-DD'), bird_id: '', quantity: 0, remark: '' })
+const consumptionForm = reactive({ store_id: '', date: dayjs().format('YYYY-MM-DD'), remark: '', entries: [] })
+const consumptionFilledCount = computed(() => consumptionForm.entries.filter(entry => entry.quantity !== null && entry.quantity !== undefined && entry.quantity !== '').length)
+function buildConsumptionEntries() {
+  return (birds.value || []).map(bird => ({ bird_id: bird.id, label: `${bird.animal} · ${bird.breed_name}`, quantity: null, existing: null }))
+}
 function openConsumptionDialog(row) {
   consumptionForm.store_id = filters.storeId || ''
   consumptionForm.date = filters.range?.[0] || dayjs().format('YYYY-MM-DD')
-  consumptionForm.bird_id = row ? row.bird_id : (birds.value[0]?.id || '')
-  consumptionForm.quantity = 0
   consumptionForm.remark = ''
+  consumptionForm.entries = buildConsumptionEntries()
+  // 点某一行的「录入」时，把该禽类预填成已有的值，其余留空
+  if (row?.bird_id) {
+    const hit = consumptionForm.entries.find(entry => entry.bird_id === row.bird_id)
+    if (hit) hit.quantity = Number(row.actual_quantity ?? row.consumption_quantity ?? 0)
+  }
   consumptionVisible.value = true
+  if (consumptionForm.store_id) loadExistingConsumption()
+}
+// 换了门店/日期就把该组合已录的值显示出来，方便当天补录或改错
+async function loadExistingConsumption() {
+  const { store_id: storeId, date } = consumptionForm
+  if (!storeId || !date) return
+  try {
+    const data = await getPoultryConsumption({ store_id: storeId, date_from: date, date_to: date })
+    const rows = data.consumption || []
+    consumptionForm.entries.forEach(entry => {
+      const hit = rows.find(item => Number(item.bird_id) === Number(entry.bird_id))
+      entry.existing = hit ? Number(hit.quantity) : null
+      // 已有值就带出来，用户可直接改；没有则保持留空
+      if (hit && (entry.quantity === null || entry.quantity === undefined || entry.quantity === '')) entry.quantity = Number(hit.quantity)
+    })
+  } catch { /* 读取失败不阻断录入 */ }
 }
 async function saveConsumption() {
   if (!consumptionForm.store_id) { ElMessage.warning('请选择门店'); return }
   if (!consumptionForm.date) { ElMessage.warning('请选择日期'); return }
-  if (!consumptionForm.bird_id) { ElMessage.warning('请选择禽类品种'); return }
+  const entries = consumptionForm.entries
+    .filter(entry => entry.quantity !== null && entry.quantity !== undefined && entry.quantity !== '')
+    .map(entry => ({ bird_id: entry.bird_id, quantity: entry.quantity }))
+  if (!entries.length) { ElMessage.warning('请至少填一个禽类的消耗只数'); return }
   saving.value = true
   try {
-    await savePoultryConsumption({ ...consumptionForm, quantity: consumptionForm.quantity || 0 })
+    const result = await savePoultryConsumption({ store_id: consumptionForm.store_id, date: consumptionForm.date, remark: consumptionForm.remark, entries })
     consumptionVisible.value = false
     await loadComparison()
-    ElMessage.success('消耗只数已保存')
+    const parts = []
+    if (result.created) parts.push(`新增 ${result.created} 条`)
+    if (result.updated) parts.push(`覆盖 ${result.updated} 条`)
+    ElMessage.success(`已保存 ${consumptionForm.date} 的消耗只数${parts.length ? `（${parts.join('、')}）` : ''}`)
   } catch (error) { ElMessage.error('保存失败：' + error.message) }
   finally { saving.value = false }
 }
@@ -2108,6 +2160,15 @@ async function openGapDialog() {
 
 .gap-desc { margin: 0 0 12px; padding: 10px 12px; border-radius: 9px; color: #66768f; background: #f7f9fc; font-size: 12px; line-height: 1.8; }
 .group-count { display: block; margin-top: 2px; color: #9aa3b1; font-size: 11px; }
+/* 消耗只数录入：门店+日期一次，各禽类一行 */
+.consumption-grid { width: 100%; display: grid; gap: 8px; }
+.consumption-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid #e8eef6; border-radius: 9px; background: #fbfdff; }
+.consumption-row__label { flex: 1; min-width: 0; overflow: hidden; color: #33475f; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.consumption-row__input { flex: none; width: 140px; }
+.consumption-row__existing { flex: none; min-width: 62px; color: #7d8c9f; font-size: 11px; text-align: right; }
+.consumption-row__existing.empty { color: #b6c0cc; }
+.consumption-empty { margin: 4px 0 0; color: #97a3b2; font-size: 12px; }
+.consumption-footer-hint { float: left; color: #7d8c9f; font-size: 12px; line-height: 32px; }
 .consumption-form { margin-top: 14px; }
 .consumption-form .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 14px; }
 

@@ -13,7 +13,7 @@
     </template>
     <div class="store-region-panel">
       <el-input v-if="filterable" v-model="filterText" clearable size="small" placeholder="搜索区域或门店" class="tree-filter" />
-      <p v-if="showHint" class="tree-hint">点击区域左侧箭头展开或收起；{{ multiple ? '勾选区域可带入其下全部门店。' : '仅末级门店可被选中。' }}</p>
+      <p v-if="showHint" class="tree-hint">点击区域左侧箭头展开或收起；{{ multiple ? '勾选区域可带入其下全部门店。' : showGroup ? '可选择集团或末级门店。' : '仅末级门店可被选中。' }}</p>
       <el-tree
         ref="treeRef"
         :data="treeData"
@@ -49,10 +49,13 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { getStoreRegions } from '@/api'
 
+const GROUP_NAMES = ['永文总公司', '鹅太公连锁', '鹅太公品牌', '同盛']
+
 const props = defineProps({
   modelValue: { type: [Array, Number, String, null], default: null },
   stores: { type: Array, default: () => [] },
   multiple: { type: Boolean, default: false },
+  showGroup: { type: Boolean, default: false },
   clearable: { type: Boolean, default: true },
   filterable: { type: Boolean, default: true },
   showHint: { type: Boolean, default: true },
@@ -81,15 +84,21 @@ function leafStoreIds(regionId) {
   }, new Set())
 }
 
+const CLOSED_STATUSES = ['已闭店', '闭店', '迁址']
+const isClosedStore = (store) => CLOSED_STATUSES.includes(String(store?.status || '').trim())
+// 已闭店门店不进选择器：这里是为“现在要录的东西”挑门店，闭店门店集中在系统分组
+// 「闭店门店」里，从「门店基本信息」页查看（那里能看到履历与迁址关联）。
+const visibleStores = computed(() => props.stores.filter(store => !isClosedStore(store)))
+
 function makeRegionNode(region) {
   const children = directChildren(region.id)
   const storeIds = leafStoreIds(region.id)
   const node = { key: `region-${region.id}`, kind: 'region', label: region.name, storeCount: storeIds.size, children: [] }
   // 正常从当前页面提供的门店列表取名称；列表按页加载或刚新建门店时，
   // 则回退到区域接口自带的成员名称，避免“显示 1 家却没有门店行”。
-  const directStores = props.stores.filter(store => storeIds.has(Number(store.id)))
+  const directStores = visibleStores.value.filter(store => storeIds.has(Number(store.id)))
   const knownStoreIds = new Set(directStores.map(store => Number(store.id)))
-  const fallbackStores = (region.stores || []).filter(store => !knownStoreIds.has(Number(store.id)))
+  const fallbackStores = (region.stores || []).filter(store => !knownStoreIds.has(Number(store.id)) && !isClosedStore(store))
   node.children = children.length
     ? children.map(makeRegionNode)
     : [...directStores, ...fallbackStores]
@@ -98,9 +107,10 @@ function makeRegionNode(region) {
 }
 
 const assignedStoreIds = computed(() => new Set(regions.value.flatMap(region => (region.store_ids || []).map(Number))))
-const unassignedStores = computed(() => props.stores.filter(store => !assignedStoreIds.value.has(Number(store.id))))
+const unassignedStores = computed(() => visibleStores.value.filter(store => !assignedStoreIds.value.has(Number(store.id))))
 const treeData = computed(() => {
-  const nodes = directChildren(null).map(makeRegionNode)
+  const nodes = directChildren(null).filter(region => region.code !== 'closed').map(makeRegionNode)
+  if (props.showGroup && !props.multiple) nodes.unshift(...GROUP_NAMES.map(name => ({ key: `group-${name}`, kind: 'group', label: name, groupName: name, leaf: true })))
   if (unassignedStores.value.length) {
     nodes.push({
       key: 'unassigned',
@@ -123,28 +133,34 @@ function singleStoreLeafRegionKeys(nodes) {
 const defaultExpandedKeys = computed(() => [...new Set([...treeData.value.map(node => node.key), ...singleStoreLeafRegionKeys(treeData.value)])])
 const selectedStoreIds = computed(() => {
   const raw = props.multiple ? (Array.isArray(props.modelValue) ? props.modelValue : []) : [props.modelValue]
-  return raw.map(Number).filter(Number.isFinite)
+  return raw.filter(value => value !== null && value !== undefined && value !== '' && !GROUP_NAMES.includes(value)).map(Number).filter(Number.isFinite)
 })
 const storeMap = computed(() => new Map(props.stores.map(store => [Number(store.id), store])))
 const selectedLabel = computed(() => {
+  if (props.showGroup && !props.multiple && GROUP_NAMES.includes(props.modelValue)) return props.modelValue
   const names = selectedStoreIds.value.map(id => storeMap.value.get(id)?.store_name).filter(Boolean)
   if (!names.length) return ''
   if (!props.multiple || names.length === 1) return names[0]
   return names.length > 2 ? `${names.slice(0, 2).join('、')} 等 ${names.length} 家` : names.join('、')
 })
-const hasSelection = computed(() => selectedStoreIds.value.length > 0)
+const hasSelection = computed(() => selectedStoreIds.value.length > 0 || (props.showGroup && !props.multiple && GROUP_NAMES.includes(props.modelValue)))
 const popoverWidth = computed(() => Math.max(280, Math.min(440, Math.max(280, ...props.stores.map(store => String(store.store_name || '').length * 15 + 90)))))
 
 function syncTreeSelection() {
   if (!treeRef.value) return
   if (props.multiple) treeRef.value.setCheckedKeys(selectedStoreIds.value.map(id => `store-${id}`), false)
-  else treeRef.value.setCurrentKey(selectedStoreIds.value[0] ? `store-${selectedStoreIds.value[0]}` : null)
+  else treeRef.value.setCurrentKey(props.showGroup && GROUP_NAMES.includes(props.modelValue) ? `group-${props.modelValue}` : selectedStoreIds.value[0] ? `store-${selectedStoreIds.value[0]}` : null)
 }
 function filterNode(value, data) {
   if (!value) return true
   return String(data.label || '').toLowerCase().includes(String(value).toLowerCase())
 }
 function handleNodeClick(data) {
+  if (data.kind === 'group' && props.showGroup && !props.multiple) {
+    emit('update:modelValue', data.groupName)
+    popoverVisible.value = false
+    return
+  }
   if (data.kind !== 'store' || props.multiple) return
   emit('update:modelValue', data.storeId)
   popoverVisible.value = false

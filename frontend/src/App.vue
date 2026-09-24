@@ -115,8 +115,16 @@
             <el-icon><ChatDotRound /></el-icon>
             <template #title><span>AI 助手</span><small class="nav-badge beta">BETA</small></template>
           </el-menu-item>
+          <el-menu-item v-if="canSeeNav('notifications')" index="notifications">
+            <el-icon><Bell /></el-icon>
+            <template #title><span>消息通知</span><small v-if="notificationPending" class="nav-badge">{{ notificationPending > 99 ? '99+' : notificationPending }}</small></template>
+          </el-menu-item>
 
           <div v-if="canSeeNavGroup('system')" class="sidebar-section-label">系统管理</div>
+          <el-menu-item v-if="canSeeNav('notification-rules')" index="notification-rules">
+            <el-icon><Bell /></el-icon>
+            <template #title><span>通知规则</span></template>
+          </el-menu-item>
           <el-menu-item v-if="canSeeNav('db-viewer')" index="db-viewer">
             <el-icon><Coin /></el-icon>
             <template #title><span>数据库查看</span><small class="nav-badge beta">DEV</small></template>
@@ -186,6 +194,12 @@
             <span class="theme-toggle-orb"><el-icon class="theme-icon sun"><Sunny /></el-icon><el-icon class="theme-icon moon"><Moon /></el-icon></span>
           </button>
         </el-tooltip>
+        <el-tooltip content="消息通知" placement="bottom">
+          <button class="topbar-notification" type="button" aria-label="消息通知" @click="openNotifications">
+            <el-icon><Bell /></el-icon>
+            <span v-if="notificationPending" class="topbar-notification__badge">{{ notificationPending > 99 ? '99+' : notificationPending }}</span>
+          </button>
+        </el-tooltip>
         <el-dropdown v-if="auth.user" trigger="click" class="topbar-account">
           <button class="topbar-account-trigger" type="button">
             <img v-if="auth.user.avatar_url" :src="auth.user.avatar_url" class="topbar-avatar" alt="" />
@@ -252,6 +266,8 @@
           <component v-if="!isSpecialRoute" :is="currentView" :key="store.activeTabId" />
         </KeepAlive>
       </div>
+      <!-- 首次弹窗：进入后台时把还没弹过的新通知弹一次，每条只弹一次 -->
+      <NotificationPopup v-if="auth.user" />
     </div>
   </div>
 </template>
@@ -259,11 +275,11 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { Setting, SwitchButton } from '@element-plus/icons-vue'
+import { Setting, SwitchButton, Bell } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
-import { getConfig, updateMyProfile } from '@/api'
+import { getConfig, updateMyProfile, getNotificationSummary } from '@/api'
 import LoginView from '@/views/LoginView.vue'
 
 import DashboardView from '@/views/DashboardView.vue'
@@ -271,6 +287,9 @@ import PipelineView from '@/views/PipelineView.vue'
 import DataImportView from '@/views/DataImportView.vue'
 import BusinessDataImport from '@/views/BusinessDataImport.vue'
 import UserManagementView from '@/views/UserManagementView.vue'
+import NotificationCenterView from '@/views/NotificationCenterView.vue'
+import NotificationRulesView from '@/views/NotificationRulesView.vue'
+import NotificationPopup from '@/components/NotificationPopup.vue'
 import PositionSettingsView from '@/views/PositionSettingsView.vue'
 import AiAssistantView from '@/views/AiAssistantView.vue'
 import SettingsView from '@/views/SettingsView.vue'
@@ -299,6 +318,7 @@ import StaffTest from '@/views/staff/StaffTest.vue'
 import StaffEmployees from '@/views/staff/StaffEmployees.vue'
 import StaffStoreManagement from '@/views/staff/StaffStoreManagement.vue'
 import SalaryPlaceholder from '@/views/staff/SalaryPlaceholder.vue'
+import StaffDispatch from '@/views/staff/StaffDispatch.vue'
 import BookkeepingEntry from '@/views/bookkeeping/BookkeepingEntry.vue'
 import BookkeepingCategories from '@/views/bookkeeping/BookkeepingCategories.vue'
 import BookkeepingRecords from '@/views/bookkeeping/BookkeepingRecords.vue'
@@ -318,6 +338,8 @@ const COMPONENT_MAP = {
   'data-import-delivery': BusinessDataImport,
   'data-import-legacy': DataImportView,
   'user-management': UserManagementView,
+  notifications: NotificationCenterView,
+  'notification-rules': NotificationRulesView,
   'position-settings': PositionSettingsView,
   'ai-assistant': AiAssistantView,
   settings: SettingsView,
@@ -346,6 +368,7 @@ const COMPONENT_MAP = {
   'staff-management-employees': StaffEmployees,
   'staff-management-store': StaffStoreManagement,
   'staff-management-salary': SalaryPlaceholder,
+  'staff-management-dispatch': StaffDispatch,
   'bookkeeping-entry': BookkeepingEntry,
   'bookkeeping-categories': BookkeepingCategories,
   'bookkeeping-records': BookkeepingRecords,
@@ -381,6 +404,12 @@ const POPUP_CONFIG = {
           { index: 'analysis-delivery-brand', label: '品牌视角' },
           { index: 'analysis-delivery-store', label: '门店视角' },
           { index: 'analysis-delivery-binding', label: '外卖菜品绑定' },
+        ],
+      },
+      {
+        title: '自动化同步',
+        items: [
+          { index: 'analysis-sync-runs', label: 'AI 自动导报表记录' },
         ],
       },
     ],
@@ -452,6 +481,7 @@ const POPUP_CONFIG = {
           { index: 'staff-management-employees', label: '员工管理' },
           { index: 'staff-management-store', label: '门店管理' },
           { index: 'staff-management-salary', label: '工资表制作' },
+          { index: 'staff-management-dispatch', label: '员工调岗' },
         ],
       },
     ],
@@ -512,12 +542,14 @@ function toggleSidebar() {
 
 const isLoginPage = computed(() => router.currentRoute.value.path === '/login')
 const isCollabRoute = computed(() => router.currentRoute.value.path.startsWith('/collab'))
-const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path === '/analysis' || router.currentRoute.value.path.startsWith('/analysis/'))
+const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path === '/analysis' || router.currentRoute.value.path.startsWith('/analysis/') || router.currentRoute.value.path.startsWith('/business-analytics'))
 const isDataImportRoute = computed(() => router.currentRoute.value.path.startsWith('/data-import/'))
 const isEnterpriseSettingsRoute = computed(() => router.currentRoute.value.path.startsWith('/enterprise-settings'))
 const isStore3dRoute = computed(() => router.currentRoute.value.path === '/store-3d')
 const isDbViewerRoute = computed(() => router.currentRoute.value.path === '/db-viewer')
 const isStaffManagementRoute = computed(() => router.currentRoute.value.path.startsWith('/staff-management/'))
+const isNotificationRoute = computed(() => router.currentRoute.value.path.startsWith('/notifications'))
+const isNotificationRulesRoute = computed(() => router.currentRoute.value.path.startsWith('/notification-rules'))
 const workspaceRouteTabId = computed(() => {
   const route = router.currentRoute.value
   const section = String(route.params?.section || '').trim()
@@ -552,6 +584,7 @@ const dataImportRouteTabId = computed(() => ({
 const staffRouteTabId = computed(() => ({
   '/staff-management/store-management': 'staff-management-store',
   '/staff-management/salary': 'staff-management-salary',
+  '/staff-management/dispatch': 'staff-management-dispatch',
 }[router.currentRoute.value.path] || 'staff-management-employees'))
 const pageTitle = computed(() => {
   if (isCollabRoute.value) return '协同事项'
@@ -565,7 +598,7 @@ const pageTitle = computed(() => {
   if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
   if (isStore3dRoute.value) return '筹建门店 · 门店渲染'
   if (isDbViewerRoute.value) return '数据库查看'
-  if (isStaffManagementRoute.value) return ({ 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作' }[staffRouteTabId.value] || '人事专区 · 员工管理')
+  if (isStaffManagementRoute.value) return ({ 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作', 'staff-management-dispatch': '人事专区 · 员工调岗' }[staffRouteTabId.value] || '人事专区 · 员工管理')
   if (isWorkspaceRoute.value) return store.activeTab?.title || '工作台'
   return store.activeTab?.title || '数据概括'
 })
@@ -583,6 +616,16 @@ const userInitial = computed(() => {
   const name = auth.user?.display_name || auth.user?.username || '用'
   return String(name).trim().slice(0, 1).toUpperCase()
 })
+
+// ===== 消息通知：顶栏角标 =====
+// 每 60 秒刷新一次待处理数量；未读为 0 时不显示角标。
+const notificationPending = ref(0)
+let notificationTimer = null
+async function refreshNotifications() {
+  if (!auth.user) { notificationPending.value = 0; return }
+  try { notificationPending.value = Number((await getNotificationSummary()).pending || 0) } catch { /* 未登录或网络异常时静默 */ }
+}
+function openNotifications() { router.push('/notifications') }
 
 const THEME_KEY = 'etaigong_theme'
 const isDarkTheme = ref(localStorage.getItem(THEME_KEY) === 'dark')
@@ -741,6 +784,8 @@ const WORKSPACE_TAB_ROUTES = {
   pipeline: '/pipeline',
   'ai-assistant': '/ai-assistant',
   'user-management': '/user-management',
+  notifications: '/notifications',
+  'notification-rules': '/notification-rules',
   'position-settings': '/position-settings',
   settings: '/settings',
   'store-management-info-basic': '/store-management/info-basic',
@@ -804,6 +849,7 @@ async function selectPopupItem(index) {
       'analysis-delivery-brand': '/analysis/delivery/brand',
       'analysis-delivery-store': '/analysis/delivery/store',
       'analysis-delivery-binding': '/analysis/delivery/binding',
+      'analysis-sync-runs': '/business-analytics/sync-runs',
     }[index]
     await router.push(routePath || '/analysis/total/brand')
     popupMenu.visible = false
@@ -827,7 +873,7 @@ async function selectPopupItem(index) {
   }
   if (index.startsWith('staff-management-')) {
     store.openTabFromId(index)
-    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary' }[index]
+    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary', 'staff-management-dispatch': '/staff-management/dispatch' }[index]
     await router.push(routePath || '/staff-management/employees')
     popupMenu.visible = false
     popupMenu.group = null
@@ -905,6 +951,7 @@ async function selectTab(id) {
       'analysis-delivery-brand': '/analysis/delivery/brand',
       'analysis-delivery-store': '/analysis/delivery/store',
       'analysis-delivery-binding': '/analysis/delivery/binding',
+      'analysis-sync-runs': '/business-analytics/sync-runs',
     }[id]
     await router.push(routePath || '/analysis/total/brand')
     return
@@ -922,7 +969,7 @@ async function selectTab(id) {
   }
   if (id.startsWith('staff-management-')) {
     store.activeTabId = id
-    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary' }[id]
+    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary', 'staff-management-dispatch': '/staff-management/dispatch' }[id]
     await router.push(routePath || '/staff-management/employees')
     return
   }
@@ -988,6 +1035,13 @@ watch(dataImportRouteTabId, (id) => {
 watch(staffRouteTabId, (id) => {
   if (isStaffManagementRoute.value) store.openTabFromId(id)
 })
+// 通知路由需要显式的 tab 同步：否则点顶栏铃铛只改 URL、内容区仍停在上一页。
+watch(isNotificationRoute, (active) => {
+  if (active) store.openTabFromId('notifications')
+})
+watch(isNotificationRulesRoute, (active) => {
+  if (active) store.openTabFromId('notification-rules')
+})
 
 onMounted(async () => {
   updateResponsiveLayout()
@@ -1014,11 +1068,20 @@ onMounted(async () => {
   else if (isStore3dRoute.value) store.openTabFromId('store-preparation-3d')
   else if (isStaffManagementRoute.value) store.openTabFromId(staffRouteTabId.value)
   else if (isWorkspaceRoute.value) store.openTabFromId(workspaceRouteTabId.value)
+  else if (isNotificationRulesRoute.value) store.openTabFromId('notification-rules')
+  else if (router.currentRoute.value.path.startsWith('/notifications')) store.openTabFromId('notifications')
   else store.openTabFromId('dashboard')
+  // 通知角标：立即取一次，之后每 60 秒刷新
+  await refreshNotifications()
+  notificationTimer = window.setInterval(refreshNotifications, 60000)
+  // 通知中心里处理完通知后，立刻同步角标
+  window.addEventListener('notifications:changed', refreshNotifications)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateResponsiveLayout)
+  window.removeEventListener('notifications:changed', refreshNotifications)
+  if (notificationTimer) window.clearInterval(notificationTimer)
 })
 </script>
 

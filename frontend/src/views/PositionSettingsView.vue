@@ -36,8 +36,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { createPosition, deletePosition, getPositions, updatePosition } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
-// 与左侧导航一一对应：后续新增侧栏入口时，同步在这里登记权限编码。
-const permissionGroups = [
+// 后端接口不可用时的兜底目录（正常情况下以后端 PERMISSION_CATALOG 为准）
+const permissionGroupsFallback = [
   { key: 'overview', label: '总览', description: '左侧导航 · 总览', items: [{ key: 'dashboard.view', label: '数据概括' }] },
   { key: 'core-business', label: '核心业务', description: '左侧导航 · 核心业务', items: [
     { key: 'analysis.view', label: '数据分析' }, { key: 'store.manage', label: '门店管理' }, { key: 'store-preparation.manage', label: '筹建门店' },
@@ -49,17 +49,20 @@ const permissionGroups = [
   ] },
   { key: 'system', label: '系统管理', description: '左侧导航 · 系统管理', items: [
     { key: 'db-viewer.view', label: '数据库查看' }, { key: 'enterprise-settings.manage', label: '企业设置' }, { key: 'users.manage', label: '人员管理' },
-    { key: 'positions.manage', label: '岗位设置' }, { key: 'settings.manage', label: '网页设置' },
+    { key: 'positions.manage', label: '岗位设置' }, { key: 'settings.manage', label: '网页设置' }, { key: 'notifications.rules', label: '通知规则' },
   ] },
 ]
+// 权限分组直接使用后端返回的 PERMISSION_CATALOG（唯一事实来源），
+// 不再在前端维护第二份硬编码分组——否则新增侧栏入口时容易出现「菜单有了但勾不到权限」。
+const permissionGroups = ref(permissionGroupsFallback)
 const positions = ref([]), selectedId = ref(null), isCreating = ref(false), loading = ref(false), saving = ref(false)
 const editor = reactive({ name: '', description: '', permissions: [] })
 const selectedPosition = computed(() => positions.value.find(item => item.id === selectedId.value) || null)
-const allKeys = computed(() => permissionGroups.flatMap(group => group.items.map(item => item.key)))
+const allKeys = computed(() => permissionGroups.value.flatMap(group => group.items.map(item => item.key)))
 const allPermissions = computed({ get: () => editor.permissions.includes('*'), set: value => { editor.permissions = value ? ['*'] : [] } })
 watch(selectedPosition, (position) => { if (position) Object.assign(editor, { name: position.name, description: position.description || '', permissions: [...(position.permissions || [])] }) }, { immediate: true })
 onMounted(loadPositions)
-async function loadPositions(selectId = selectedId.value) { loading.value = true; try { const result = await getPositions(); positions.value = result.positions || []; selectedId.value = positions.value.some(item => item.id === selectId) ? selectId : positions.value[0]?.id || null; isCreating.value = false } catch (error) { ElMessage.error(`岗位加载失败：${error.message}`) } finally { loading.value = false } }
+async function loadPositions(selectId = selectedId.value) { loading.value = true; try { const result = await getPositions(); positions.value = result.positions || []; if (Array.isArray(result.permission_catalog) && result.permission_catalog.length) permissionGroups.value = result.permission_catalog; selectedId.value = positions.value.some(item => item.id === selectId) ? selectId : positions.value[0]?.id || null; isCreating.value = false } catch (error) { ElMessage.error(`岗位加载失败：${error.message}`) } finally { loading.value = false } }
 function selectPosition(id) { isCreating.value = false; selectedId.value = id }
 function openCreate() { selectedId.value = null; isCreating.value = true; Object.assign(editor, { name: '', description: '', permissions: [] }) }
 function groupChecked(group) { return editor.permissions.includes('*') || group.items.every(item => editor.permissions.includes(item.key)) }

@@ -2,17 +2,27 @@
   <main class="enterprise-settings">
     <aside class="settings-nav" aria-label="企业设置导航">
       <div class="settings-nav__brand">企业设置</div>
-      <button class="settings-nav__item active" type="button">
+      <button class="settings-nav__item" :class="{ active: activeSection === 'bot' }" type="button" @click="switchSection('bot')">
         <span class="settings-nav__icon">◉</span>
         <span>
           <b>机器人设置</b>
           <small>企业微信长连接与对话</small>
         </span>
       </button>
+      <button class="settings-nav__item" :class="{ active: activeSection === 'attendance' }" type="button" @click="switchSection('attendance')">
+        <span class="settings-nav__icon">◷</span>
+        <span>
+          <b>考勤同步</b>
+          <small>钉钉打卡自动更新</small>
+        </span>
+        <em v-if="attendance.status" class="settings-nav__dot" :class="attendance.status" />
+      </button>
       <div class="settings-nav__hint">人员权限将待项目测试完成后，再统一配置。</div>
     </aside>
 
     <section class="settings-main">
+      <!-- ===== 机器人设置 ===== -->
+      <template v-if="activeSection === 'bot'">
       <header class="settings-hero">
         <div>
           <p class="eyebrow">WECHAT WORK · BOT CONSOLE</p>
@@ -191,13 +201,130 @@
           <el-button type="primary" :loading="creatingProfile" @click="saveProfile">{{ editingProfileId ? '保存修改' : '保存为新配置' }}</el-button>
         </template>
       </el-dialog>
+      </template>
+
+      <!-- ===== 考勤同步 ===== -->
+      <template v-else>
+        <header class="settings-hero">
+          <div>
+            <p class="eyebrow">DINGTALK · ATTENDANCE SYNC</p>
+            <h1>考勤同步</h1>
+            <p>钉钉打卡记录每天自动更新一次。这里显示最近一次更新的时间、人数与条数，用来判断这个功能是否在正常运行。</p>
+          </div>
+          <div class="hero-actions">
+            <el-button :loading="attendanceLoading" @click="loadAttendance">刷新状态</el-button>
+            <el-button type="primary" :loading="attendanceSyncing" :disabled="!attendance.configured" @click="runAttendanceNow">
+              {{ attendanceSyncing ? '同步中…' : '立即同步昨天' }}
+            </el-button>
+          </div>
+        </header>
+
+        <section class="status-grid" aria-label="考勤同步状态">
+          <article class="status-card" :class="attendance.enabled ? 'healthy' : 'warning'">
+            <span class="status-card__dot"></span>
+            <div>
+              <small>自动同步</small>
+              <strong>{{ attendance.enabled ? `已启用 · 每天 ${pad(attendance.hour)}:${pad(attendance.minute)}` : '已停用' }}</strong>
+              <p>{{ attendance.enabled ? '到点自动同步上一天的打卡记录' : '可在 config.json 的 dingtalkAttendance 中启用' }}</p>
+            </div>
+          </article>
+          <article class="status-card" :class="attendance.configured ? 'healthy' : 'warning'">
+            <span class="status-card__dot"></span>
+            <div>
+              <small>钉钉连接</small>
+              <strong>{{ attendance.configured ? '凭据已配置' : '未配置凭据' }}</strong>
+              <p>已绑定钉钉员工 ID：{{ attendance.mapped_employees || 0 }} 人</p>
+            </div>
+          </article>
+          <article class="status-card" :class="attendance.latest_run ? (attendance.latest_run.status === 'success' ? 'healthy' : 'warning') : 'neutral'">
+            <span class="status-card__dot"></span>
+            <div>
+              <small>最近一次更新时间</small>
+              <strong>{{ attendance.latest_run?.created_at || '尚无记录' }}</strong>
+              <p v-if="attendance.latest_run">
+                同步日期 {{ attendance.latest_run.date_from }}<template v-if="attendance.latest_run.date_to !== attendance.latest_run.date_from"> ~ {{ attendance.latest_run.date_to }}</template>
+                · {{ attendance.latest_run.status === 'success' ? '成功' : '失败' }}
+              </p>
+              <p v-else>还没跑过同步，点右上角「立即同步昨天」试一次</p>
+            </div>
+          </article>
+          <article class="status-card" :class="attendance.latest_run?.record_count ? 'healthy' : 'neutral'">
+            <span class="status-card__dot"></span>
+            <div>
+              <small>更新人数 / 条数</small>
+              <strong>{{ attendance.latest_run ? `${attendance.employee_count ?? '—'} 人 · ${attendance.latest_run.record_count ?? '—'} 条` : '—' }}</strong>
+              <p v-if="attendance.latest_run">匹配 {{ attendance.latest_run.matched_count ?? '—' }} 条<template v-if="attendance.latest_run.unmatched_count">，未匹配 {{ attendance.latest_run.unmatched_count }} 条</template></p>
+              <p v-else>等待第一次同步</p>
+            </div>
+          </article>
+        </section>
+
+        <section class="settings-card">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">UPDATE HISTORY</p>
+              <h2>更新记录</h2>
+              <p>最近 10 次同步批次，手动与自动都记在这里。</p>
+            </div>
+            <span class="sync-coverage">
+              库内共 {{ attendance.coverage?.records ?? 0 }} 条 · {{ attendance.coverage?.employees ?? 0 }} 人<template v-if="attendance.coverage?.last_day"> · 最新 {{ attendance.coverage.last_day }}</template>
+            </span>
+          </div>
+          <el-table :data="attendance.recent_runs || []" size="small" class="sync-table" empty-text="还没有同步记录">
+            <el-table-column label="更新日期" min-width="150">
+              <template #default="{ row }">{{ row.date_from }}<template v-if="row.date_to !== row.date_from"> ~ {{ row.date_to }}</template></template>
+            </el-table-column>
+            <el-table-column label="执行时间" prop="created_at" width="165" />
+            <el-table-column label="状态" width="80">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.status === 'success' ? 'success' : 'danger'" effect="plain">{{ row.status === 'success' ? '成功' : '失败' }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="条数" width="70" align="right"><template #default="{ row }">{{ row.record_count ?? '—' }}</template></el-table-column>
+            <el-table-column label="匹配" width="70" align="right"><template #default="{ row }">{{ row.matched_count ?? '—' }}</template></el-table-column>
+            <el-table-column label="说明" min-width="220" show-overflow-tooltip><template #default="{ row }">{{ row.message || '—' }}</template></el-table-column>
+          </el-table>
+          <p class="dialogue-note">同步的是钉钉原始打卡记录（上下班卡各算一条）。人效看板读的就是这张表，所以这里更新之后，人效里才会出现对应日期的出勤人数。</p>
+        </section>
+      </template>
     </section>
   </main>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { createEnterpriseAiProfile, getBotStatus, getConfig, getToken, previewEnterpriseBotQuestion, reconnectEnterpriseRobot, saveConfig, updateEnterpriseAiProfile } from '@/api'
+import { createEnterpriseAiProfile, getBotStatus, getConfig, getDingTalkAutoSync, getToken, previewEnterpriseBotQuestion, reconnectEnterpriseRobot, runDingTalkAutoSync, saveConfig, updateEnterpriseAiProfile } from '@/api'
+
+// 左侧导航：机器人设置 / 考勤同步
+const activeSection = ref('bot')
+function switchSection(section) {
+  activeSection.value = section
+  if (section === 'attendance') loadAttendance()
+}
+const pad = value => String(Number(value) || 0).padStart(2, '0')
+
+// 考勤同步状态：更新时间 / 人数 / 条数 一目了然
+const attendanceLoading = ref(false)
+const attendanceSyncing = ref(false)
+const attendance = reactive({
+  enabled: false, hour: 1, minute: 0, configured: false, mapped_employees: 0,
+  latest_run: null, recent_runs: [], coverage: {}, last_auto_target: '',
+})
+async function loadAttendance() {
+  attendanceLoading.value = true
+  try { Object.assign(attendance, await getDingTalkAutoSync()) }
+  catch (error) { ElMessage.error('考勤同步状态读取失败：' + error.message) }
+  finally { attendanceLoading.value = false }
+}
+async function runAttendanceNow() {
+  attendanceSyncing.value = true
+  try {
+    const result = await runDingTalkAutoSync({})
+    ElMessage.success(result.message || '同步完成')
+    await loadAttendance()
+  } catch (error) { ElMessage.error('同步失败：' + error.message) }
+  finally { attendanceSyncing.value = false }
+}
 
 const loading = ref(false)
 const saving = ref(false)
@@ -360,6 +487,14 @@ onMounted(loadSettings)
 .settings-nav__brand { padding: 8px 10px 16px; font-weight: 800; color: #20365b; letter-spacing: .02em; }
 .settings-nav__item { display: flex; width: 100%; gap: 10px; align-items: flex-start; padding: 12px; color: #fff; text-align: left; border: 0; border-radius: 12px; background: linear-gradient(135deg, #2363d9, #4f8dfa); cursor: pointer; }
 .settings-nav__item b, .settings-nav__item small { display: block; }.settings-nav__item small { margin-top: 3px; color: rgba(255,255,255,.72); font-size: 11px; }.settings-nav__icon { padding-top: 1px; color: #bcd7ff; }.settings-nav__hint { margin: 18px 8px 5px; color: #8a98ab; font-size: 12px; line-height: 1.7; }
+/* 考勤同步面板 */
+.settings-nav__dot { position: absolute; top: 14px; right: 12px; width: 7px; height: 7px; border-radius: 50%; background: #8a98ab; }
+.settings-nav__dot.healthy { background: #35c07f; box-shadow: 0 0 0 3px rgba(53,192,127,.22); }
+.settings-nav__dot.warning { background: #e8b03c; box-shadow: 0 0 0 3px rgba(232,176,60,.22); }
+.settings-nav__item { position: relative; }
+.sync-coverage { color: #7d8c9f; font-size: 12px; white-space: nowrap; }
+.sync-table { margin-top: 4px; }
+.sync-table :deep(th.el-table__cell) { background: #f7fafd !important; color: #5c7591; font-size: 12px; font-weight: 600; }
 .settings-main { min-width: 0; }.settings-hero { display: flex; justify-content: space-between; gap: 24px; align-items: center; padding: 25px 28px; color: #fff; border-radius: 18px; background: radial-gradient(circle at 88% 0%, rgba(123, 175, 255, .55), transparent 30%), linear-gradient(118deg, #152f65, #2364c9); box-shadow: 0 14px 28px rgba(35, 85, 170, .18); }.eyebrow { margin: 0 0 7px; color: #7f96bb; font-size: 10px; font-weight: 800; letter-spacing: .14em; }.settings-hero .eyebrow { color: #b8d1fb; }.settings-hero h1 { margin: 0; font-size: 26px; letter-spacing: .02em; }.settings-hero p:not(.eyebrow) { margin: 8px 0 0; color: #d5e4ff; font-size: 13px; }.hero-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; }.hero-actions :deep(.el-button:not(.el-button--primary)) { color: #eaf2ff; border-color: rgba(255,255,255,.4); background: rgba(255,255,255,.1); }
 .status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }.status-card { display: flex; gap: 10px; min-height: 112px; padding: 17px; border: 1px solid #e9edf4; border-radius: 14px; background: #fff; box-shadow: 0 6px 18px rgba(26, 47, 84, .04); }.status-card__dot { flex: 0 0 8px; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #a8b4c5; }.status-card.healthy .status-card__dot { background: #22b573; box-shadow: 0 0 0 4px #e0f8ed; }.status-card.warning .status-card__dot { background: #f4a62a; box-shadow: 0 0 0 4px #fff3dc; }.status-card small, .status-card strong, .status-card p { display: block; }.status-card small { color: #8090a6; font-size: 12px; }.status-card strong { margin-top: 6px; color: #243b62; font-size: 15px; }.status-card p { margin: 7px 0 0; color: #8a98ab; font-size: 11px; line-height: 1.45; }.notice { margin: 0 0 16px; }
 .settings-card { margin-top: 16px; padding: 24px 26px; border: 1px solid #e6ebf4; border-radius: 16px; background: #fff; box-shadow: 0 9px 24px rgba(22, 41, 76, .045); }.section-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 18px; border-bottom: 1px solid #edf0f5; }.section-heading h2 { margin: 0; color: #1c3154; font-size: 17px; }.section-badge { padding: 4px 9px; color: #2770d8; font-size: 11px; border-radius: 99px; background: #ebf3ff; }.robot-form { margin-top: 18px; }.form-group { padding: 17px; border: 1px solid #edf0f5; border-radius: 12px; }.form-group + .form-group { margin-top: 14px; }.form-group--featured { border-color: #cfe0ff; background: linear-gradient(110deg, #f8fbff, #f2f7ff); }.form-group--ai { border-color: #d8d5ff; background: linear-gradient(110deg, #faf9ff, #f4f2ff); }.form-group__title { margin-bottom: 13px; color: #24436f; font-size: 13px; font-weight: 800; }.form-group__title--switch { display: flex; justify-content: space-between; align-items: center; }.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }.ai-profile-controls { display: flex; gap: 10px; align-items: center; }.ai-profile-controls :deep(.el-select) { flex: 1; }.ai-profile-summary { display: flex; gap: 7px; flex-wrap: wrap; align-items: baseline; margin: 12px 0 10px; padding: 10px 12px; color: #596d8c; font-size: 12px; border: 1px solid #dddafc; border-radius: 9px; background: rgba(255,255,255,.6); }.ai-profile-summary b { color: #5045a6; }.form-help { margin: -3px 0 0; color: #8a98ab; font-size: 12px; }.ai-profile-form { margin-top: 18px; }.advanced-settings { margin-top: 14px; color: #587092; font-size: 13px; }.advanced-settings summary { cursor: pointer; }.advanced-settings__content { margin-top: 15px; }.form-actions { display: flex; gap: 10px; margin-top: 20px; }

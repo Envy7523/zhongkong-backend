@@ -1413,6 +1413,437 @@ totals 无 `purchased_*` 残留；校准把 3 天汇总成 8 月一条 = 24；�
 > 注：`/api/dish-sales/mappings` 返回的 `total` 是 (编码,名称,规格) **分组数**，绑定/解绑不会改变它 ——
 > 断言"绑定数增加"是错的，正确断言是查该品项是否出现在 `mapped=bound` 结果里。
 
+## 2026-09-21 补录合同起止时间 + 新增「合同到期提醒」（与转正提醒同一套规则引擎）
+
+### 一、需求
+
+1. 按《门店员工管理》表格（`门店员工管理(1).xlsx`）把**合同起始日 / 合同到期日**补录进人事档案；
+2. 参照已有「转正提醒」，**copy 一个「合同到期提醒」**。
+
+### 二、补录（数据变更，已执行）
+
+来源表只有 3 列：`名字 / 合同起始日 / 合同到期日`，65 行数据（表头在第 2 行）。
+
+**先勘察了单元格类型再动手**：B/C 两列是 **Excel 日期序列号**（真日期，如 46082 = 2026-03-01），
+不是文本。列显示格式不同（B 列 `3/1/26`、C 列 `2027/3/1`）只是单元格格式差异，底层值一致 ——
+因此统一按序列号解析，不依赖显示文本。（若按显示文本猜 `M/D/YY` 还是 `D/M/YY` 会录错日期。）
+
+结果：
+
+| 项 | 数量 |
+|---|---|
+| 表格数据行 | 65 |
+| **已写入** | **38** |
+| 无日期（表格里就是空的，跳过） | 27 |
+| 未匹配到员工 | 0 |
+| 重名无法判定 | 0 |
+| 到期日早于起始日 | 0 |
+
+补录前人事库里「合同起始/截止」**全部为空**（96 名员工无一人填过），所以本次是纯新增，未覆盖任何既有值。
+
+**姓名列脏数据已处理**：表格里有 3 行把门店/岗位/手机号写进了姓名列 ——
+`李三兰(京基御景店长-[手机号])`、`方洲店-韦泽月-[手机号]`、`欧景店-谢开铭[手机号]`。
+工具做保守清洗（剥括号 → 去尾随数字 → 取纯中文且不含机构字「店/部/组/司…」的片段），
+清洗后才命中的**单独归类并打印待复核**，绝不静默猜。
+> 踩坑记录：清洗规则的机构字过滤是必需的 —— 否则 `方洲店-韦泽月-…` 会先命中「方洲店」。
+> 另注后两人在表格里没有日期，本次无数据可录。
+
+### 三、新增工具 `tools/import-contract-dates.js`
+
+```powershell
+node tools/import-contract-dates.js --dry-run                # 干跑（默认，只读）
+node tools/import-contract-dates.js --apply                  # 写库（需先停服）
+node tools/import-contract-dates.js --apply --overwrite      # 覆盖已有值
+node tools/import-contract-dates.js --file "D:\x.xlsx"       # 换来源
+```
+
+设计要点：
+
+- **默认干跑**，加 `--apply` 才写库；**默认只填空值**，加 `--overwrite` 才覆盖。
+- 匹配规则与 `lib/staff-import.js` 一致：按姓名精确匹配 → 命中多条时若只有 1 人在职则取该人 → 仍不唯一则跳过并报告（不猜）。
+- 报告落 `_tmp/contract-import-report.json`，含每人的 before/after。
+- **⚠️ 关键约束：`--apply` 会先探测 3456 端口，服务在运行时直接拒绝写库。**
+  原因：`lib/db.js` 用 sql.js（整库在内存、`save()` 全量重写文件），
+  运行中的服务会在下一次 `save()` 时**覆盖掉外部脚本的写入**。
+  所以正确姿势是：**停服 → 备份 → `--apply` → 重启**。
+
+本次执行记录（2026-09-21 14:34）：停服（PID 按端口定位）→ 备份
+`data/database.sqlite.bak-before-contract-dates-20260921143407` → `--apply` 写入 38 人 → 重启后端 → 接口复验通过。
+
+> 为什么没走 `PUT /api/staff/:id`：该接口每次调用都会**异步同步一次企微智能表格**
+> （`config.json` 已配 `staffSmartSheetDocId`，是生产表）。批量补录 38 人会触发 38 次外部写入，
+> 而合同字段并不在同步字段清单里 —— 属于纯粹的多余副作用，故改用直连库 + 停服。
+
+### 四、合同到期提醒（`lib/notifications.js`）
+
+**做成了「规则表」而不是复制粘贴第二段代码。** 原来只有转正一条规则写死在 `runChecks` 里，
+新增 `RULE_DEFS` 描述表（`dateField / dateLabel / defaultLeadDays / previewTitle / buildTitle / buildContent`），
+`runChecks` 与 `previewUpcoming` 改为**遍历它**。因此：
+
+- 两类提醒共用同一套「惰性生成 + `dedupe_key` 幂等 + 提前天数窗口」逻辑；
+- 转正提醒的行为**逐字未变**（默认 15 天、文案一致、`payload` 只是补了 `date_field` / `milestone_date`）；
+- 将来加第三类提醒（如健康证到期）只需在 `RULE_DEFS` 加一条。
+
+新增内容：
+
+| 项 | 值 |
+|---|---|
+| 类型码 | `contract_expiring` |
+| 日期列 | `employees.contract_end_date` |
+| 默认提前天数 | **30 天**（转正仍是 15 天，各自的默认值分开定义） |
+| 幂等键 | `contract_expiring:{employee_id}:{contract_end_date}` |
+| 标题 | `X 的劳动合同将在 N 天后到期（YYYY-MM-DD）` / 当日为 `X 的劳动合同今日到期` |
+| 正文 | `门店 · 岗位｜合同期限 起 至 止。请提前启动续签评估与手续办理。` |
+| 默认接收人 | **空**（避免凭空给谁发通知；需在规则页勾选） |
+
+接口侧 `server.js`：把规则响应体抽成 `notificationSettingsPayload()`（GET/PUT 共用），
+每条规则带上 `label / description / date_label / default_lead_days / preview_title`，
+并新增 `upcoming_by_type`（按类型分组的「近期节点」）。旧的 `upcoming` 字段**保留**，不破坏历史前端。
+
+### 五、顺带修掉的既有缺陷（⚠️ 重要）
+
+**`NotificationRulesView.vue` 的「接收人员」选择框一直存不下去。**
+模板绑定的是 `rule.recipient_user_ids`，而后端存/取的都是 `user_ids` —— 两边字段名不一致：
+
+- 打开页面时选择框**显示为空**（尽管 `config.json` 里 `probation_due.user_ids = [1]` 是配好的）；
+- 选了人再保存，`user_ids` 还是旧值，**选的接收人被静默丢弃**。
+
+本次改为绑定 `rule.user_ids`，并把规则页改成渲染 `rule.label / description / preview_title`
+与按类型分组的节点面板。**建议重新保存一次通知规则确认生效。**
+
+### 六、验证
+
+| 项 | 结果 |
+|---|---|
+| 语法自检（`node --check`） | `lib/notifications.js` / `server.js` / `tools/import-contract-dates.js` 全部 OK |
+| 补录后接口复验 | `GET /api/staff?page_size=100` → 96 人中 **38 人合同起止已填**，抽查李三兰/陈云生/廖汉光一致 ✅ |
+| 规则接口 | 返回 2 条规则，`contract_expiring` 的 `date_label=合同到期日`、`lead_days=30` ✅ |
+| 近期节点 | `upcoming_by_type.contract_expiring` 正确列出 8 人；转正 1 人 ✅ |
+| 生成提醒 | `POST /api/notifications/check` → 生成 **1 条**：`刘珍林 的劳动合同将在 22 天后到期（2026-10-13）` ✅（2026-09-21 + 22 天 = 10-13 正确） |
+| 幂等性 | 再跑一次 `check` → **0 条**，未重复 ✅ |
+| 列表并存 | `pending` 中 `contract_expiring` 与 `probation_due` 各自出现 ✅ |
+| 前端构建 | `frontend/dist` 重新构建成功；产物 `NotificationRulesView-Bw5UMinp.js` 已由 3456 正常托管（HTTP 200）✅ |
+
+> 构建踩坑：首次 `npm run build` 在 `transforming...` 阶段 V8 崩溃（堆内存不足）。
+> 加 `$env:NODE_OPTIONS='--max-old-space-size=6144'` 后通过。**以后构建前端记得带上这个环境变量。**
+> 另注：用 `npm run build 2>&1 | Select-Object -First N` 会因 PowerShell 提前关闭管道而显示 `EXIT=-1`，是假象，别据此判断失败。
+
+### 七、遗留待办（未动，等确认）
+
+1. **已过期的合同不会提醒。** 规则与转正保持同一语义（只扫未来窗口 `date >= 今天`），
+   所以 `陈云生`（`contract_end_date = 2026-09-01`，已过期）**不会**产生提醒。
+   若需要「逾期未续签」曝光，应另做一类提醒（口径也不同：是逾期天数而非提前天数），建议单独排期。
+2. **27 人表格里没有合同日期**，人事档案仍为空（`张洪芬、曾静怡、王恩明…`）。需要业务补表后再跑一次同样的命令。
+3. **接收人默认空**：`合同到期提醒` 已在本地配成接收人 `[1]`（与转正提醒同一人），
+   但这是本次为验证而设；上线前请在「系统管理 → 通知规则」按实际责任人调整。
+4. **合同时间不在敏感字段清单里**（`STAFF_SENSITIVE_FIELDS`），改动不留生命线事件，也不需要填调整原因。
+   若人事希望合同变更也留痕，需要把它加进该清单（会连带要求上传合同附件，属流程变更，需业务确认）。
+
+## 2026-09-22 「合同到期提醒 + 合同起止补录」部署上云（外科式补丁，未整体覆盖）
+
+### ⚠️ 一、部署前勘察发现的重大风险：本地与云端已**双向分叉**
+
+按文档 §一「部署/更新步骤」本应 `scp` 覆盖 `server.js` 与整个 `lib/`。**本次没有这么做**，因为逐文件比对发现两边的差异不是单向的：
+
+| 方向 | 内容 |
+|---|---|
+| **本地独有**（未上云） | `server.js` 里约 **200 行「钉钉考勤自动同步」**；`lib/db.js`、`lib/permissions.js`、`lib/poultry-accounting.js`、`lib/sync-job-audit.js` 均有本地改动 |
+| **云端独有**（本地没有） | **`lib/schedule-wiring.js` / `schedule-core.js` / `schedule-routes.js` / `schedule-store.js` / `daily-report-push.js`（合计 1,073 行）**，且云端 `server.js` 里有 `require('./lib/schedule-wiring')`，**本地 server.js 没有这行** |
+
+**结论：整体覆盖本地 `server.js` 会删掉云端的调度接线**（`require('./lib/schedule-wiring')`），
+那 1,073 行云端独有代码会变成死代码，「自动同步与日报计划」子系统直接失效。
+这正是文档开头那句「避免被旧版本覆盖丢失功能」和 2026-09-14「不能盲目整库覆盖」的同类陷阱 ——
+只是这次发生在**文件级**而不是库级。
+
+### 二、实际做法：外科式补丁，只发布本次功能
+
+| 产物 | 处理方式 | 依据 |
+|---|---|---|
+| `lib/notifications.js` | **整体上传** | 逐 hunk 比对确认：本地相对云端的差异**100% 等于本次改动**（新增 `RULE_DEFS` / `contract_expiring` / `previewUpcomingAll` 等），无夹带 |
+| `server.js` | **只把本次的 19 行改动打到「云端版本」上** | 以云端 `server.js` 为底本，用 `_tmp/patch-cloud-server.js` 精确替换通知设置那一段；脚本内置**强制断言**：必须保留 `require('./lib/schedule-wiring')`、必须不含 `runDingTalkAttendanceSync`，命中次数不为 1 即中止 |
+| `frontend/dist` | **整体上传**（tar → `dist.new` → 原子替换） | 比对 chunk 种类：云端 32 / 本地 32，**无云端独有页面、无本地独有页面** ⇒ 前端是干净的版本演进，无丢失风险 |
+| `tools/import-contract-dates.js` | 一并上传（新增文件，additive） | 便于云端复跑 |
+| `lib/db.js` 等 4 个有差异的文件 | **一律未动** | 与本次功能无关，方向不明，不引入不确定性 |
+
+补丁自检结果：差异**仅 19 增 / 4 删，全部落在通知设置区**（对照：本地 server.js 相对云端是 196 增 / 61 删）。
+
+### 三、执行记录（2026-09-22 10:08–10:11 CST，停机约 70 秒）
+
+前置：SSH 端口 22 曾因**限流/fail2ban 临时封禁**（`kex_exchange_identification: Connection closed by remote host`，
+`_syncbot/schedule/K-REPORT.md` §6.2 已记录同一现象，09-21 17:21 起持续复现）。本次重试时**已自行解封**。
+
+```powershell
+# 备份（4 项，DB 已做 sha256 校验一致）
+/home/ubuntu/app/_bak/database.sqlite.bak-before-contract-20260922100819   # 386,437,120 B, sha256 eab6fec22d3596c4
+/home/ubuntu/app/_bak/server.js.bak-before-contract-20260922100819
+/home/ubuntu/app/_bak/notifications.js.bak-before-contract-20260922100819
+/home/ubuntu/app/_bak/dist.bak-before-contract-20260922100819.tgz
+# 顺序：停服 → 安装代码 → node --check → 断言 → 原子替换 dist → 补录数据 → 启服
+```
+
+**关键断言实测（停机窗口内）：**
+
+| 检查项 | 结果 |
+|---|---|
+| `require('./lib/schedule-wiring')` 出现次数 | **1**（调度接线保住）✅ |
+| `runDingTalkAttendanceSync` 残留 | **0**（未夹带本地钉钉改动）✅ |
+| `notificationSettingsPayload` 出现次数 | 3 ✅ |
+| `node --check server.js` / `lib/notifications.js` | 均通过 ✅ |
+| server.js 所需 lib 依赖齐全性 | 全部就位（无 MISSING）✅ |
+| 上传件 sha256 与本地对照 | server.js `32bd4a11dc50e899` / notifications.js `3a25acb39ed38ad8` 一致 ✅ |
+
+**合同起止补录（云端库）：** 干跑与本地结果**完全一致**（65 行 → 38 可写入 / 27 无日期 / 0 未匹配 / 0 重名 / 0 区间异常），
+随后 `--apply` 写入 **38 人**（写库前确认 3456 未监听，工具的服务运行保护已生效）。
+抽查（注意**云端员工 ID 与本地不同**，靠姓名匹配落位正确）：
+`刘珍林 #84 2026-04-13~2026-10-13`、`李三兰 #125 2026-07-13~2028-07-13`、`陈云生 #120 2026-07-01~2026-09-01`、`廖汉光 #106 2026-06-30~2028-07-01`。
+
+**部署后线上验证：**
+
+| 项 | 结果 |
+|---|---|
+| `systemctl is-active zhongkong` | active，3456 监听 ✅ |
+| `GET /` | 200 ✅ |
+| `GET /api/mp/health` | 200 ✅ |
+| 公网 `http://134.175.41.247/` | 200，index.html 引用 `NotificationRulesView-Bw5UMinp.js` ✅ |
+| 该 chunk 经公网取得 | 4308 B，**sha256 `3a1aa64266c2f769` 与本地逐字节一致**，含「合同到期日」「upcoming_by_type」✅ |
+| 云端只读规则验证（sql.js + 最小 queryAll 适配器，不改库） | `RULE_DEFS` = `probation_due, contract_expiring`；转正节点 1 条、**合同节点 8 条** ✅ |
+| 云端干跑的合同提醒文案 | `刘珍林 的劳动合同将在 21 天后到期（2026-10-13）`，幂等键 `contract_expiring:84:2026-10-13` ✅ |
+
+> 验证方法上的两个坑（避免下次误判）：
+> ① 用 PowerShell `Get-Content -Raw` + `-match '中文'` 搜 UTF-8 产物会**假阴性**（控制台按 GBK 解码），
+> 需用 `[System.IO.File]::ReadAllBytes` + `Encoding::UTF8.GetString`，或直接用 `curl` 取回后比 sha256；
+> ② PowerShell here-string 传 SSH 会给每行**附 `\r`**，导致 `head -1`/`tail -1`/`journalctl --no-pager` 等
+> 报出「invalid trailing option」这类假错误。**远程脚本改为本地写好再 `scp` 执行**可彻底规避。
+
+### 四、⚠️ 遗留：云端提醒**不会自动生成**，需要先配接收人
+
+实测云端 `config.json`：`notifications.rules = { probation_due: { enabled:true, lead_days:30, user_ids: [] } }`
+—— **接收人是空的**，且 `contract_expiring` 尚未落进配置（走默认值，同样是空接收人）。
+
+**后果：两类提醒在云端都不会产生任何通知**（`runChecks` 在 `user_ids.length === 0` 时直接跳过）。
+这恰好印证了本次修掉的那个前端缺陷（接收人绑定 `recipient_user_ids` → 永远存不下去），
+云端那 3 条通知也全是 `manual`、无一条规则生成。
+
+**待办（需业务侧在界面上做，一条即可）**：登录云端 →「系统管理 → 通知规则」→ 为
+「转正提醒」「合同到期提醒」各选接收人并保存。保存后点「立即检查」应能立刻看到
+`刘珍林` 那条合同提醒。
+
+### 五、本次未做（明确留给后续）
+
+1. **钉钉考勤自动同步**（本地 `server.js` 约 200 行）**未上云**。它需要与 `lib/db.js` 的钉钉表结构配套，
+   建议作为**独立一次发布**，并同样按「外科/成套」方式处理，不要与本次混在一起。
+2. **云端独有的 schedule 子系统（1,073 行）尚未回流本地**。建议尽快 `scp` 拉回本地并入仓库，
+   否则每次部署都要重复本次的手工比对，且随时可能被整体覆盖。**这是当前最大的流程隐患。**
+3. `lib/db.js` / `lib/permissions.js` / `lib/poultry-accounting.js` / `lib/sync-job-audit.js` 的本地改动
+   未上云（与本次功能无关，方向未核对）。下次发布前建议先补齐与云端的逐文件比对。
+4. 云端 `/tmp/zkstage/` 留有本次暂存件，`/home/ubuntu/app/frontend/dist.old-contract` 为回滚用的旧 dist；
+   确认稳定后可清理（`_bak/` 下的 4 份备份建议保留一段时间）。
+
+### 六、既有告警澄清（非本次引入）
+
+启动日志有 `[schedule] schedule.schema_not_ready {"error":"Cannot read properties of null (reading 'run')"}`。
+已核实为**既有现象**：历史 3 次启动（pid 978505 09-21 16:00、pid 979485 09-21 16:08、本次 1014781）**每次都出现**，
+且云端代码注释写明「挂载失败不影响其余功能（try/catch 兜底）」、`default_disabled: true`。
+本次补丁未触碰该段（`schedule-wiring` require 计数仍为 1）。
+
+## 2026-09-22（同日续）钉钉考勤自动抓取上云 + 一次「装了不启动」事故与修复
+
+### 一、需求澄清（我先前理解错了，记录以免再犯）
+
+用户原话：**「合同时间数据需要上传，打卡记录不用」**
+—— 我最初理解为「钉钉考勤整块都不用上」，**这是错的**。正确意思是：
+
+| 项 | 是否上云 |
+|---|---|
+| 合同起止**数据** | ✅ 要（已于同日首次部署完成，38 人） |
+| 打卡记录**数据**（历史行） | ❌ 不用上传（云端本来就有，靠钉钉拉取） |
+| **自动抓取打卡 / 抓取钉钉考勤的「功能」** | ✅ **必须上** —— 该数据关联**工资条制作**与**月数据人效看板** |
+
+故追加第二次部署：只上钉钉考勤自动抓取功能，仍不动任何数据文件。
+
+### 二、部署范围判定（`lib/db.js` 不需要动）
+
+先做了三项预检，确认只需改 `server.js` 一个文件：
+
+1. **`lib/db.js` 差异只有一处**：云端比本地**多 3 张 schedule 表**（`schedule_config` / `schedule_config_audit` / `schedule_job_runs`）
+   —— 即云端独有子系统的建表语句，**与钉钉表无关**。⇒ 不动 `lib/db.js`。
+2. **钉钉表结构满足自动同步要求**：云端 `dingtalk_attendance_records` 已存在
+   `UNIQUE(dingtalk_user_id, check_time, check_type)`，而自动同步用的是 `ON CONFLICT(...)` upsert ⇒ 约束齐备、列齐备。
+3. **`lib/dingtalk-attendance.js` 两侧哈希完全一致**（`c7844de3f3c65129`）⇒ 无需上传。
+
+### 三、⚠️ 事故：第一次部署「代码装上了，但永不启动」
+
+第一次补丁用「行号区间（base 行 2200–2300）」筛选 hunk，把**文件末尾的启动调用漏掉了**：
+
+```js
+// server.js 末尾 app.listen 回调里（base 行 6377 那个 hunk）
+console.log(`📦 数据库: data/database.sqlite`);
++ // 每日自动同步钉钉考勤（默认 01:00 同步上一天，可在 config.json 的 dingtalkAttendance 调整）
++ startAttendanceAutoSync();
+```
+
+结果：函数定义在、路由在、但**没有任何地方调用它** ⇒ 定时器不启动、日志无输出、自动同步永不发生。
+**发现方式**：部署脚本里 `grep -c startAttendanceAutoSync` 返回 **1**（应为其定义+调用 = 2），我据此判定异常。
+
+修复：把筛选从「行号区间」改为**显式白名单** `[2223, 2268, 6377]`，并新增两道护栏：
+- **安全护栏**：保留的 hunk 不得包含 `schedule-wiring` / `/api/bot/status` / `saveConsumptionBatch`，否则直接中止；
+- **漏检护栏**：断言 `startAttendanceAutoSync();` 的调用 hunk 必须被覆盖，否则中止（专防本次这类漏检）。
+
+> 同类坑：hunk 解析时用 `split('\n')` 得到的**末尾空串**会被误当成上下文行，导致行数自检失败。
+> 已改为只接受 `' '` / `'+'` / `'-'` / `'\'` 前缀的行。
+
+### 四、三个必须排除的 hunk（其中两个是重要发现）
+
+| base 行 | 内容 | 结论 |
+|---|---|---|
+| 79 | 本地把 **`/api/bot/status` 重新加入免鉴权名单**（线上版明确写着「**不再**免鉴权」，要求带 JWT + `enterprise-settings.manage`） | ❌ 不上。**见下方「遗留风险」** |
+| 3306 | `poultryAccounting.saveConsumptionBatch`（禽类消耗批量录入） | ❌ 非本次范围 |
+| 5996 | 本地**删除了** `require('./lib/schedule-wiring').mountSchedule({...})` 整块 | ❌ **绝不能上** —— 再次印证整体覆盖会毁掉云端调度子系统 |
+
+### 五、执行与验证（10:32:29 起，停机约 12 秒）
+
+补丁结果：相对线上版 **恰好 5 个 hunk**，全部落在钉钉区段（2225–2274）与文件末尾启动调用（6379）。
+
+| 断言 | 结果 |
+|---|---|
+| `startAttendanceAutoSync` 出现 **2** 次（定义 + 调用） | ✅（第一次部署此处为 1，即事故） |
+| `runDingTalkAttendanceSync` 4 处 / `dingtalk/auto-sync` 2 处 / `setInterval` 1 处 | ✅ |
+| `require('./lib/schedule-wiring')` = **1** | ✅ 云端调度子系统完好 |
+| `notificationSettingsPayload` = 3 | ✅ 上次通知改动完好 |
+| `req.path === '/api/bot/status'` = **0** | ✅ 未带上本地的安全回退 |
+| `saveConsumptionBatch` 未出现 | ✅ 未夹带无关改动 |
+| `node --check` + lib 依赖齐全 | ✅ |
+| server.js sha256 与本地一致 | `8adc14ac8243b1b0` ✅ |
+| 三个钉钉路由未认证返回 | **401**（存在且受保护，非 404）✅ |
+
+### 六、✅ 自动回扫实测成功，并补上了薪资要用的数据缺口
+
+云端钉钉凭据本就配好（`DINGTALK_APP_KEY/SECRET/CORP_ID` 经 systemd drop-in 注入，实测三个都已进进程环境；
+`ATTENDANCE_AUTO_*` 未设 ⇒ 走默认 **启用 / 每天 01:00 / 回扫 30 天**）。
+
+启动约 8 秒后触发补跑，约 7 分钟完成：
+
+```
+批次 #4  2026-08-23 ~ 2026-09-21  success  记录 4102  已匹配 4102   @2026-09-22 10:31:12
+        已同步 63 名员工的 4102 条打卡记录
+```
+
+| 指标 | 部署前 | 部署后 |
+|---|---|---|
+| 打卡记录总数 | 2,611 | **4,102** |
+| 最新工作日期 | 2026-09-18 | **2026-09-21** |
+| 覆盖区间 | 09-01 ~ 09-18 | **08-23 ~ 09-21** |
+
+**关键收益：09-19 ~ 09-21 这段原本缺失的打卡数据已补齐**（正是工资条与月人效看板所需的区间）：
+
+```
+2026-09-18  144 条 / 46 人
+2026-09-19  167 条 / 53 人
+2026-09-20  155 条 / 50 人
+2026-09-21  130 条 / 43 人
+```
+
+> 幂等性已验证：批次表里没有重复行；新进程启动时 `checkAttendanceAutoSync` 会因
+> 「上次成功批次已覆盖窗口」直接返回 `already_synced`，不会重复拉取。
+
+### 七、⚠️ 遗留风险：本地 `server.js` 把 `/api/bot/status` 改回了免鉴权
+
+本地相对线上多出这一改动（**不建议上生产，需业务/开发确认**）：
+
+```js
+// 线上（当前生产）—— 要求带 JWT 并接受 enterprise-settings.manage 校验
+if (req.path === '/api/auth/login' || req.path === '/api/geo/bound') return next();
+// 本地 —— 把 /api/bot/status 又放回免鉴权名单
+if (req.path === '/api/auth/login' || req.path === '/api/bot/status' || req.path === '/api/geo/bound') return next();
+```
+
+而本地 `lib/permissions.js` 里**仍然保留着** `['/api/bot', 'enterprise-settings.manage']` 规则 ——
+即本地这份规则因为路径被整体放行而**永远不会生效**（死规则）。
+
+**这属于「云端已收紧、本地未回流」的又一处分叉**，与 §一、§四 的 schedule 代码同源。
+建议：把云端 `server.js` 里这段鉴权逻辑回流本地，让本地与生产一致。
+
+### 八、操作过程记录：SSH 限流再次触发
+
+本次 SSH 连接较密集（多次 scp/ssh），过程中**再次触发 sshd 限流 / fail2ban 封禁**
+（`kex_exchange_identification: Connection closed by remote host`），
+在 10:33 前后持续约 4 分钟，期间 `scp` 静默失败（被我 `| Out-Null` 吞掉，导致一次「模块不存在」误报）。
+**经验：**
+1. 远程操作尽量**合并为单次 ssh**，脚本本地写好再传，不要反复小连接；
+2. `scp` 不要用 `| Out-Null` 掩盖退出码，否则会把上传失败误判为执行失败；
+3. 期间可用**公网 80 端口**判断服务健康（不受 SSH 限流影响）。
+
+### 九、本次未做
+
+1. `lib/db.js` / `lib/permissions.js` / `lib/poultry-accounting.js` / `lib/sync-job-audit.js` 的本地改动仍未上云（与本次无关）。
+2. 云端 schedule 子系统（1,073 行 + 3 张表 + 上述鉴权收紧）**仍未回流本地** —— 分叉面比首次部署时更大了，建议优先处理。
+3. 云端 `/home/ubuntu/app/frontend/dist.old-contract` 与 `/tmp/zkstage/` 暂存件未清理（留作回滚）。
+   `_bak/` 下现有备份：`database.sqlite.bak-before-contract-*`、`server.js.bak-before-contract-*`、
+   `notifications.js.bak-before-contract-*`、`dist.bak-before-contract-*.tgz`、
+   `server.js.bak-before-dingtalk-*`（两份，含第一次的事故版本）。
+
+## 2026-09-22 门店闭店与迁址：可录入、可追溯、口径明确
+
+> 完整方案（业务口径 / 数据模型 / 流程 / 接口 / 验证）见 **`docs/门店闭店与迁址方案.md`**。
+> 本节只记录「改了什么、为什么、验证结果、踩过的坑」。
+
+### 一、需求与业务口径（业务确认，三条）
+
+用户提出：门店基本信息里**没有闭店时间录入，也没有迁址的原店↔新店关联**。经问答确认口径：
+
+1. **「同一家店」= 同一个老板对同一家门店的运营。** 换法人但门店未停业 **≠ 闭店**，只记一条「法人变更」。
+2. **迁址后收银机构编码会变** ⇒ 一律「**老店闭店 + 新建门店 + 双向关联**」；**新店只记新店数据，不做跨店合并**，
+   关联仅作凭证与追溯（知道它不是全新门店、以及从哪家店迁来）。
+3. 状态收敛为**三态** `筹建中 / 正常营业 / 已闭店`；「迁址」是闭店原因而非状态。
+4. 闭店门店归入**全国统一的独立分组「闭店门店」**，默认不显示。
+5. **闭店前员工必须全部处置**（随迁 / 调岗 / 离职）。
+6. 迁址时**默认继承老店**（店型 / 法人 / 收款性质 / 区域归属），用户可自行微调。
+
+> 现状利好：上线时全库 25 家门店都是正常营业 / 筹建中，**历史上没有任何闭店或迁址记录** ⇒ 纯新增，零存量迁移。
+
+### 二、改动清单
+
+| 层 | 改动 |
+|---|---|
+| 表结构 `lib/db.js` | `stores` +5 列（`closed_date/closed_type/closed_reason/relocated_to_store_id/relocated_from_store_id`）；新建 `store_lifecycle_events`（门店履历，模式对齐已有的 `employee_lifecycle_events`）；`store_regions` +`code` 列并种子出系统分组「闭店门店」；启动时幂等清理门店孤儿关联行 |
+| 新模块 `lib/store-lifecycle.js` | 业务口径与共同逻辑集中一处：状态别名、闭店类型枚举、闭店分组识别、履历读写、员工待处置判定 |
+| 接口 `server.js` | 新增 `GET /api/store-lifecycle/meta`、`GET /api/db/stores/:id/lifecycle`、`POST .../close`、`POST .../relocate`、`POST .../reopen`、`POST/GET /api/store-attachments`；`stats` 增加迁址店口径；**`PUT` 禁止直接改状态绕过闭店/重开**；**`DELETE` 增加经营数据保护**；抽出 `sendAttachmentFile` / `saveAttachmentFile` 供员工附件与门店凭证共用 |
+| 数据正确性 `lib/business-analytics.js` | `resolveStore()` 分层：精确名称**允许**命中闭店门店（补录历史），模糊兜底**只允许**命中未闭店门店，并加**顺延保护**；`resolveStore` 导出以便单测 |
+| 权限 `lib/permissions.js` | 新增 `['/api/store-attachments', 'store.manage']` |
+| 前端 | `StoreBasic.vue` 重写（三态 + 闭店字段 + 员工处置表 + 迁址 + 履历时间轴 + 重开 + 凭证上传）；`StoreRegionManage.vue`「闭店门店」分组默认隐藏 + 开关、系统分组禁编辑；`StoreRegionSelect.vue` 排除闭店门店；`api/index.js` 新增 6 个封装 + 把响应体字段挂到 error 上 |
+
+### 三、验证
+
+| 套件 | 结果 |
+|---|---|
+| `_tmp/verify-store-lifecycle.js`（接口端到端，含自建自清） | **45/45 通过** |
+| `_tmp/verify-store-matcher.js`（导入匹配规则单测，内存假 db） | **10/10 通过** |
+| 前端构建 | 通过，新文案均在产物中 |
+| 覆盖到的关键行为 | 未处置员工时拒绝闭店并返回清单 · 迁址双向指针与互指凭证 · 随迁员工确实改到新店 · **重开恢复原区域归属** · 删除保护（有数据拒绝、无数据连履历一起删） · 系统分组禁改禁删 · 三态枚举 · 凭证上传/取回/非法类型拒绝 · 员工附件端点重构后未回归 |
+
+### 四、⚠️ 本次踩到的三个坑（都已修，值得记住）
+
+1. **`lib/db.js` 里的 `db` 是 sql.js 原生对象，没有 `queryOne` 方法。**
+   我写成 `db.queryOne(...)` 抛了 `db.queryOne is not a function`，而外层是 `catch {}` ——
+   **异常被静默吞掉，表现是「列建出来了、种子行永远不出现」**，排查了很久。
+   修法：用同文件末尾的模块级包装函数 `queryOne/insert/run`；并把静默 `catch {}` 改成打印告警。
+   **教训：迁移代码里的空 catch 会把「不生效」伪装成「已完成」。**
+2. **`ALTER TABLE` 的位置必须紧跟对应建表之后。**
+   我把 `store_regions.code` 的 ALTER 放在了 `stores` 段（即 `store_regions` 建表**之前**），
+   对全新库会因「表不存在」失败，连带后面的种子 `SELECT` 引用不存在的列也失败 —— 两处又都被静默吞掉。
+3. **`ON DELETE CASCADE` 在本项目实际不生效。**
+   删除门店会留下 `store_region_members` 孤儿行，表现为「闭店门店组显示 1 家、点进去却没人」
+   （计数用 LEFT JOIN、成员列表用 INNER JOIN，于是数量对不上）。
+   修法：删除接口显式清理关联行 + 启动时幂等自愈（实测清掉 3 行孤儿）。
+
+### 五、遗留与建议
+
+1. **`store.close` 独立权限码**：闭店不可逆且影响历史口径，目前与其他门店档案变更共用 `store.manage`，建议后续单独出码。
+2. **平台绑定不继承、也未联动提示**：迁址后新址在美团/京东/抖音通常是新门店，需人工到「门店平台」页重新绑定。
+3. **报表口径按业务决定不做跨店合并**，迁址店在报表里表现为「新店无历史」—— 这是**有意为之**，不是缺陷。
+4. 闭店门店目前在门店选择器里**不可选**；若将来要「按日期查闭店门店历史数据」，给 `StoreRegionSelect` 加 `includeClosed` 属性即可。
+5. **本次只在本地完成**，尚未上云（云端部署需按前述「外科式补丁」流程处理，且注意本地与云端仍有分叉）。
+
 
 
 

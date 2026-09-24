@@ -19,9 +19,14 @@ const poultryAccounting = require('./lib/poultry-accounting');
 const ledgerBackupImport = require('./lib/bookkeeping-import');
 const wecomBot = require('./lib/wecom-bot');
 const staffImport = require('./lib/staff-import');
+const idCardOcr = require('./lib/idcard-ocr');
 const wecomStaffSync = require('./lib/wecom-staff-sync');
 const dingtalkAttendance = require('./lib/dingtalk-attendance');
+const notifications = require('./lib/notifications');
+const storeLifecycle = require('./lib/store-lifecycle');
+const { GROUP_NAMES, isGroupAffiliation } = require('./lib/staff-affiliation');
 const { createBusinessAssistant } = require('./lib/wecom-business-assistant');
+const syncJobAudit = require('./lib/sync-job-audit');
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = 'etaigong-zhongkong-jwt-secret-2024';
@@ -75,7 +80,11 @@ const positionPermissions = require('./lib/permissions');
 
 // JWT 认证中间件（保护 /api/*，放行登录接口）
 app.use((req, res, next) => {
-  if (req.path === '/api/auth/login' || req.path === '/api/bot/status' || req.path === '/api/geo/bound') return next();
+  // /api/bot/status **不再**免鉴权：它必须带 Authorization: Bearer，并接受岗位权限
+  // enterprise-settings.manage 的强制校验（见 lib/permissions.js 的 ['/api/bot', ...] 规则）。
+  if (req.path === '/api/auth/login' || req.path === '/api/geo/bound') return next();
+  // syncbot 审计内部接口：不使用 JWT，改用独立 HMAC 密钥鉴权（见路由内的原始字节校验与回环限制）
+  if (req.path.startsWith('/api/internal/syncbot/')) return next();
   // 小程序接口（/api/mp/*）使用独立 token 体系，由 lib/mp/router.js 自行鉴权
   if (req.path.startsWith('/api/mp/')) return next();
   if (!req.path.startsWith('/api/')) return next();
@@ -162,6 +171,15 @@ function loadConfig() {
   catch { return { corpid: '', corpsecret: '', webhook: '', webhookName: '' }; }
 }
 function saveConfig(config) { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8'); }
+// 前端只需要知道"身份证核对是否强制"，凭据绝不能下发。这里只回传开关与是否已配置。
+function idCardOcrPublicConfig(cfg) {
+  const section = cfg?.idCardOcr || {};
+  return {
+    configured: idCardOcr.isConfigured(cfg || {}),
+    provider: section.provider || '',
+    require_id_verification: Boolean(section.require_id_verification),
+  };
+}
 function getAiProfiles(cfg) {
   const profiles = Array.isArray(cfg.aiProfiles) ? cfg.aiProfiles.filter(item => item && item.id && item.baseUrl && item.model && item.apiKey) : [];
   if (!profiles.length && cfg.aiBaseUrl && cfg.aiModel && cfg.aiApiKey) {
@@ -243,6 +261,8 @@ app.get('/api/config', (_req, res) => {
     webhookConfigured: !!cfg.webhook,
     botIdMasked: cfg.botId ? cfg.botId.slice(0, 6) + '****' + cfg.botId.slice(-4) : '',
     botConfigured: !!(cfg.botId && cfg.botSecret),
+    // 只回传开关与是否已配置，凭据绝不下发
+    idCardOcr: idCardOcrPublicConfig(cfg),
     ...getPublicAiConfig(cfg),
   });
 });
@@ -638,9 +658,10 @@ function amapSign(params, secret) {
 app.get('/api/geo/bound', async (req, res) => {
   try {
     const path = String(req.query.path || '').trim();
-    if (!path || !/^[\w-]+_full\.json$/.test(path)) return res.status(400).json({ error: '非法路径参数' });
-    const data = await fetch(`https://geo.datav.aliyun.com/areas_v3/bound/${encodeURIComponent(path)}`).then(r => r.text());
-    res.type('application/json').send(data);
+    if (!path || !/^\d+(?:_full)?\.json$/.test(path)) return res.status(400).json({ error: '非法路径参数' });
+    const response = await fetch(`https://geo.datav.aliyun.com/areas_v3/bound/${encodeURIComponent(path)}`);
+    if (!response.ok) return res.status(response.status).json({ error: `边界数据不存在：${path}` });
+    res.type('application/json').send(await response.text());
   } catch (e) { res.status(500).json({ error: `边界数据获取失败：${e.message}` }); }
 });
 
@@ -969,6 +990,9 @@ app.put('/api/store-regions/:id', (req, res) => {
     const id = Number(req.params.id);
     const current = db.queryOne('SELECT * FROM store_regions WHERE id=?', [id]);
     if (!current) return res.status(404).json({ error: '区域不存在' });
+    if (current.code === storeLifecycle.CLOSED_REGION_CODE) {
+      return res.status(400).json({ error: `「${current.name}」是系统分组（全国闭店门店统一归属），不能改名或调整层级` });
+    }
     const name = String(req.body.name ?? current.name).trim();
     const parentId = req.body.parent_id === '' || req.body.parent_id == null ? null : Number(req.body.parent_id);
     if (!name) return res.status(400).json({ error: '区域名称不能为空' });
@@ -994,8 +1018,11 @@ app.put('/api/store-regions/:id', (req, res) => {
 app.delete('/api/store-regions/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
-    const region = db.queryOne('SELECT id FROM store_regions WHERE id=?', [id]);
+    const region = db.queryOne('SELECT id,code,name FROM store_regions WHERE id=?', [id]);
     if (!region) return res.status(404).json({ error: '区域不存在' });
+    if (region.code === storeLifecycle.CLOSED_REGION_CODE) {
+      return res.status(400).json({ error: `「${region.name}」是系统分组（全国闭店门店统一归属），不能删除` });
+    }
     db.run('DELETE FROM store_regions WHERE id=?', [id]);
     db.save();
     res.json({ ok: true, regions: listStoreRegions() });
@@ -1037,9 +1064,13 @@ app.get('/api/db/stores/stats', (req, res) => {
         SUM(CASE WHEN store_type='直营店' THEN 1 ELSE 0 END) as direct_count,
         SUM(CASE WHEN store_type='加盟店' THEN 1 ELSE 0 END) as franchise_count,
         SUM(CASE WHEN store_type='联营店' THEN 1 ELSE 0 END) as joint_count,
+        SUM(CASE WHEN closed_type='迁址' THEN 1 ELSE 0 END) as closed_by_relocation_count,
+        SUM(CASE WHEN relocated_from_store_id IS NOT NULL THEN 1 ELSE 0 END) as relocated_in_count,
         COUNT(*) as total
       FROM stores
     `);
+    // 迁址店不是“全新开门店”：用 relocated_from_store_id 判定，单一事实来源，不额外增加字段。
+    row.newly_opened_count = Number(row.total || 0) - Number(row.relocated_in_count || 0);
     res.json({ ok: true, stats: row });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1103,16 +1134,387 @@ app.get('/api/db/stores/:id', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/db/stores', (req, res) => {
-  try { const { store_name, status, store_type, legal_person, payment_type, region, province, city, district, address, phone, business_hours, opening_date, table_2person, table_4person, store_size, lat, lng } = req.body; if (!store_name) return res.status(400).json({ error: '门店名称不能为空' }); const id = db.insert('INSERT INTO stores (store_name,status,store_type,legal_person,payment_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size,lat,lng) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [store_name, status||'正常营业', store_type||'直营店', legal_person||'', payment_type||'法人收款', region||'', province||'', city||'', district||'', address||'', phone||'', business_hours||'', opening_date||null, table_2person||0, table_4person||0, store_size||'', lat||null, lng||null]); db.save(); res.json({ ok: true, id }); }
+  try { const { store_name, status, store_type, legal_person, payment_type, region, province, city, district, address, phone, business_hours, opening_date, table_2person, table_4person, store_size, lat, lng, pos_store_code } = req.body; if (!store_name) return res.status(400).json({ error: '门店名称不能为空' }); const code = String(pos_store_code || '').trim(); if (code && db.queryOne('SELECT id FROM stores WHERE pos_store_code=?', [code])) return res.status(400).json({ error: `收银机构编码 ${code} 已被其它门店占用` }); const id = db.insert('INSERT INTO stores (store_name,status,store_type,legal_person,payment_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size,lat,lng,pos_store_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [store_name, status||'正常营业', store_type||'直营店', legal_person||'', payment_type||'法人收款', region||'', province||'', city||'', district||'', address||'', phone||'', business_hours||'', opening_date||null, table_2person||0, table_4person||0, store_size||'', lat||null, lng||null, code]); db.save(); res.json({ ok: true, id }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.put('/api/db/stores/:id', (req, res) => {
-  try { const allowedFields = ['store_name','status','store_type','legal_person','payment_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size','lat','lng','remark','radius']; const sets = [], params = []; allowedFields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
+  try {
+    // 闭店/重开必须走专用接口：闭店要校验员工全部处置并写履历、移入闭店分组；
+    // 重开要恢复原区域归属。若允许通用编辑接口直接改 status，这两条硬规则都会被绕过。
+    const current = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]);
+    if (!current) return res.status(404).json({ error: '门店不存在' });
+    if (req.body.status !== undefined) {
+      const wasClosed = storeLifecycle.isClosedStatus(current.status);
+      const willClose = storeLifecycle.isClosedStatus(req.body.status);
+      if (willClose && !wasClosed) return res.status(400).json({ error: '闭店请使用「闭店」或「发起迁址」：它们会校验员工处置、写入门店履历并移入闭店门店分组' });
+      if (!willClose && wasClosed) return res.status(400).json({ error: '重开请使用「重开」操作：它会恢复闭店前的区域归属并留下履历' });
+    }
+    // 收银机构编码可人工维护（多数情况下由收银报表导入时自动回填）——必须校验唯一，
+    // 它是导入时识别门店的第一优先键，重复会让报表落到错误的门店上。
+    if (req.body.pos_store_code !== undefined) {
+      const code = String(req.body.pos_store_code || '').trim();
+      if (code) {
+        const occupied = db.queryOne('SELECT id,store_name FROM stores WHERE pos_store_code=? AND id<>?', [code, Number(req.params.id)]);
+        if (occupied) return res.status(400).json({ error: `收银机构编码 ${code} 已被「${occupied.store_name}」占用` });
+      }
+    }
+    const allowedFields = ['store_name','status','store_type','legal_person','payment_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size','lat','lng','remark','radius','pos_store_code']; const sets = [], params = []; allowedFields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.delete('/api/db/stores/:id', (req, res) => {
-  try { const affected = db.run('DELETE FROM stores WHERE id=?', [req.params.id]); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已删除' }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try {
+    const storeId = Number(req.params.id);
+    const store = db.queryOne('SELECT * FROM stores WHERE id=?', [storeId]);
+    if (!store) return res.status(404).json({ error: '门店不存在' });
+
+    // 有经营数据的门店不允许删除 —— 删掉会让历史报表出现“数据指向不存在的门店”。
+    // 结束营业请走「闭店」：门店与历史数据都保留，只是移入闭店门店分组。
+    const BUSINESS_TABLES = [
+      ['employees', '员工档案'], ['business_revenue_records', '营业数据'], ['pos_product_sale_details', '品项销售明细'],
+      ['business_product_sales', '商品销量'], ['bookkeeping_entries', '记账流水'], ['cost_accounting', '成本核算'],
+      ['store_operating_costs', '运营成本'], ['daily_reports', '门店日报'], ['store_platforms', '平台绑定'],
+    ];
+    const blockers = [];
+    BUSINESS_TABLES.forEach(([table, label]) => {
+      const row = db.queryOne(`SELECT COUNT(*) AS n FROM ${table} WHERE store_id=?`, [storeId]);
+      if (Number(row?.n)) blockers.push(`${label} ${row.n} 条`);
+    });
+    if (blockers.length) {
+      return res.status(400).json({
+        error: `「${store.store_name}」已有经营数据（${blockers.slice(0, 4).join('、')}${blockers.length > 4 ? ' 等' : ''}），不能删除。结束营业请使用「闭店」，历史数据与报表仍可回溯。`,
+        blockers,
+      });
+    }
+
+    // 无经营数据（多为建错的空门店）：连同它自己的门店履历一起删掉。
+    // 关联行必须显式删除 —— 本项目的 ON DELETE CASCADE 实际不生效，只靠外键会留下孤儿行。
+    const events = Number(db.queryOne('SELECT COUNT(*) AS n FROM store_lifecycle_events WHERE store_id=?', [storeId])?.n || 0);
+    db.run('DELETE FROM store_lifecycle_events WHERE store_id=?', [storeId]);
+    db.run('DELETE FROM store_region_members WHERE store_id=?', [storeId]);
+    db.run('DELETE FROM store_manager_assignments WHERE store_id=?', [storeId]);
+    db.run('DELETE FROM store_platforms WHERE store_id=?', [storeId]);
+    db.run('DELETE FROM store_fixed_costs WHERE store_id=?', [storeId]);
+    db.run('DELETE FROM store_operating_costs WHERE store_id=?', [storeId]);
+    const affected = db.run('DELETE FROM stores WHERE id=?', [storeId]);
+    db.save();
+    if (!affected) return res.status(404).json({ error: '门店不存在' });
+    res.json({ ok: true, message: `已删除门店「${store.store_name}」${events ? `及 ${events} 条门店履历` : ''}`, removed_events: events });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== 门店生命周期：闭店 / 迁址 / 重开 / 履历 =====
+// 口径与共同逻辑集中在 lib/store-lifecycle.js（文件顶部有业务口径说明）。
+// 三条硬规则：① 状态只有三态，迁址是闭店原因；② 迁址一律「老店闭店 + 新建门店 + 双向关联」，不做数据合并；
+//             ③ 闭店前该店在职员工必须全部处置（随迁/调岗/离职），否则拒绝闭店。
+
+app.get('/api/store-lifecycle/meta', (_req, res) => {
+  res.json({
+    ok: true,
+    statuses: storeLifecycle.STORE_STATUSES,
+    closed_types: storeLifecycle.CLOSED_TYPES,
+    event_types: storeLifecycle.EVENT_TYPES,
+    closed_region_code: storeLifecycle.CLOSED_REGION_CODE,
+  });
+});
+
+// ===== 门店级看板设置（按门店保存口径，不按浏览器/会话）=====
+// 目前用于「每日均摊成本」里工资 / 房租物业 / 水电各项的取数来源。
+// 必须按门店存：同一家店两个人看到不同的均摊基数，看板数字就对不上了。
+app.get('/api/db/stores/:id/dashboard-settings', (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    if (!db.queryOne('SELECT id FROM stores WHERE id=?', [storeId])) return res.status(404).json({ error: '门店不存在' });
+    const row = db.queryOne('SELECT settings_json, updated_at, updated_by FROM store_dashboard_settings WHERE store_id=?', [storeId]);
+    res.json({
+      ok: true, store_id: storeId,
+      settings: storeLifecycle.safeJson(row?.settings_json, {}),
+      updated_at: row?.updated_at || '', updated_by: row?.updated_by || '', saved: Boolean(row),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/db/stores/:id/dashboard-settings', (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    if (!db.queryOne('SELECT id FROM stores WHERE id=?', [storeId])) return res.status(404).json({ error: '门店不存在' });
+    const incoming = req.body?.settings;
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return res.status(400).json({ error: 'settings 必须是一个对象' });
+    const current = storeLifecycle.safeJson(db.queryOne('SELECT settings_json FROM store_dashboard_settings WHERE store_id=?', [storeId])?.settings_json, {});
+    // 浅合并：前端只提交变化的那部分也能安全保存
+    const next = { ...current, ...incoming };
+    const who = req.user?.display_name || req.user?.username || '系统';
+    if (db.queryOne('SELECT store_id FROM store_dashboard_settings WHERE store_id=?', [storeId])) {
+      db.run("UPDATE store_dashboard_settings SET settings_json=?, updated_at=datetime('now','localtime'), updated_by=? WHERE store_id=?", [JSON.stringify(next), who, storeId]);
+    } else {
+      db.run('INSERT INTO store_dashboard_settings (store_id,settings_json,updated_by) VALUES (?,?,?)', [storeId, JSON.stringify(next), who]);
+    }
+    db.save();
+    res.json({ ok: true, store_id: storeId, settings: next });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 恢复默认：删掉本门店的设置行，前端会回到内置默认值（工资=运营成本·上月，房租/水电=记账本）
+app.delete('/api/db/stores/:id/dashboard-settings', (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    if (!db.queryOne('SELECT id FROM stores WHERE id=?', [storeId])) return res.status(404).json({ error: '门店不存在' });
+    db.run('DELETE FROM store_dashboard_settings WHERE store_id=?', [storeId]);
+    db.save();
+    res.json({ ok: true, store_id: storeId, settings: {}, reset: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/db/stores/:id/lifecycle', (req, res) => {
+  try {
+    const store = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]);
+    if (!store) return res.status(404).json({ error: '门店不存在' });
+    const region = storeLifecycle.currentRegion(db, store.id);
+    // 迁址链：顺着双向指针把前后两跳也带上，界面才能显示“从哪迁来 / 迁到哪去”
+    const from = store.relocated_from_store_id ? db.queryOne('SELECT id,store_name,status,closed_date FROM stores WHERE id=?', [store.relocated_from_store_id]) : null;
+    const to = store.relocated_to_store_id ? db.queryOne('SELECT id,store_name,status,closed_date FROM stores WHERE id=?', [store.relocated_to_store_id]) : null;
+    res.json({ ok: true, store, region, relocated_from: from || null, relocated_to: to || null, events: storeLifecycle.listStoreEvents(db, store.id) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+/** 把一名员工从闭店门店处置走。action: transfer（随迁/调岗，改归属门店）| resign（离职） */
+function disposeEmployeeForClosure(employee, action, targetStore, { eventDate, reason, source, attachment }) {
+  const before = db.queryOne('SELECT * FROM employees WHERE id=?', [Number(employee.id)]);
+  if (!before) return { ok: false, error: `员工 #${employee.id} 不存在` };
+  if (action === 'resign') {
+    db.run("UPDATE employees SET leave_date=?, status='离职', onboarding_status='离职', updated_at=datetime('now','localtime') WHERE id=?", [eventDate, before.id]);
+    addEmployeeLifecycleEvent(before.id, '离职', eventDate,
+      before.store_name || '未归属门店', `${before.name} 离职`,
+      `门店闭店处置：${reason}`, source, attachment);
+    return { ok: true, action: 'resign', employee_id: before.id, name: before.name };
+  }
+  if (action === 'transfer') {
+    if (!targetStore) return { ok: false, error: `员工「${before.name}」选择随迁/调岗但未指定目标门店` };
+    if (Number(targetStore.id) === Number(before.store_id)) return { ok: false, error: `员工「${before.name}」的目标门店不能就是当前门店` };
+    db.run("UPDATE employees SET store_id=?, store_name=?, updated_at=datetime('now','localtime') WHERE id=?",
+      [targetStore.id, targetStore.store_name, before.id]);
+    addEmployeeLifecycleEvent(before.id, '归属门店调整', eventDate,
+      before.store_name || '未归属门店', targetStore.store_name,
+      `门店闭店处置：${reason}`, source, attachment,
+      [{ label: '归属门店', old_value: before.store_name || '未归属门店', new_value: targetStore.store_name, unit: '' }]);
+    return { ok: true, action: 'transfer', employee_id: before.id, name: before.name, to_store_id: targetStore.id, to_store_name: targetStore.store_name };
+  }
+  return { ok: false, error: `不支持的员工处置动作：${action}` };
+}
+
+/** 闭店主体（闭店与迁址共用）：写字段、移入闭店分组、解绑店长、写事件 */
+function finalizeStoreClosure(store, { closedDate, closedType, closedReason, attachment, source, extraDetails = {}, eventType = '闭店', eventNote = '' }) {
+  const regionBefore = storeLifecycle.currentRegion(db, store.id);
+  db.run(`UPDATE stores SET status='已闭店', closed_date=?, closed_type=?, closed_reason=?, updated_at=datetime('now','localtime') WHERE id=?`,
+    [closedDate, closedType, String(closedReason || '').trim(), store.id]);
+  const move = storeLifecycle.moveToClosedRegion(db, store.id);
+  db.run('DELETE FROM store_manager_assignments WHERE store_id=?', [store.id]);
+  storeLifecycle.addStoreEvent(db, {
+    storeId: store.id, eventType, eventDate: closedDate,
+    oldValue: regionBefore ? `${regionBefore.name}｜${store.status}` : store.status,
+    newValue: `已闭店（${closedType}）`,
+    note: eventNote || `闭店原因：${String(closedReason || '').trim() || '未填写'}`,
+    source, attachment,
+    details: {
+      closed_type: closedType,
+      closed_reason: String(closedReason || '').trim(),
+      previous_region_id: regionBefore ? regionBefore.id : null,
+      previous_region_name: regionBefore ? regionBefore.name : '',
+      moved_to_closed_group: move.moved,
+      ...extraDetails,
+    },
+  });
+  return { regionBefore, move };
+}
+
+/** 校验员工处置清单：返回 { error, pending } —— error 为空表示可以闭店 */
+function validateEmployeeDisposition(storeId, rawActions) {
+  const pending = storeLifecycle.pendingEmployees(db, storeId);
+  const actions = Array.isArray(rawActions) ? rawActions : [];
+  const byId = new Map();
+  actions.forEach(a => { const id = Number(a?.employee_id); if (Number.isInteger(id) && id > 0) byId.set(id, a); });
+  const missing = pending.filter(e => !byId.has(Number(e.id)));
+  if (missing.length) {
+    return {
+      error: `还有 ${missing.length} 名在职员工未处置，闭店前必须逐人确认去向`,
+      pending: missing.map(e => ({ id: e.id, name: e.name, position: e.position || '', status: e.status })),
+    };
+  }
+  const extra = [...byId.keys()].filter(id => !pending.some(e => Number(e.id) === id));
+  if (extra.length) return { error: `提交了不属于本店在职员工的处置项：${extra.join('、')}` };
+  return { pending: [] };
+}
+
+app.post('/api/db/stores/:id/close', (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    const store = db.queryOne('SELECT * FROM stores WHERE id=?', [storeId]);
+    if (!store) return res.status(404).json({ error: '门店不存在' });
+    if (storeLifecycle.isClosedStatus(store.status)) return res.status(400).json({ error: `「${store.store_name}」已经是闭店状态` });
+
+    const closedDate = String(req.body?.closed_date || '').trim();
+    const closedType = String(req.body?.closed_type || '').trim();
+    const closedReason = String(req.body?.closed_reason || '').trim();
+    const invalid = storeLifecycle.validateCloseInput({ closedDate, closedType });
+    if (invalid) return res.status(400).json({ error: invalid });
+    if (closedType === storeLifecycle.RELOCATION_CLOSED_TYPE) {
+      return res.status(400).json({ error: '迁址请使用「发起迁址」，它会同时建立新门店与双向关联' });
+    }
+    const check = validateEmployeeDisposition(storeId, req.body?.employee_actions);
+    if (check.error) return res.status(400).json({ error: check.error, pending_employees: check.pending });
+
+    const source = staffAuditSource(req.user);
+    const attachment = { url: String(req.body?.attachment_url || '').trim(), name: String(req.body?.attachment_name || '').trim() };
+    const applied = [];
+    db.run('BEGIN');
+    try {
+      (req.body?.employee_actions || []).forEach(item => {
+        const employee = db.queryOne('SELECT id,name,store_id FROM employees WHERE id=?', [Number(item.employee_id)]);
+        const targetStore = item.target_store_id ? db.queryOne('SELECT id,store_name FROM stores WHERE id=?', [Number(item.target_store_id)]) : null;
+        const r = disposeEmployeeForClosure(employee, String(item.action || '').trim(), targetStore, {
+          eventDate: closedDate, reason: `${store.store_name} 闭店（${closedType}）`, source, attachment,
+        });
+        if (!r.ok) throw new Error(r.error);
+        applied.push(r);
+      });
+      finalizeStoreClosure(store, { closedDate, closedType, closedReason, attachment, source });
+      db.run('COMMIT');
+    } catch (error) {
+      try { db.run('ROLLBACK'); } catch {}
+      return res.status(400).json({ error: error.message });
+    }
+    db.save();
+    res.json({ ok: true, store_id: store.id, store_name: store.store_name, closed_date: closedDate, closed_type: closedType, employees: applied });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/** 迁址：老店闭店（类型=迁址）+ 新建门店 + 双向关联 + 两边各写一条互指的迁址事件 */
+app.post('/api/db/stores/:id/relocate', (req, res) => {
+  try {
+    const oldId = Number(req.params.id);
+    const oldStore = db.queryOne('SELECT * FROM stores WHERE id=?', [oldId]);
+    if (!oldStore) return res.status(404).json({ error: '原门店不存在' });
+    if (storeLifecycle.isClosedStatus(oldStore.status)) return res.status(400).json({ error: `原门店「${oldStore.store_name}」已经闭店` });
+
+    const closedDate = String(req.body?.closed_date || '').trim();
+    const closedReason = String(req.body?.closed_reason || '').trim();
+    const invalid = storeLifecycle.validateCloseInput({ closedDate, closedType: storeLifecycle.RELOCATION_CLOSED_TYPE });
+    if (invalid) return res.status(400).json({ error: invalid });
+
+    const incoming = req.body?.new_store && typeof req.body.new_store === 'object' ? req.body.new_store : {};
+    const newName = String(incoming.store_name || '').trim();
+    if (!newName) return res.status(400).json({ error: '请填写新门店名称' });
+    if (newName === oldStore.store_name) return res.status(400).json({ error: '新门店名称不能与原门店相同（迁址后新店应使用新址名称）' });
+    if (db.queryOne('SELECT id FROM stores WHERE store_name=?', [newName])) return res.status(400).json({ error: `门店名称「${newName}」已存在` });
+    const posCode = String(incoming.pos_store_code || '').trim();
+    if (posCode && db.queryOne('SELECT id FROM stores WHERE pos_store_code=?', [posCode])) {
+      return res.status(400).json({ error: `收银机构编码 ${posCode} 已被其它门店占用` });
+    }
+    const check = validateEmployeeDisposition(oldId, req.body?.employee_actions);
+    if (check.error) return res.status(400).json({ error: check.error, pending_employees: check.pending });
+
+    const source = staffAuditSource(req.user);
+    const attachment = { url: String(req.body?.attachment_url || '').trim(), name: String(req.body?.attachment_name || '').trim() };
+    const regionBefore = storeLifecycle.currentRegion(db, oldId);
+    // 默认继承老店：店型 / 法人 / 收款性质 / 区域归属（业务确认：默认继承，之后可自行微调）。
+    // 地址类字段（省市区/详细地址/经纬度/开业日期）一律不继承 —— 迁址本就意味着地址变化，预填旧地址反而会误导。
+    const inherit = (key, fallback = '') => (incoming[key] !== undefined && incoming[key] !== null && String(incoming[key]).trim() !== '' ? incoming[key] : (oldStore[key] ?? fallback));
+
+    let newId = null; let applied = [];
+    db.run('BEGIN');
+    try {
+      newId = db.insert(
+        `INSERT INTO stores (store_name,status,store_type,legal_person,payment_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size,lat,lng,pos_store_code,relocated_from_store_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [newName,
+          String(incoming.status || '筹建中').trim(),
+          inherit('store_type'), inherit('legal_person'), inherit('payment_type'), inherit('region'),
+          String(incoming.province || ''), String(incoming.city || ''), String(incoming.district || ''),
+          String(incoming.address || ''), String(incoming.phone || ''), String(incoming.business_hours || ''),
+          incoming.opening_date || null, Number(incoming.table_2person) || 0, Number(incoming.table_4person) || 0,
+          String(incoming.store_size || ''), incoming.lat || null, incoming.lng || null,
+          posCode, oldId]
+      );
+      // 新店默认继承原区域（用户可再到门店区域管理里改）
+      if (regionBefore && !regionBefore.code) {
+        db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [regionBefore.id, newId]);
+      }
+
+      finalizeStoreClosure(oldStore, {
+        closedDate, closedType: storeLifecycle.RELOCATION_CLOSED_TYPE, closedReason, attachment, source,
+        eventType: '迁址迁出',
+        eventNote: `迁址至「${newName}」${closedReason ? `｜原因：${closedReason}` : ''}`,
+        extraDetails: { to_store_id: newId, to_store_name: newName },
+      });
+      db.run('UPDATE stores SET relocated_to_store_id=? WHERE id=?', [newId, oldId]);
+
+      storeLifecycle.addStoreEvent(db, {
+        storeId: newId, eventType: '迁址迁入', eventDate: closedDate,
+        oldValue: oldStore.store_name, newValue: `${newName}｜${String(incoming.status || '筹建中').trim()}`,
+        note: `由「${oldStore.store_name}」迁址而来${closedReason ? `｜原因：${closedReason}` : ''}`,
+        source, attachment,
+        details: {
+          from_store_id: oldId, from_store_name: oldStore.store_name,
+          from_address: oldStore.address || '', to_address: String(incoming.address || ''),
+          from_region_id: regionBefore ? regionBefore.id : null, from_region_name: regionBefore ? regionBefore.name : '',
+        },
+      });
+
+      // 员工处置：随迁默认进新店
+      (req.body?.employee_actions || []).forEach(item => {
+        const employee = db.queryOne('SELECT id,name,store_id FROM employees WHERE id=?', [Number(item.employee_id)]);
+        const action = String(item.action || '').trim();
+        const targetId = action === 'transfer' ? Number(item.target_store_id || newId) : Number(item.target_store_id);
+        const targetStore = action === 'transfer' ? db.queryOne('SELECT id,store_name FROM stores WHERE id=?', [targetId]) : null;
+        const r = disposeEmployeeForClosure(employee, action, targetStore, {
+          eventDate: closedDate, reason: `${oldStore.store_name} 迁址至 ${newName}`, source, attachment,
+        });
+        if (!r.ok) throw new Error(r.error);
+        applied.push(r);
+      });
+      db.run('COMMIT');
+    } catch (error) {
+      try { db.run('ROLLBACK'); } catch {}
+      return res.status(400).json({ error: error.message });
+    }
+    db.save();
+    res.json({
+      ok: true, old_store_id: oldId, old_store_name: oldStore.store_name,
+      new_store_id: newId, new_store_name: newName, closed_date: closedDate,
+      inherited: { store_type: inherit('store_type'), legal_person: inherit('legal_person'), payment_type: inherit('payment_type'), region: regionBefore ? regionBefore.name : '' },
+      employees: applied,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/** 重开：清掉闭店字段，并尽量把区域恢复到闭店前那一组 */
+app.post('/api/db/stores/:id/reopen', (req, res) => {
+  try {
+    const storeId = Number(req.params.id);
+    const store = db.queryOne('SELECT * FROM stores WHERE id=?', [storeId]);
+    if (!store) return res.status(404).json({ error: '门店不存在' });
+    if (!storeLifecycle.isClosedStatus(store.status)) return res.status(400).json({ error: `「${store.store_name}」当前不是闭店状态` });
+    const reopenDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.reopen_date || '')) ? String(req.body.reopen_date) : localDateString();
+    const source = staffAuditSource(req.user);
+    const closedEvent = db.queryOne(
+      "SELECT details_json FROM store_lifecycle_events WHERE store_id=? AND event_type IN ('闭店','迁址迁出') ORDER BY event_date DESC, id DESC LIMIT 1",
+      [storeId]
+    );
+    const details = storeLifecycle.safeJson(closedEvent?.details_json);
+    const backRegionId = Number(details.previous_region_id) || null;
+
+    db.run("UPDATE stores SET status='正常营业', closed_date='', closed_type='', closed_reason='', updated_at=datetime('now','localtime') WHERE id=?", [storeId]);
+    const closedRegion = storeLifecycle.closedRegionId(db);
+    db.run('DELETE FROM store_region_members WHERE store_id=?', [storeId]);
+    const restore = backRegionId && db.queryOne('SELECT id FROM store_regions WHERE id=?', [backRegionId]) ? backRegionId : null;
+    if (restore) db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [restore, storeId]);
+    storeLifecycle.addStoreEvent(db, {
+      storeId, eventType: '重开', eventDate: reopenDate,
+      oldValue: `已闭店（${store.closed_type || '未填类型'}）`, newValue: '正常营业',
+      note: String(req.body?.note || '').trim() || '门店重开',
+      source, attachment: { url: String(req.body?.attachment_url || '').trim(), name: String(req.body?.attachment_name || '').trim() },
+      details: { restored_region_id: restore, closed_region_id: closedRegion, previous_closed_date: store.closed_date || '' },
+    });
+    db.save();
+    res.json({ ok: true, store_id: storeId, region_restored: Boolean(restore), restored_region_id: restore, reopen_date: reopenDate });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ===== 第三方平台 =====
@@ -1148,17 +1550,7 @@ app.put('/api/platforms/:id', (req, res) => { try { const current = db.queryOne(
 app.delete('/api/platforms/:id', (req, res) => { try { db.run('DELETE FROM store_platforms WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 员工 =====
-function ageFromIdCard(value) {
-  const idCard = String(value || '').trim().toUpperCase();
-  const match = idCard.match(/^\d{6}(\d{4})(\d{2})(\d{2})\d{3}[0-9X]$/);
-  if (!match) return null;
-  const birth = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (birth.getFullYear() !== Number(match[1]) || birth.getMonth() !== Number(match[2]) - 1 || birth.getDate() !== Number(match[3])) return null;
-  const today = new Date();
-  let age = today.getFullYear() - birth.getFullYear();
-  if (today.getMonth() < birth.getMonth() || (today.getMonth() === birth.getMonth() && today.getDate() < birth.getDate())) age -= 1;
-  return age >= 0 && age <= 130 ? age : null;
-}
+const { ageFromIdCard } = require('./lib/staff-age');
 
 function validateStaffFields({ phone, id_card_number } = {}) {
   const mobile = String(phone || '').trim();
@@ -1172,12 +1564,46 @@ function validateStaffFields({ phone, id_card_number } = {}) {
   return checks[total % 11] === idCard[17] ? '' : '身份证校验码不正确';
 }
 
-function lifecycleDate(value) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : new Date().toISOString().slice(0, 10);
+function localDateString(date = new Date()) {
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
 }
-function addEmployeeLifecycleEvent(employeeId, eventType, eventDate, oldValue = '', newValue = '', note = '', source = '本地维护') {
-  db.insert(`INSERT INTO employee_lifecycle_events (employee_id,event_type,event_date,old_value,new_value,note,source)
-    VALUES (?,?,?,?,?,?,?)`, [employeeId, eventType, lifecycleDate(eventDate), String(oldValue || ''), String(newValue || ''), String(note || ''), source]);
+function lifecycleDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : localDateString();
+}
+// 入职状态只由日期推导，不允许手工选择，避免同一员工在不同页面出现相互矛盾的状态。
+function deriveEmploymentStatus(employee = {}) { return normalizeAttendanceDate(employee.leave_date) ? '离职' : '在职'; }
+function deriveOnboardingStatus(employee = {}, today = localDateString()) {
+  if (deriveEmploymentStatus(employee) === '离职') return '离职';
+  const entryDate = normalizeAttendanceDate(employee.entry_date);
+  if (!entryDate || entryDate > today) return '待入职';
+  const entry = new Date(`${entryDate}T00:00:00`);
+  const current = new Date(`${today}T00:00:00`);
+  const daysSinceEntry = Math.floor((current - entry) / 86400000);
+  if (daysSinceEntry >= 0 && daysSinceEntry < 3) return '试岗';
+  const probationDate = normalizeAttendanceDate(employee.probation_date);
+  return probationDate && today >= probationDate ? '正式员工' : '试用期';
+}
+function addEmployeeLifecycleEvent(employeeId, eventType, eventDate, oldValue = '', newValue = '', note = '', source = '本地维护', attachment = {}, details = []) {
+  return db.insert(`INSERT INTO employee_lifecycle_events (employee_id,event_type,event_date,old_value,new_value,note,source,attachment_url,attachment_name,details_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`, [employeeId, eventType, lifecycleDate(eventDate), String(oldValue || ''), String(newValue || ''), String(note || ''), source, String(attachment?.url || ''), String(attachment?.name || ''), JSON.stringify(Array.isArray(details) ? details : [])]);
+}
+const STAFF_SENSITIVE_FIELDS = {
+  salary: '工资', position: '岗位', job_level: '职级', leave_date: '离职时间',
+  store_name: '归属门店', health_certificate_expiry: '健康证失效时间',
+};
+function staffAuditValue(field, value) {
+  if (field === 'salary') return `¥${(Number(value) || 0).toFixed(2)}`;
+  return String(value || '未填写');
+}
+function changedSensitiveStaffFields(before, after) {
+  return Object.keys(STAFF_SENSITIVE_FIELDS).filter(field => {
+    if (field === 'salary') return Number(before[field]) !== Number(after[field]);
+    return String(before[field] || '') !== String(after[field] || '');
+  });
+}
+function staffAuditSource(user) {
+  return `调整人：${user?.display_name || user?.username || '系统'}`;
 }
 // C 级只保存长期、固定的薪酬标准。奖罚、扣缴、出勤和加班均为月度工资表数据，不写回员工档案。
 const SALARY_PROFILE_FIELDS = ['base_salary', 'position_allowance', 'performance_salary', 'attendance_bonus', 'housing_allowance', 'weekday_overtime_rate', 'restday_overtime_rate', 'part_time_hourly_rate'];
@@ -1198,8 +1624,22 @@ function normalizeAttendanceDate(value) {
 function splitIntoChunks(items, size = 50) {
   return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => items.slice(index * size, index * size + size));
 }
+function splitAttendanceDateRange(dateFrom, dateTo, maxDays = 7) {
+  const ranges = [];
+  let cursor = new Date(`${dateFrom}T00:00:00`);
+  const end = new Date(`${dateTo}T00:00:00`);
+  const format = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  while (cursor <= end) {
+    const rangeEnd = new Date(cursor); rangeEnd.setDate(rangeEnd.getDate() + maxDays - 1);
+    ranges.push({ dateFrom: format(cursor), dateTo: format(rangeEnd > end ? end : rangeEnd) });
+    cursor = new Date(rangeEnd); cursor.setDate(cursor.getDate() + 1);
+  }
+  return ranges;
+}
 
 function resolveStaffStoreId(storeName) {
+  const affiliation = require('./lib/staff-affiliation').resolveAffiliation(storeName, db.queryAll('SELECT id,store_name FROM stores'));
+  if (affiliation) return affiliation.store_id;
   const name = String(storeName || '').trim();
   if (!name) return null;
   const exact = db.queryOne('SELECT id FROM stores WHERE store_name=? LIMIT 1', [name])?.id;
@@ -1230,7 +1670,7 @@ app.delete('/api/employees/:id', (req, res) => { try { db.run('DELETE FROM emplo
 // GET /api/staff — 列表（分页、搜索、角色筛选）
 app.get('/api/staff', (req, res) => {
   try {
-    const { page = 1, page_size = 10, keyword, status, store_name, position, role } = req.query;
+    const { page = 1, page_size = 10, keyword, status, store_name, position, role, affiliation_type, affiliation_name } = req.query;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(page_size) || 10));
     const offset = (pageNum - 1) * pageSize;
@@ -1242,6 +1682,9 @@ app.get('/api/staff', (req, res) => {
     if (keyword) { where.push('(e.name LIKE ? OR e.phone LIKE ?)'); params.push(`%${keyword}%`, `%${keyword}%`); }
     if (status) { where.push('e.status=?'); params.push(status); }
     if (store_name) { where.push('e.store_name LIKE ?'); params.push(`%${store_name}%`); }
+    if (affiliation_name) { where.push('e.store_name=?'); params.push(affiliation_name); }
+    if (affiliation_type === 'group') { where.push(`e.store_id IS NULL AND e.store_name IN (${GROUP_NAMES.map(() => '?').join(',')})`); params.push(...GROUP_NAMES); }
+    if (affiliation_type === 'store') where.push('EXISTS (SELECT 1 FROM stores s WHERE s.id=e.store_id)');
     if (position) { where.push('e.position=?'); params.push(position); }
 
     const whereClause = where.length ? 'WHERE ' + where.join(' AND ') : '';
@@ -1257,6 +1700,21 @@ app.get('/api/staff', (req, res) => {
       [...params, pageSize, offset]
     );
 
+    list.forEach(employee => { employee.age = ageFromIdCard(employee.id_card_number) ?? (employee.age > 0 ? employee.age : null); employee.status = deriveEmploymentStatus(employee); employee.onboarding_status = deriveOnboardingStatus(employee); });
+    // 多岗位：一次性取出本页员工的全部岗位，避免逐行查询。
+    const ids = list.map(employee => Number(employee.id)).filter(Boolean);
+    if (ids.length) {
+      const rows = db.queryAll(`SELECT employee_id, position, is_primary FROM employee_positions WHERE employee_id IN (${ids.map(() => '?').join(',')}) ORDER BY is_primary DESC, sort_order, id`, ids);
+      const grouped = new Map();
+      rows.forEach(row => {
+        const bucket = grouped.get(Number(row.employee_id)) || [];
+        bucket.push({ position: row.position, is_primary: Number(row.is_primary) === 1 });
+        grouped.set(Number(row.employee_id), bucket);
+      });
+      list.forEach(employee => { employee.positions = grouped.get(Number(employee.id)) || []; });
+    } else {
+      list.forEach(employee => { employee.positions = []; });
+    }
     res.json({ ok: true, list, total, page: pageNum, page_size: pageSize });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1271,8 +1729,10 @@ app.get('/api/staff/store-managers', (req, res) => {
       LEFT JOIN store_manager_assignments assignment ON assignment.store_id=s.id
       LEFT JOIN employees manager ON manager.id=assignment.employee_id
       ORDER BY s.id`);
-    const candidates = db.queryAll(`SELECT id, name, phone, position, store_name FROM employees
-      WHERE status='在职' ORDER BY name COLLATE NOCASE, id`);
+    // 门店员工的店长层级存放在岗位字段（如实习店长、二级店长、一级店长），仅这些在职员工可被绑定。
+    const candidates = db.queryAll(`SELECT id, name, phone, position, job_level, store_name FROM employees
+      WHERE status='在职' AND TRIM(COALESCE(position,'')) LIKE '%店长%'
+      ORDER BY position COLLATE NOCASE, name COLLATE NOCASE, id`);
     res.json({ ok: true, stores, candidates });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1287,8 +1747,8 @@ app.put('/api/staff/store-managers/:storeId', (req, res) => {
       db.save();
       return res.json({ ok: true, manager: null });
     }
-    const employee = db.queryOne("SELECT id,name,phone,position FROM employees WHERE id=? AND status='在职'", [managerId]);
-    if (!employee) return res.status(400).json({ error: '请选择在职员工担任店长' });
+    const employee = db.queryOne("SELECT id,name,phone,position,job_level FROM employees WHERE id=? AND status='在职' AND TRIM(COALESCE(position,'')) LIKE '%店长%'", [managerId]);
+    if (!employee) return res.status(400).json({ error: '店长只能从岗位为实习店长、一级店长、二级店长等店长层级的在职员工中选择' });
     db.run(`INSERT INTO store_manager_assignments (store_id,employee_id,updated_at) VALUES (?,?,datetime('now','localtime'))
       ON CONFLICT(store_id) DO UPDATE SET employee_id=excluded.employee_id,updated_at=excluded.updated_at`, [storeId, managerId]);
     db.save();
@@ -1315,21 +1775,24 @@ app.get('/api/staff/stats', (req, res) => {
 // POST /api/staff — 新增员工（本地建档），并异步尝试同步到企微智能表格
 app.post('/api/staff', (req, res) => {
   try {
-    const { name, phone, dingtalk_user_id, gender, photo_url, store_name, onboarding_status, status, entry_date, position, role, hire_type, salary, probation_date, leave_date, id_card_number, id_card_front_url, id_card_back_url, bank_name, bank_branch, bank_account_name, bank_card_number, emergency_contact, emergency_phone, health_certificate_url, health_certificate_expiry, remark } = req.body || {};
+    const { name, phone, dingtalk_user_id, gender, photo_url, store_name, status, entry_date, position, job_level, role, hire_type, salary, probation_date, leave_date, id_card_number, id_card_front_url, id_card_back_url, bank_name, bank_branch, bank_account_name, bank_card_number, bank_card_front_url, bank_card_back_url, emergency_contact, emergency_phone, health_certificate_url, health_certificate_expiry, native_place, household_registration, contact_address, labor_relation, contract_start_date, contract_end_date, social_security_number, household_type, education_school, education_level, graduation_date, major, remark } = req.body || {};
     const cleanName = String(name || '').trim();
     if (!cleanName) return res.status(400).json({ error: '姓名不能为空' });
     const validationError = validateStaffFields({ phone, id_card_number });
     if (validationError) return res.status(400).json({ error: validationError });
-    const cleanStoreName = String(store_name || '').trim();
-    const storeId = resolveStaffStoreId(cleanStoreName);
+    const affiliation = require('./lib/staff-affiliation').resolveAffiliation(store_name, db.queryAll('SELECT id,store_name FROM stores'));
+    if (!affiliation) return res.status(400).json({ error: '请选择后台已有门店或集团' });
+    const cleanStoreName = affiliation.store_name;
+    const storeId = affiliation.store_id;
+    const isGroupEmployee = isGroupAffiliation(cleanStoreName);
     const calculatedAge = ageFromIdCard(id_card_number) || 0;
     const id = db.insert(
-      `INSERT INTO employees (name,phone,gender,age,store_name,manager_name,onboarding_status,status,entry_date,position,role,hire_type,salary,probation_date,leave_date,id_card_number,id_card_front_url,id_card_back_url,bank_name,bank_branch,bank_account_name,bank_card_number,emergency_contact,emergency_phone,health_certificate_url,health_certificate_expiry,remark,store_id,smartsheet_record_id)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO employees (name,phone,gender,age,store_name,manager_name,onboarding_status,status,entry_date,position,job_level,role,hire_type,salary,probation_date,leave_date,id_card_number,id_card_front_url,id_card_back_url,bank_name,bank_branch,bank_account_name,bank_card_number,bank_card_front_url,bank_card_back_url,emergency_contact,emergency_phone,health_certificate_url,health_certificate_expiry,native_place,household_registration,contact_address,labor_relation,contract_start_date,contract_end_date,social_security_number,household_type,education_school,education_level,graduation_date,major,remark,store_id,smartsheet_record_id)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [cleanName, String(phone || '').trim(), String(gender || '').trim(), calculatedAge,
-        cleanStoreName, '', String(onboarding_status || '已入职').trim(), status === '离职' ? '离职' : '在职', String(entry_date || '').trim(),
-        String(position || '').trim(), String(role || '店员').trim(), String(hire_type || '全职').trim(), Number(salary) || 0, String(probation_date || '').trim(), String(leave_date || '').trim(),
-        String(id_card_number || '').trim(), String(id_card_front_url || '').trim(), String(id_card_back_url || '').trim(), String(bank_name || '').trim(), String(bank_branch || '').trim(), String(bank_account_name || '').trim(), String(bank_card_number || '').trim(), String(emergency_contact || '').trim(), String(emergency_phone || '').trim(), String(health_certificate_url || '').trim(), String(health_certificate_expiry || '').trim(), String(remark || '').trim(), storeId, '']
+        cleanStoreName, '', deriveOnboardingStatus({ leave_date, entry_date, probation_date }), deriveEmploymentStatus({ leave_date }), String(entry_date || '').trim(),
+        String(position || '').trim(), String(job_level || '').trim(), String(role || '店员').trim(), String(hire_type || '全职').trim(), Number(salary) || 0, String(probation_date || '').trim(), String(leave_date || '').trim(),
+        String(id_card_number || '').trim(), String(id_card_front_url || '').trim(), String(id_card_back_url || '').trim(), String(bank_name || '').trim(), String(bank_branch || '').trim(), String(bank_account_name || '').trim(), String(bank_card_number || '').trim(), String(bank_card_front_url || '').trim(), String(bank_card_back_url || '').trim(), String(emergency_contact || '').trim(), String(emergency_phone || '').trim(), String(health_certificate_url || '').trim(), String(health_certificate_expiry || '').trim(), String(native_place || '').trim(), String(household_registration || '').trim(), String(contact_address || '').trim(), isGroupEmployee ? String(labor_relation || '').trim() : '', String(contract_start_date || '').trim(), String(contract_end_date || '').trim(), String(social_security_number || '').trim(), String(household_type || '').trim(), isGroupEmployee ? String(education_school || '').trim() : '', isGroupEmployee ? String(education_level || '').trim() : '', isGroupEmployee ? String(graduation_date || '').trim() : '', isGroupEmployee ? String(major || '').trim() : '', String(remark || '').trim(), storeId, '']
     );
     db.run('UPDATE employees SET photo_url=?,dingtalk_user_id=? WHERE id=?', [String(photo_url || '').trim(), String(dingtalk_user_id || '').trim(), id]);
     addEmployeeLifecycleEvent(id, '入职', entry_date, '', `${cleanName}${position ? ` · ${position}` : ''}`, '建立员工档案');
@@ -1388,10 +1851,11 @@ async function syncStaffToSmartsheet(employee, cfg) {
     '年龄': String(employee.age || ''),
     '个人照片': employee.photo_url || '',
     '归属门店': employee.store_name || '',
-    '入职状态': employee.onboarding_status || '',
+    '入职状态': deriveOnboardingStatus(employee),
     '在职状态': employee.status || '',
     '入职日期': employee.entry_date || '',
     '岗位': employee.position || '',
+    '职级': employee.job_level || '',
     '用工类型': employee.hire_type || '',
     '薪酬标准': String(employee.salary || ''),
     '转正时间': employee.probation_date || '',
@@ -1406,6 +1870,18 @@ async function syncStaffToSmartsheet(employee, cfg) {
     '紧急联系电话': employee.emergency_phone || '',
     '健康证照片': employee.health_certificate_url || '',
     '健康证失效时间': employee.health_certificate_expiry || '',
+    '籍贯': employee.native_place || '',
+    '户籍': employee.household_registration || '',
+    '联系地址': employee.contact_address || '',
+    '劳动关系隶属': isGroupAffiliation(employee.store_name) ? employee.labor_relation || '' : '',
+    '合同起始': employee.contract_start_date || '',
+    '合同截止': employee.contract_end_date || '',
+    '社保参保编号': employee.social_security_number || '',
+    '户口性质': employee.household_type || '',
+    '毕业院校': isGroupAffiliation(employee.store_name) ? employee.education_school || '' : '',
+    '学历': isGroupAffiliation(employee.store_name) ? employee.education_level || '' : '',
+    '毕业时间': isGroupAffiliation(employee.store_name) ? employee.graduation_date || '' : '',
+    '专业': isGroupAffiliation(employee.store_name) ? employee.major || '' : '',
     '备注': employee.remark || '',
   };
 
@@ -1493,9 +1969,15 @@ app.put('/api/staff/:id', async (req, res) => {
   try {
     const before = db.queryOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
     if (!before) return res.status(404).json({ error: '员工不存在' });
+    if (req.body.store_name !== undefined) {
+      const affiliation = require('./lib/staff-affiliation').resolveAffiliation(req.body.store_name, db.queryAll('SELECT id,store_name FROM stores'));
+      if (!affiliation) return res.status(400).json({ error: '请选择后台已有门店或集团' });
+      req.body.store_name = affiliation.store_name;
+      if (affiliation.store_name !== '集团') Object.assign(req.body, { education_school: '', education_level: '', graduation_date: '', major: '', labor_relation: '' });
+    }
     const validationError = validateStaffFields({ phone: req.body.phone ?? before.phone, id_card_number: req.body.id_card_number ?? before.id_card_number });
     if (validationError) return res.status(400).json({ error: validationError });
-    const fields = ['name', 'phone', 'dingtalk_user_id', 'gender', 'photo_url', 'store_name', 'onboarding_status', 'status', 'entry_date', 'position', 'remark', 'hire_type', 'salary', 'probation_date', 'leave_date', 'id_card_number', 'id_card_front_url', 'id_card_back_url', 'bank_name', 'bank_branch', 'bank_account_name', 'bank_card_number', 'emergency_contact', 'emergency_phone', 'health_certificate_url', 'health_certificate_expiry'];
+    const fields = ['name', 'phone', 'dingtalk_user_id', 'gender', 'photo_url', 'store_name', 'entry_date', 'position', 'job_level', 'remark', 'hire_type', 'salary', 'probation_date', 'leave_date', 'id_card_number', 'id_card_front_url', 'id_card_back_url', 'bank_name', 'bank_branch', 'bank_account_name', 'bank_card_number', 'bank_card_front_url', 'bank_card_back_url', 'emergency_contact', 'emergency_phone', 'health_certificate_url', 'health_certificate_expiry', 'native_place', 'household_registration', 'contact_address', 'labor_relation', 'contract_start_date', 'contract_end_date', 'social_security_number', 'household_type', 'education_school', 'education_level', 'graduation_date', 'major'];
     const sets = [];
     const params = [];
 
@@ -1505,6 +1987,30 @@ app.put('/api/staff/:id', async (req, res) => {
 
     if (req.body.store_name !== undefined) { sets.push('store_id=?'); params.push(resolveStaffStoreId(req.body.store_name)); }
     if (req.body.id_card_number !== undefined) { sets.push('age=?'); params.push(ageFromIdCard(req.body.id_card_number) || 0); }
+    const projected = { ...before, ...req.body };
+    projected.status = deriveEmploymentStatus(projected);
+    const sensitiveChanges = changedSensitiveStaffFields(before, projected);
+    const changeReason = String(req.body?.change_reason || '').trim();
+    // 多岗位：请求带 positions 时以它为准，并把主岗位写回 employees.position。
+    let positionChange = null;
+    if (req.body?.positions !== undefined) {
+      const list = normalizePositionList(req.body.positions, req.body.position ?? before.position);
+      if (list.length > EMPLOYEE_POSITION_LIMIT) return res.status(400).json({ error: `一个员工最多保留 ${EMPLOYEE_POSITION_LIMIT} 个岗位` });
+      const primary = list.find(item => item.is_primary);
+      if (primary) { req.body.position = primary.position; projected.position = primary.position; }
+      const beforeText = employeePositionText(employeePositions(before.id));
+      const afterText = employeePositionText(list);
+      if (beforeText !== afterText) positionChange = { beforeText, afterText, list, primary: primary?.position || '' };
+    }
+    const legacyAttachment = { url: String(req.body?.change_attachment_url || '').trim(), name: String(req.body?.change_attachment_name || '').trim() };
+    const rawAttachments = req.body?.change_attachments || {};
+    const attachmentFor = field => ({ url: String(rawAttachments?.[field]?.url || legacyAttachment.url || '').trim(), name: String(rawAttachments?.[field]?.name || legacyAttachment.name || '').trim() });
+    const attachmentChanges = ['position', 'probation_date', 'leave_date'].filter(field => String(before[field] || '') !== String(projected[field] || ''));
+    const missingAttachments = attachmentChanges.filter(field => !attachmentFor(field).url);
+    if (missingAttachments.length) return res.status(400).json({ error: `请分别上传${missingAttachments.map(field => ({ position: '岗位', probation_date: '转正时间', leave_date: '离职时间' }[field])).join('、')}对应的任命书、合同等附件` });
+    if (sensitiveChanges.length && !changeReason) return res.status(400).json({ error: `请填写${sensitiveChanges.map(field => STAFF_SENSITIVE_FIELDS[field]).join('、')}调整原因` });
+    sets.push('status=?'); params.push(deriveEmploymentStatus(projected));
+    sets.push('onboarding_status=?'); params.push(deriveOnboardingStatus(projected));
 
     if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' });
 
@@ -1515,17 +2021,46 @@ app.put('/api/staff/:id', async (req, res) => {
     db.save();
 
     const updated = db.queryOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
-    const eventDate = new Date().toISOString().slice(0, 10);
+    const eventDate = localDateString();
+    // 多岗位落库 + 留档（主岗位变化时由 position 敏感字段另外记录，这里只在岗位集合变化时补一条明细）
+    if (positionChange) {
+      syncEmployeePositions(updated.id, positionChange.list);
+      addEmployeeLifecycleEvent(
+        updated.id, '岗位调整', eventDate, positionChange.beforeText, positionChange.afterText,
+        `调整原因：${changeReason || '岗位增减'}｜主岗位：${positionChange.primary || '未设置'}`,
+        staffAuditSource(req.user), attachmentFor('position'),
+        [{ label: '岗位数量', old_value: String(positionChange.beforeText ? positionChange.beforeText.split(EMPLOYEE_POSITION_SEP).length : 0), new_value: String(positionChange.list.length), unit: '个' }]
+      );
+    }
     if (before.entry_date !== updated.entry_date && updated.entry_date) {
       const entryEvent = db.queryOne("SELECT id FROM employee_lifecycle_events WHERE employee_id=? AND event_type='入职' ORDER BY id LIMIT 1", [updated.id]);
       if (entryEvent) db.run("UPDATE employee_lifecycle_events SET event_date=?,new_value=?,note='入职日期校正' WHERE id=?", [updated.entry_date, `${updated.name}${updated.position ? ` · ${updated.position}` : ''}`, entryEvent.id]);
       else addEmployeeLifecycleEvent(updated.id, '入职', updated.entry_date, '', `${updated.name}${updated.position ? ` · ${updated.position}` : ''}`, '补建入职记录');
     }
-    if (before.probation_date !== updated.probation_date && updated.probation_date) addEmployeeLifecycleEvent(updated.id, '转正', updated.probation_date, before.probation_date, updated.probation_date, '转正日期变更');
-    if (before.store_name !== updated.store_name) addEmployeeLifecycleEvent(updated.id, '调岗', eventDate, before.store_name, updated.store_name, '所属门店变更');
-    if (before.position !== updated.position) addEmployeeLifecycleEvent(updated.id, '岗位变更', eventDate, before.position, updated.position, '岗位 / 晋升记录');
-    if (Number(before.salary) !== Number(updated.salary) || before.hire_type !== updated.hire_type) addEmployeeLifecycleEvent(updated.id, '工资变化', eventDate, `${before.hire_type} · ${before.salary}`, `${updated.hire_type} · ${updated.salary}`, '薪酬标准变更');
-    if (before.status !== '离职' && updated.status === '离职') addEmployeeLifecycleEvent(updated.id, '离职', updated.leave_date || eventDate, '在职', '离职', '离职状态变更');
+    // 主岗位变化时 positionChange 已记录岗位集合与主岗位，这里不再重复记一条 position 事件。
+    sensitiveChanges.filter(field => !(field === 'position' && positionChange)).forEach(field => addEmployeeLifecycleEvent(
+      updated.id, `${STAFF_SENSITIVE_FIELDS[field]}调整`, eventDate,
+      staffAuditValue(field, before[field]), staffAuditValue(field, updated[field]),
+      `调整原因：${changeReason}${field === 'salary' && Array.isArray(req.body?.salary_structure_details) && req.body.salary_structure_details.length ? '；薪资结构明细见下方' : ''}`, staffAuditSource(req.user), ['position', 'leave_date'].includes(field) ? attachmentFor(field) : {}, field === 'salary' && Array.isArray(req.body?.salary_structure_details) ? req.body.salary_structure_details : []
+    ));
+    // 材料留档：上传了材料但没有对应字段变更时，也记一条事件，避免材料被静默丢弃。
+    // 这样「材料预览」看板与生命线都能看到这份材料。
+    const auditFields = ['position', 'probation_date', 'leave_date'];
+    const recordedFields = new Set(attachmentChanges);
+    const pendingMaterials = auditFields.filter(field => !recordedFields.has(field) && attachmentFor(field).url && attachmentFor(field).name);
+    if (pendingMaterials.length) {
+      const labelOf = { position: '岗位', probation_date: '转正时间', leave_date: '离职时间' };
+      pendingMaterials.forEach(field => addEmployeeLifecycleEvent(
+        updated.id, '材料留档', eventDate, '', labelOf[field],
+        `上传了${labelOf[field]}材料${changeReason ? `；说明：${changeReason}` : ''}`,
+        staffAuditSource(req.user), attachmentFor(field),
+        [{ label: '材料类型', old_value: '', new_value: labelOf[field], unit: '' }]
+      ));
+    }
+    if (String(before.probation_date || '') !== String(updated.probation_date || '')) addEmployeeLifecycleEvent(
+      updated.id, '转正时间调整', eventDate, staffAuditValue('probation_date', before.probation_date), staffAuditValue('probation_date', updated.probation_date),
+      '已附任命书或转正材料', staffAuditSource(req.user), attachmentFor('probation_date')
+    );
     db.save();
 
     // 异步同步到企微智能表格
@@ -1539,12 +2074,287 @@ app.put('/api/staff/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 员工多岗位：同时最多 5 个岗位，其中一个为主岗位；employees.position 继续保存主岗位。
+const EMPLOYEE_POSITION_LIMIT = 5;
+function employeePositions(employeeId) {
+  return db.queryAll('SELECT position, is_primary FROM employee_positions WHERE employee_id=? ORDER BY is_primary DESC, sort_order, id', [employeeId])
+    .map(row => ({ position: row.position, is_primary: Number(row.is_primary) === 1 }));
+}
+function normalizePositionList(input, fallbackPrimary = '') {
+  const raw = Array.isArray(input) ? input : [];
+  const seen = new Set();
+  const list = [];
+  raw.forEach(item => {
+    const name = String(typeof item === 'string' ? item : item?.position || '').trim().slice(0, 40);
+    if (!name || seen.has(name)) return;
+    seen.add(name);
+    list.push({ position: name, is_primary: Boolean(typeof item === 'object' && item?.is_primary) });
+  });
+  if (!list.length) return [];
+  if (!list.some(item => item.is_primary)) {
+    const fallback = list.find(item => item.position === String(fallbackPrimary || '').trim());
+    (fallback || list[0]).is_primary = true;
+  } else if (list.filter(item => item.is_primary).length > 1) {
+    let kept = false;
+    list.forEach(item => { if (item.is_primary) { if (kept) item.is_primary = false; kept = true; } });
+  }
+  return list;
+}
+function syncEmployeePositions(employeeId, list) {
+  db.run('DELETE FROM employee_positions WHERE employee_id=?', [employeeId]);
+  list.forEach((item, index) => db.insert(
+    'INSERT INTO employee_positions (employee_id,position,is_primary,sort_order) VALUES (?,?,?,?)',
+    [employeeId, item.position, item.is_primary ? 1 : 0, index]
+  ));
+}
+// 老数据回填：employees.position 视作主岗位，缺失的补进多岗位表。
+function backfillEmployeePositions() {
+  try {
+    const filled = db.queryOne(`SELECT COUNT(*) AS n FROM employees e
+      WHERE TRIM(COALESCE(e.position,'')) <> '' AND NOT EXISTS (SELECT 1 FROM employee_positions p WHERE p.employee_id=e.id)`).n;
+    if (!filled) return 0;
+    db.queryAll(`SELECT id, position FROM employees WHERE TRIM(COALESCE(position,'')) <> ''
+      AND NOT EXISTS (SELECT 1 FROM employee_positions p WHERE p.employee_id=employees.id)`)
+      .forEach(row => db.insert('INSERT INTO employee_positions (employee_id,position,is_primary,sort_order) VALUES (?,?,1,0)', [row.id, String(row.position).trim()]));
+    db.save();
+    return Number(filled) || 0;
+  } catch (e) { console.warn('[staff] 岗位回填失败：' + e.message); return 0; }
+}
+const EMPLOYEE_POSITION_SEP = '、';
+function employeePositionText(list) {
+  if (!Array.isArray(list) || !list.length) return '';
+  const primary = list.find(item => item.is_primary);
+  return [...(primary ? [primary.position] : []), ...list.filter(item => !item.is_primary).map(item => item.position)].join(EMPLOYEE_POSITION_SEP);
+}
+
+function dispatchDates(row, period = '') {
+  let dates = [];
+  if (row.dispatch_mode === 'selected') { try { dates = JSON.parse(row.dispatch_dates_json || '[]'); } catch {} }
+  else {
+    const start = normalizeAttendanceDate(row.start_date), end = normalizeAttendanceDate(row.end_date);
+    if (start && end && start <= end) { for (let day = new Date(`${start}T00:00:00`), last = new Date(`${end}T00:00:00`); day <= last; day.setDate(day.getDate() + 1)) dates.push(localDateString(day)); }
+  }
+  dates = [...new Set(dates.map(normalizeAttendanceDate).filter(Boolean))].sort();
+  return period ? dates.filter(day => day.startsWith(`${period}-`)) : dates;
+}
+function dispatchPresentation(row, period = '') {
+  const dates = dispatchDates(row, period);
+  return { ...row, dispatch_dates: dates, support_days: dates.length, date_summary: row.dispatch_mode === 'selected' ? dates.join('、') : `${row.start_date} 至 ${row.end_date}` };
+}
+// 跨店支援不变更员工归属/岗位/薪资，只为工资表提供日期级归集依据。
+app.get('/api/staff/dispatches', (req, res) => {
+  try { const period = /^\d{4}-\d{2}$/.test(String(req.query.period || '')) ? String(req.query.period) : ''; const rows = db.queryAll(`SELECT d.*,e.name AS employee_name,e.position,e.phone FROM employee_store_dispatches d JOIN employees e ON e.id=d.employee_id WHERE d.status='有效' ORDER BY d.created_at DESC`); res.json({ ok:true, dispatches: rows.map(row => dispatchPresentation(row, period)).filter(row => !period || row.support_days) }); } catch (e) { res.status(500).json({ error:e.message }); }
+});
+app.post('/api/staff/dispatches', (req, res) => {
+  try {
+    const employee = db.queryOne('SELECT id,name,store_id,store_name,position,salary FROM employees WHERE id=?', [Number(req.body?.employee_id)]);
+    const supportStore = db.queryOne('SELECT id,store_name FROM stores WHERE id=?', [Number(req.body?.support_store_id)]);
+    if (!employee || !employee.store_id) return res.status(400).json({ error:'仅可安排已有归属门店的员工支援' });
+    if (!supportStore || Number(supportStore.id) === Number(employee.store_id)) return res.status(400).json({ error:'请选择与原归属不同的被支援门店' });
+    const dispatchMode = req.body?.dispatch_mode === 'selected' ? 'selected' : 'continuous';
+    const startDate = normalizeAttendanceDate(req.body?.start_date), endDate = normalizeAttendanceDate(req.body?.end_date);
+    const selectedDates = [...new Set((Array.isArray(req.body?.dispatch_dates) ? req.body.dispatch_dates : []).map(normalizeAttendanceDate).filter(Boolean))].sort();
+    if (dispatchMode === 'continuous' && (!startDate || !endDate || startDate > endDate)) return res.status(400).json({ error:'请填写有效的连续派遣起止日期' });
+    if (dispatchMode === 'selected' && !selectedDates.length) return res.status(400).json({ error:'请至少选择一个派遣日期' });
+    const dates = dispatchMode === 'selected' ? selectedDates : dispatchDates({ dispatch_mode:'continuous', start_date:startDate, end_date:endDate });
+    if (dates.length > 366) return res.status(400).json({ error:'单次派遣最多 366 天' });
+    // 同一员工同一天只能归集到一间实际工作门店，避免工资和经营人员重复计算。
+    const occupied = new Set();
+    db.queryAll("SELECT * FROM employee_store_dispatches WHERE employee_id=? AND status='有效'", [employee.id]).forEach(row => dispatchDates(row).forEach(day => occupied.add(day)));
+    const conflicts = dates.filter(day => occupied.has(day));
+    if (conflicts.length) return res.status(400).json({ error:`该员工在 ${conflicts.join('、')} 已有支援安排；同一天只能安排至一间门店` });
+    const reason = String(req.body?.reason || '').trim(); if (!reason) return res.status(400).json({ error:'请填写支援安排说明' });
+    const attachment = { url:String(req.body?.attachment_url || '').trim(), name:String(req.body?.attachment_name || '').trim() };
+    const id = db.insert(`INSERT INTO employee_store_dispatches (employee_id,origin_store_id,origin_store_name,support_store_id,support_store_name,dispatch_mode,start_date,end_date,dispatch_dates_json,reason,attachment_url,attachment_name,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [employee.id,employee.store_id,employee.store_name,supportStore.id,supportStore.store_name,dispatchMode,startDate,endDate,JSON.stringify(selectedDates),reason,attachment.url,attachment.name,staffAuditSource(req.user)]);
+    const created = db.queryOne('SELECT * FROM employee_store_dispatches WHERE id=?',[id]);
+    addEmployeeLifecycleEvent(employee.id,'跨店支援安排',dates[0] || localDateString(),employee.store_name,supportStore.store_name,`${dispatchMode === 'selected' ? '指定日期' : '连续派遣'}：${dates.join('、')}；说明：${reason}`,staffAuditSource(req.user),attachment,[{label:'工资归集天数',old_value:'0',new_value:String(dates.length),unit:'天'}]);
+    db.save(); res.json({ok:true,dispatch:dispatchPresentation(created)});
+  } catch(e){res.status(400).json({error:e.message});}
+});
+app.put('/api/staff/dispatches/:id', (req,res) => {
+  try { const row=db.queryOne('SELECT * FROM employee_store_dispatches WHERE id=?',[req.params.id]); if(!row)return res.status(404).json({error:'派遣记录不存在'}); if(String(req.body?.status||'') !== '已取消')return res.status(400).json({error:'仅支持取消派遣'}); db.run("UPDATE employee_store_dispatches SET status='已取消',updated_at=datetime('now','localtime') WHERE id=?",[row.id]); addEmployeeLifecycleEvent(row.employee_id,'跨店支援取消',localDateString(),row.support_store_name,row.origin_store_name,`取消原派遣：${dispatchPresentation(row).date_summary}`,staffAuditSource(req.user)); db.save();res.json({ok:true}); }catch(e){res.status(400).json({error:e.message});}
+});
+
 app.get('/api/staff/:id/lifecycle', (req, res) => {
   try {
     const employee = db.queryOne('SELECT id,name FROM employees WHERE id=?', [req.params.id]);
     if (!employee) return res.status(404).json({ error: '员工不存在' });
-    const events = db.queryAll('SELECT * FROM employee_lifecycle_events WHERE employee_id=? ORDER BY event_date ASC, id ASC', [employee.id]);
+    const events = db.queryAll('SELECT * FROM employee_lifecycle_events WHERE employee_id=? ORDER BY event_date ASC, id ASC', [employee.id]).map(event => {
+      try { event.details = JSON.parse(event.details_json || '[]'); } catch { event.details = []; }
+      return event;
+    });
     res.json({ ok: true, employee, events });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== 消息通知 =====
+// 列表与未读数在被请求时顺带做一次规则检查（内部有 1 分钟节流），保证「进入后台即生成」。
+function notificationCheck(req, options = {}) {
+  try { return notifications.runChecks(db, { config: loadConfig(), ...options }); }
+  catch (e) { console.warn('[notifications] 规则检查失败：' + e.message); return { generated: 0, details: [], error: e.message }; }
+}
+app.get('/api/notifications', (req, res) => {
+  try {
+    const check = notificationCheck(req);
+    const data = notifications.listForUser(db, req.user.id, { status: String(req.query.status || 'pending'), limit: req.query.limit });
+    res.json({ ok: true, ...data, check: { generated: check.generated, details: check.details || [] } });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/notifications/summary', (req, res) => {
+  try {
+    const check = notificationCheck(req);
+    const data = notifications.listForUser(db, req.user.id, { status: 'pending' });
+    res.json({ ok: true, pending: notifications.pendingCount(db, req.user.id), counts: data.counts, generated: check.generated });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 首次弹窗：返回还没弹过的通知，并立刻标记为已弹（每条只弹一次）。
+// 标记只写 popup_at，不影响待处理/归档状态。
+app.get('/api/notifications/popup', (req, res) => {
+  try {
+    notificationCheck(req);
+    // 单次弹窗最多列 5 条；只把「实际展示的」标记为已弹，其余留到下次加载继续弹，避免被静默吞掉。
+    const limit = Math.max(1, Math.min(20, Number(req.query.limit) || 5));
+    const items = notifications.listPopupPending(db, req.user.id, limit);
+    if (items.length) notifications.markPopupShown(db, req.user.id, items.map(item => item.id));
+    const pending = notifications.pendingCount(db, req.user.id);
+    res.json({ ok: true, notifications: items, pending, pending_unshown: Math.max(0, pending - items.length) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 通知规则响应体：规则 + 元信息 + 按类型分组的「近期节点」。
+// 规则对象里带上 label/description/date_label，前端无需再单独拼 meta。
+function notificationSettingsPayload(config) {
+  const settings = notifications.notificationSettings(config);
+  const defs = notifications.RULE_DEFS || {};
+  const rules = Object.fromEntries(Object.entries(settings.rules).map(([type, rule]) => [type, {
+    ...rule,
+    label: settings.meta[type]?.label || type,
+    description: settings.meta[type]?.description || '',
+    date_label: defs[type]?.dateLabel || '日期',
+    default_lead_days: defs[type]?.defaultLeadDays ?? 15,
+    preview_title: defs[type]?.previewTitle || '近期节点',
+  }]));
+  const upcomingByType = notifications.previewUpcomingAll(db, { config });
+  return { meta: settings.meta, rules, upcoming: upcomingByType[notifications.TYPE_PROBATION_DUE] || [], upcoming_by_type: upcomingByType };
+}
+// 设置类路由必须注册在 /:id 之前，否则 /api/notifications/settings 会被当成 id。
+// 通知设置：选择每类通知的接收人（后台账号）与提前天数。
+app.get('/api/notifications/settings', (req, res) => {
+  try {
+    const payload = notificationSettingsPayload(loadConfig());
+    const users = db.queryAll(`SELECT u.id, u.username, u.display_name, u.role, u.store_id, p.name AS position_name
+      FROM users u LEFT JOIN position_settings p ON p.id=u.position_id ORDER BY u.id`);
+    res.json({ ok: true, ...payload, users });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.put('/api/notifications/settings', (req, res) => {
+  try {
+    const incoming = req.body?.rules && typeof req.body.rules === 'object' ? req.body.rules : {};
+    const current = notifications.notificationSettings(loadConfig());
+    const nextRules = {};
+    Object.keys(current.meta).forEach(type => {
+      const item = incoming[type] || {};
+      nextRules[type] = {
+        enabled: item.enabled !== undefined ? item.enabled !== false : current.rules[type].enabled,
+        lead_days: item.lead_days !== undefined ? Math.max(0, Math.min(90, Number(item.lead_days) || 0)) : current.rules[type].lead_days,
+        user_ids: [...new Set((Array.isArray(item.user_ids) ? item.user_ids : current.rules[type].user_ids).map(Number).filter(id => Number.isInteger(id) && id > 0))],
+      };
+    });
+    const config = loadConfig();
+    config.notifications = { ...(config.notifications || {}), rules: nextRules };
+    saveConfig(config);
+    res.json({ ok: true, ...notificationSettingsPayload(config) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 手动创建通知：人选人、可多选接收者、可把通知时间精确到分钟。
+// 到点前收件人看不到（listForUser / popup 都按 publish_at 过滤）。
+app.post('/api/notifications/create', (req, res) => {
+  try {
+    const title = String(req.body?.title || '').trim();
+    if (!title) return res.status(400).json({ error: '请填写通知标题' });
+    const userIds = [...new Set((Array.isArray(req.body?.user_ids) ? req.body.user_ids : []).map(Number).filter(id => Number.isInteger(id) && id > 0))];
+    if (!userIds.length) return res.status(400).json({ error: '请至少选择一位接收人' });
+    const existing = db.queryAll(`SELECT id FROM users WHERE id IN (${userIds.map(() => '?').join(',')})`, userIds).map(row => Number(row.id));
+    const missing = userIds.filter(id => !existing.includes(id));
+    if (missing.length) return res.status(400).json({ error: `接收人不存在：${missing.join('、')}` });
+    // 通知时间：允许 YYYY-MM-DD HH:mm；留空表示立即生效
+    const rawPublish = String(req.body?.publish_at || '').trim().replace('T', ' ');
+    let publishAt = '';
+    if (rawPublish) {
+      if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(rawPublish)) return res.status(400).json({ error: '通知时间格式应为 YYYY-MM-DD HH:mm' });
+      publishAt = rawPublish;
+    }
+    const content = String(req.body?.content || '').trim();
+    const created = notifications.createNotification(db, {
+      type: 'manual', kind: req.body?.kind === 'task' ? 'task' : 'notice', source: 'manual',
+      title, content, userIds, createdBy: req.user.id, publishAt,
+      dedupeKey: '', payload: { manual: true, publish_at: publishAt },
+    });
+    if (!created) return res.status(400).json({ error: '创建失败：请检查接收人' });
+    const scheduled = Boolean(publishAt) && publishAt > notifications.localMinute();
+    res.json({
+      ok: true, notification_id: created.id, recipients: created.recipients,
+      publish_at: publishAt, scheduled,
+      message: scheduled ? `已安排在 ${publishAt} 通知 ${created.recipients} 人` : `已通知 ${created.recipients} 人`,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 我创建的通知（含未到时间的），用于核对与查看接收人状态
+app.get('/api/notifications/created', (req, res) => {
+  try {
+    res.json({ ok: true, notifications: notifications.listCreatedBy(db, req.user.id), now: notifications.localSecond() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 撤回：仅限「定时未发布」的通知（已到点、或任一收件人已读/已处理，都不允许）
+app.delete('/api/notifications/created/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '通知编号不正确' });
+    const result = notifications.withdrawNotification(db, req.user.id, id);
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json({ ok: true, message: `已撤回：${result.title}` });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 修改：同为定时未发布的通知，可改标题/内容/通知时间（收件人不变，改人请撤回后重建）
+app.put('/api/notifications/created/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: '通知编号不正确' });
+    const result = notifications.updateManualNotification(db, req.user.id, id, {
+      title: req.body?.title, content: req.body?.content, publish_at: req.body?.publish_at,
+    });
+    if (!result.ok) return res.status(400).json({ error: result.error });
+    res.json({ ok: true, publish_at: result.publish_at, message: '已保存修改' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 手动触发一次检查（设置保存后立刻验证是否有到期提醒）。
+app.post('/api/notifications/check', (req, res) => {
+  try {
+    const check = notificationCheck(req, { force: true });
+    const data = notifications.listForUser(db, req.user.id, { status: 'pending' });
+    res.json({ ok: true, generated: check.generated, details: check.details || [], today: check.today, ...data });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 测试通知：确认推送链路与角标是否正常（发给当前账号）。
+app.post('/api/notifications/test', (req, res) => {
+  try {
+    const created = notifications.createNotification(db, {
+      type: 'system_test', title: '测试通知：消息通知已启用',
+      content: `这是一条测试通知，由 ${req.user.display_name || req.user.username} 于 ${new Date().toLocaleString('zh-CN', { hour12: false })} 触发。可以点「确定」归档，或点「稍后处理」留待后续查看。`,
+      dedupeKey: `system_test:${req.user.id}:${Date.now()}`, userIds: [req.user.id], createdBy: req.user.id,
+    });
+    res.json({ ok: true, notification_id: created?.id || null, pending: notifications.pendingCount(db, req.user.id) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 状态流转放在最后注册，避免吃掉上面的具体路径（settings / summary / check / test）。
+app.put('/api/notifications/:id', (req, res) => {
+  try {
+    const notificationId = Number(req.params.id);
+    if (!Number.isInteger(notificationId) || notificationId <= 0) return res.status(400).json({ error: '通知编号不正确' });
+    const action = String(req.body?.action || '');
+    const result = notifications.updateStatus(db, req.user.id, notificationId, action);
+    if (!result.ok) return res.status(404).json({ error: result.error });
+    const data = notifications.listForUser(db, req.user.id, { status: String(req.body?.status || 'pending') });
+    res.json({ ok: true, ...data });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1563,6 +2373,10 @@ app.put('/api/staff/:id/salary-profile', (req, res) => {
     const employee = db.queryOne('SELECT id,hire_type,salary FROM employees WHERE id=?', [req.params.id]);
     if (!employee) return res.status(404).json({ error: '员工不存在' });
     const profile = normalizeSalaryProfile(req.body || {});
+    const previousProfile = db.queryOne('SELECT * FROM employee_salary_profiles WHERE employee_id=?', [employee.id]) || normalizeSalaryProfile();
+    const structureChanged = SALARY_PROFILE_FIELDS.some(field => Number(previousProfile[field]) !== Number(profile[field]));
+    const changeReason = String(req.body?.change_reason || '').trim();
+    if (structureChanged && !changeReason) return res.status(400).json({ error: '请填写工资调整原因' });
     const columns = SALARY_PROFILE_FIELDS.join(',');
     const placeholders = SALARY_PROFILE_FIELDS.map(() => '?').join(',');
     const updates = SALARY_PROFILE_FIELDS.map(field => `${field}=excluded.${field}`).join(',');
@@ -1571,22 +2385,44 @@ app.put('/api/staff/:id/salary-profile', (req, res) => {
     const salary = standardSalaryFromProfile(profile, employee.hire_type);
     if (Number(employee.salary) !== salary) {
       db.run("UPDATE employees SET salary=?,updated_at=datetime('now','localtime') WHERE id=?", [salary, employee.id]);
-      addEmployeeLifecycleEvent(employee.id, '工资变化', new Date().toISOString().slice(0, 10), `${employee.hire_type} · ${employee.salary}`, `${employee.hire_type} · ${salary}`, '薪酬构成更新');
+    }
+    if (structureChanged) {
+      const salaryLabels = { base_salary: '基础工资', position_allowance: '岗位补贴', performance_salary: '绩效工资', attendance_bonus: '全勤奖', housing_allowance: '房补', weekday_overtime_rate: '工作日加班工价', restday_overtime_rate: '休息日加班工价', part_time_hourly_rate: '兼职时薪' };
+      const details = SALARY_PROFILE_FIELDS.filter(field => Number(previousProfile[field]) !== Number(profile[field])).map(field => ({ label: salaryLabels[field], old_value: Number(previousProfile[field]) || 0, new_value: Number(profile[field]) || 0, unit: field.includes('rate') || field === 'part_time_hourly_rate' ? '元/时' : '元/月' }));
+      const oldTotal = Number(employee.salary) || 0;
+      const eventType = oldTotal === salary ? '薪资结构调整（标准工资不变）' : '薪资结构调整（含工资变动）';
+      addEmployeeLifecycleEvent(employee.id, eventType, localDateString(),
+        `¥${oldTotal.toFixed(2)}`, `¥${salary.toFixed(2)}`,
+        `调整原因：${changeReason}；以下为薪资构成变更明细`, staffAuditSource(req.user), {}, details);
     }
     db.save();
     res.json({ ok: true, profile, standard_salary: salary });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-const PAYROLL_EDITABLE_NUMBERS = ['scheduled_days', 'personal_leave', 'sick_leave', 'join_leave', 'support_days', 'annual_leave', 'weekday_overtime_hours', 'restday_overtime_hours', 'part_time_hours', 'base_salary', 'position_allowance', 'performance_salary', 'attendance_bonus', 'housing_allowance', 'part_time_hourly_rate', 'weekday_overtime_rate', 'restday_overtime_rate', 'reward', 'penalty', 'late_early_deduction', 'other_deduction', 'social_insurance', 'income_tax', 'utilities_fee', 'uniform_deposit'];
+function payrollMonthSetting(period, fallback = 26) {
+  const saved = db.queryOne('SELECT scheduled_days FROM payroll_month_settings WHERE period=?', [period]);
+  return Math.max(1, Math.min(31, payrollNumber(saved?.scheduled_days) || payrollNumber(fallback) || 26));
+}
+function upsertPayrollMonthSetting(period, scheduledDays, user) {
+  const days = Math.max(1, Math.min(31, payrollNumber(scheduledDays) || 26));
+  db.run(`INSERT INTO payroll_month_settings (period,scheduled_days,updated_by,updated_at) VALUES (?,?,?,datetime('now','localtime'))
+    ON CONFLICT(period) DO UPDATE SET scheduled_days=excluded.scheduled_days,updated_by=excluded.updated_by,updated_at=datetime('now','localtime')`, [period, days, staffAuditSource(user)]);
+  // 同月已有的各门店工资表同步更新分母；工资构成和月度手工项不被改动。
+  db.run("UPDATE payroll_sheets SET scheduled_days=?,updated_at=datetime('now','localtime') WHERE period=?", [days, period]);
+  return days;
+}
+
+const PAYROLL_EDITABLE_NUMBERS = ['scheduled_days', 'payroll_base_days', 'dispatch_out_days', 'personal_leave', 'sick_leave', 'join_leave', 'support_days', 'annual_leave', 'weekday_overtime_hours', 'restday_overtime_hours', 'part_time_hours', 'base_salary', 'position_allowance', 'performance_salary', 'attendance_bonus', 'housing_allowance', 'part_time_hourly_rate', 'weekday_overtime_rate', 'restday_overtime_rate', 'reward', 'penalty', 'late_early_deduction', 'other_deduction', 'social_insurance', 'income_tax', 'utilities_fee', 'uniform_deposit'];
 function payrollNumber(value) { return Math.max(0, Number(value) || 0); }
 function formatPayrollRow(input = {}, scheduledDays = 26) {
   const row = { ...input };
   PAYROLL_EDITABLE_NUMBERS.forEach(field => { row[field] = payrollNumber(row[field]); });
-  row.scheduled_days = row.scheduled_days || payrollNumber(scheduledDays) || 26;
-  row.actual_days = Math.max(0, row.scheduled_days - row.personal_leave - row.sick_leave - row.join_leave + row.support_days + row.annual_leave);
+  row.scheduled_days = payrollNumber(row.scheduled_days);
+  row.payroll_base_days = payrollNumber(row.payroll_base_days) || payrollNumber(scheduledDays) || 26;
+  row.actual_days = Math.max(0, row.scheduled_days - row.personal_leave - row.sick_leave - row.join_leave - row.dispatch_out_days + row.support_days + row.annual_leave);
   row.standard_salary = row.hire_type === '兼职' ? row.part_time_hourly_rate : row.base_salary + row.position_allowance + row.performance_salary + row.attendance_bonus + row.housing_allowance;
-  const ratio = row.hire_type === '兼职' ? 0 : row.actual_days / row.scheduled_days;
+  const ratio = row.hire_type === '兼职' ? 0 : row.actual_days / row.payroll_base_days;
   row.actual_base_salary = row.base_salary * ratio;
   row.actual_position_allowance = row.position_allowance * ratio;
   row.actual_performance_salary = row.performance_salary * ratio;
@@ -1598,7 +2434,7 @@ function formatPayrollRow(input = {}, scheduledDays = 26) {
   return row;
 }
 function readPayrollSheet(sheet) {
-  const items = db.queryAll('SELECT id,employee_id,sort_order,data FROM payroll_sheet_items WHERE sheet_id=? ORDER BY sort_order,id', [sheet.id]).map(item => ({ id: item.id, employee_id: item.employee_id, ...formatPayrollRow(JSON.parse(item.data || '{}'), sheet.scheduled_days) }));
+  const items = db.queryAll('SELECT id,employee_id,sort_order,data FROM payroll_sheet_items WHERE sheet_id=? ORDER BY sort_order,id', [sheet.id]).map(item => ({ id: item.id, employee_id: item.employee_id, ...formatPayrollRow({ ...JSON.parse(item.data || '{}'), payroll_base_days: sheet.scheduled_days }, sheet.scheduled_days) }));
   return { ...sheet, items };
 }
 function payrollTemplateRows(storeName, period, scheduledDays) {
@@ -1610,18 +2446,40 @@ function payrollTemplateRows(storeName, period, scheduledDays) {
     FROM employees e LEFT JOIN employee_salary_profiles p ON p.employee_id=e.id
     WHERE (COALESCE(e.entry_date,'')='' OR e.entry_date<=?) AND (e.status!='离职' OR COALESCE(e.leave_date,'')='' OR e.leave_date>=?) ORDER BY e.position,e.name`, [endDate, startDate]);
   const normalized = normalizeStoreName(storeName);
-  const employees = allEmployees.filter(employee => Number(employee.store_id) === Number(store?.id) || storeSimilarity(normalized, normalizeStoreName(employee.store_name)) <= 1);
-  // 仅对唯一近似匹配（例如“京基/景基”一字录入差异）归正门店关联，后续任何模块均按门店 ID 精确取数。
-  if (store) employees.filter(employee => Number(employee.store_id) !== Number(store.id) || employee.store_name !== storeName).forEach(employee => db.run("UPDATE employees SET store_id=?,store_name=?,updated_at=datetime('now','localtime') WHERE id=?", [store.id, storeName, employee.id]));
-  return employees.map((employee, index) => formatPayrollRow({
+  const homeEmployees = allEmployees.filter(employee => Number(employee.store_id) === Number(store?.id) || storeSimilarity(normalized, normalizeStoreName(employee.store_name)) <= 1);
+  if (store) homeEmployees.filter(employee => Number(employee.store_id) !== Number(store.id) || employee.store_name !== storeName).forEach(employee => db.run("UPDATE employees SET store_id=?,store_name=?,updated_at=datetime('now','localtime') WHERE id=?", [store.id, storeName, employee.id]));
+  const dispatches = db.queryAll("SELECT * FROM employee_store_dispatches WHERE status='有效'").map(row => dispatchPresentation(row, period)).filter(row => row.support_days);
+  const dispatchOut = new Map(), dispatchIn = new Map();
+  dispatches.forEach(row => {
+    if (Number(row.origin_store_id) === Number(store?.id)) dispatchOut.set(Number(row.employee_id), (dispatchOut.get(Number(row.employee_id)) || 0) + row.support_days);
+    if (Number(row.support_store_id) === Number(store?.id)) {
+      const existing = dispatchIn.get(Number(row.employee_id)) || { ...row, support_days: 0, dispatch_dates: [] };
+      existing.support_days += row.support_days;
+      existing.dispatch_dates.push(...row.dispatch_dates);
+      dispatchIn.set(Number(row.employee_id), existing);
+    }
+  });
+  const makeRow = (employee, index, overrides = {}) => formatPayrollRow({
     employee_id: employee.id, sort_order: index, name: employee.name, position: employee.position || '', entry_date: employee.entry_date || '', hire_type: employee.hire_type || '全职', phone: employee.phone || '', bank_card_number: employee.bank_card_number || '', bank_name: [employee.bank_name, employee.bank_branch].filter(Boolean).join(' '), id_card_number: employee.id_card_number || '',
-    scheduled_days: scheduledDays, base_salary: Number(employee.base_salary) || (employee.hire_type === '兼职' ? 0 : Number(employee.salary) || 0), position_allowance: employee.position_allowance, performance_salary: employee.performance_salary, attendance_bonus: employee.attendance_bonus, housing_allowance: employee.housing_allowance, weekday_overtime_rate: employee.weekday_overtime_rate, restday_overtime_rate: employee.restday_overtime_rate, part_time_hourly_rate: Number(employee.part_time_hourly_rate) || (employee.hire_type === '兼职' ? Number(employee.salary) || 0 : 0),
-  }, scheduledDays));
+    scheduled_days: scheduledDays, payroll_base_days: scheduledDays, dispatch_out_days: 0, support_days: 0,
+    base_salary: Number(employee.base_salary) || (employee.hire_type === '兼职' ? 0 : Number(employee.salary) || 0), position_allowance: employee.position_allowance, performance_salary: employee.performance_salary, attendance_bonus: employee.attendance_bonus, housing_allowance: employee.housing_allowance, weekday_overtime_rate: employee.weekday_overtime_rate, restday_overtime_rate: employee.restday_overtime_rate, part_time_hourly_rate: Number(employee.part_time_hourly_rate) || (employee.hire_type === '兼职' ? Number(employee.salary) || 0 : 0),
+    ...overrides,
+  }, scheduledDays);
+  const rows = homeEmployees.map((employee, index) => makeRow(employee, index, { dispatch_out_days: dispatchOut.get(Number(employee.id)) || 0 }));
+  const existing = new Set(rows.map(row => Number(row.employee_id)));
+  [...dispatchIn.values()].forEach((dispatch, index) => {
+    // 被支援门店只承担其实际支援日期的工资份额；原门店行已扣除同样天数。
+    if (existing.has(Number(dispatch.employee_id))) return;
+    const employee = allEmployees.find(item => Number(item.id) === Number(dispatch.employee_id));
+    if (!employee) return;
+    rows.push(makeRow(employee, rows.length + index, { scheduled_days: 0, payroll_base_days: scheduledDays, support_days: dispatch.support_days, dispatch_origin_store_name: dispatch.origin_store_name, dispatch_dates: [...new Set(dispatch.dispatch_dates)].sort(), is_dispatch_support: true }));
+  });
+  return rows;
 }
 function payrollWorkbook(sheet) {
-  const headers = ['序号','姓名','职务','入职日期','用工类型','应出勤','事假','病假','入/离职缺勤','跨店支援','年假','实际出勤','工作日加班','休息日加班','基本工资','岗位补贴','绩效工资','全勤奖','房补','标准工资','兼职小时','统一时薪','兼职工资','奖励','罚款','迟到早退','其他扣款','应发工资','社保','个税','水电','工衣押金','实发工资','银行卡号','开户行','身份证号','手机号'];
+  const headers = ['序号','姓名','职务','入职日期','用工类型','应出勤','事假','病假','入/离职缺勤','派出天数','跨店支援','年假','实际出勤','工作日加班','休息日加班','基本工资','岗位补贴','绩效工资','全勤奖','房补','标准工资','兼职小时','统一时薪','兼职工资','奖励','罚款','迟到早退','其他扣款','应发工资','社保','个税','水电','工衣押金','实发工资','银行卡号','开户行','身份证号','手机号'];
   const rows = [[`${sheet.store_name} ${sheet.period} 工资表`], headers];
-  sheet.items.forEach((row, index) => rows.push([index + 1,row.name,row.position,row.entry_date,row.hire_type,row.scheduled_days,row.personal_leave,row.sick_leave,row.join_leave,row.support_days,row.annual_leave,row.actual_days,row.weekday_overtime_hours,row.restday_overtime_hours,row.base_salary,row.position_allowance,row.performance_salary,row.attendance_bonus,row.housing_allowance,row.standard_salary,row.part_time_hours,row.part_time_hourly_rate,row.part_time_salary,row.reward,row.penalty,row.late_early_deduction,row.other_deduction,row.gross_salary,row.social_insurance,row.income_tax,row.utilities_fee,row.uniform_deposit,row.net_salary,row.bank_card_number,row.bank_name,row.id_card_number,row.phone]));
+  sheet.items.forEach((row, index) => rows.push([index + 1,row.name,row.position,row.entry_date,row.hire_type,row.scheduled_days,row.personal_leave,row.sick_leave,row.join_leave,row.dispatch_out_days,row.support_days,row.annual_leave,row.actual_days,row.weekday_overtime_hours,row.restday_overtime_hours,row.base_salary,row.position_allowance,row.performance_salary,row.attendance_bonus,row.housing_allowance,row.standard_salary,row.part_time_hours,row.part_time_hourly_rate,row.part_time_salary,row.reward,row.penalty,row.late_early_deduction,row.other_deduction,row.gross_salary,row.social_insurance,row.income_tax,row.utilities_fee,row.uniform_deposit,row.net_salary,row.bank_card_number,row.bank_name,row.id_card_number,row.phone]));
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!merges'] = [{ s:{ r:0,c:0 }, e:{ r:0,c:headers.length - 1 } }]; ws['!cols'] = headers.map((header, index) => ({ wch: index === 1 || index >= 33 ? 18 : 12 })); ws['!autofilter'] = { ref: `A2:AK${Math.max(2, rows.length)}` };
   ws.A1.s = { font: { bold:true, sz:16, color:{ rgb:'25476F' } }, alignment:{ horizontal:'center' } };
@@ -1629,15 +2487,35 @@ function payrollWorkbook(sheet) {
   const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, ws, '工资表'); workbook.Workbook = { CalcPr:{fullCalcOnLoad:true,forceFullCalc:true,calcMode:'auto'} }; return workbook;
 }
 
+app.get('/api/payroll-month-settings/:period', (req, res) => {
+  try {
+    const period = String(req.params.period || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(period)) return res.status(400).json({ error:'请选择正确月份' });
+    const row = db.queryOne('SELECT * FROM payroll_month_settings WHERE period=?', [period]);
+    res.json({ ok:true, setting: { period, scheduled_days: payrollMonthSetting(period), updated_at: row?.updated_at || '', updated_by: row?.updated_by || '' } });
+  } catch (e) { res.status(500).json({ error:e.message }); }
+});
+app.put('/api/payroll-month-settings/:period', (req, res) => {
+  try {
+    const period = String(req.params.period || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(period)) return res.status(400).json({ error:'请选择正确月份' });
+    const scheduledDays = upsertPayrollMonthSetting(period, req.body?.scheduled_days, req.user); db.save();
+    res.json({ ok:true, setting: { period, scheduled_days: scheduledDays } });
+  } catch (e) { res.status(400).json({ error:e.message }); }
+});
 app.get('/api/payroll-sheets', (req, res) => { try { res.json({ ok:true, sheets: db.queryAll(`SELECT s.*,COUNT(i.id) AS employee_count FROM payroll_sheets s LEFT JOIN payroll_sheet_items i ON i.sheet_id=s.id GROUP BY s.id ORDER BY s.period DESC,s.updated_at DESC`) }); } catch (e) { res.status(500).json({ error:e.message }); } });
 app.post('/api/payroll-sheets/prepare', (req, res) => {
   try {
-    const storeName = String(req.body?.store_name || '').trim(), period = String(req.body?.period || '').trim(), scheduledDays = Math.max(1, Math.min(31, payrollNumber(req.body?.scheduled_days) || 26));
+    const storeName = String(req.body?.store_name || '').trim(), period = String(req.body?.period || '').trim();
     if (!storeName || !/^\d{4}-\d{2}$/.test(period)) return res.status(400).json({ error:'请选择门店和工资月份' });
+    const scheduledDays = payrollMonthSetting(period, req.body?.scheduled_days);
     let sheet = db.queryOne('SELECT * FROM payroll_sheets WHERE store_name=? AND period=?', [storeName, period]);
     if (!sheet) {
       const id = db.insert("INSERT INTO payroll_sheets (store_name,period,scheduled_days,status) VALUES (?,?,?,'草稿')", [storeName,period,scheduledDays]);
       sheet = db.queryOne('SELECT * FROM payroll_sheets WHERE id=?', [id]);
+    } else if (Number(sheet.scheduled_days) !== Number(scheduledDays)) {
+      db.run("UPDATE payroll_sheets SET scheduled_days=?,updated_at=datetime('now','localtime') WHERE id=?", [scheduledDays, sheet.id]);
+      sheet = db.queryOne('SELECT * FROM payroll_sheets WHERE id=?', [sheet.id]);
     }
     // 已生成过的空白草稿也要能补入后来纠正了门店归属的员工；已有行保持其当月手工填写内容不变。
     const templateRows = payrollTemplateRows(storeName, period, sheet.scheduled_days);
@@ -1652,7 +2530,7 @@ app.get('/api/payroll-sheets/:id', (req, res) => { try { const sheet=db.queryOne
 app.put('/api/payroll-sheets/:id', (req, res) => {
   try {
     const sheet=db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[req.params.id]); if(!sheet) return res.status(404).json({error:'工资表不存在'});
-    const scheduledDays=Math.max(1,Math.min(31,payrollNumber(req.body?.scheduled_days)||sheet.scheduled_days)); const items=Array.isArray(req.body?.items)?req.body.items:[];
+    const scheduledDays=payrollMonthSetting(sheet.period, sheet.scheduled_days); const items=Array.isArray(req.body?.items)?req.body.items:[];
     db.run("UPDATE payroll_sheets SET scheduled_days=?,status='已保存',updated_at=datetime('now','localtime') WHERE id=?",[scheduledDays,sheet.id]);
     items.forEach((item,index)=>{ const data=formatPayrollRow(item,scheduledDays); const employeeId=Number(item.employee_id)||null; if(item.id) db.run("UPDATE payroll_sheet_items SET sort_order=?,data=?,updated_at=datetime('now','localtime') WHERE id=? AND sheet_id=?",[index,JSON.stringify(data),item.id,sheet.id]); else db.insert("INSERT INTO payroll_sheet_items (sheet_id,employee_id,sort_order,data) VALUES (?,?,?,?)",[sheet.id,employeeId,index,JSON.stringify(data)]); });
     db.save(); res.json({ok:true,sheet:readPayrollSheet(db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[sheet.id]))});
@@ -1673,7 +2551,7 @@ app.post('/api/staff/payroll-sheet', (req, res) => {
       p.weekday_overtime_rate,p.restday_overtime_rate,p.part_time_hourly_rate
       FROM employees e LEFT JOIN employee_salary_profiles p ON p.employee_id=e.id
       WHERE e.store_name=? AND e.status!='离职' AND (COALESCE(e.entry_date,'')='' OR e.entry_date<=?) ORDER BY e.position,e.name`, [storeName, endOfMonth]);
-    const headers = ['序号','姓名','职务','入职日期','应出勤天数','事假','病假','入/离职缺勤','跨店支援','年假','实际出勤天数','工作日加班时长','休息日加班时长','基本工资','岗位补贴','绩效工资','全勤奖','房租补贴','标准工资','实际基本工资','工作日加班工资','休息日加班工资','实际岗位补贴','实际绩效工资','实际全勤奖','实际房租补贴','兼职小时数','兼职工价','兼职工资','奖励','罚款','迟到/早退','其他扣款','应发工资','社保','个人所得税','水电费','工衣押金','实发工资','银行帐号','开户行','身份证号','电话号码'];
+    const headers = ['序号','姓名','职务','入职日期','应出勤天数','事假','病假','入/离职缺勤','派出天数','跨店支援','年假','实际出勤天数','工作日加班时长','休息日加班时长','基本工资','岗位补贴','绩效工资','全勤奖','房租补贴','标准工资','实际基本工资','工作日加班工资','休息日加班工资','实际岗位补贴','实际绩效工资','实际全勤奖','实际房租补贴','兼职小时数','兼职工价','兼职工资','奖励','罚款','迟到/早退','其他扣款','应发工资','社保','个人所得税','水电费','工衣押金','实发工资','银行帐号','开户行','身份证号','电话号码'];
     const title = `${storeName}${month}工资表`;
     const rows = [[title], headers];
     const number = value => Number(value) || 0;
@@ -1727,38 +2605,55 @@ app.get('/api/staff/dingtalk/status', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 考勤同步核心：端点与每日自动同步共用同一段逻辑，避免两套实现漂移。
+// 幂等：dingtalk_attendance_records 上有 (dingtalk_user_id, check_time, check_type) 唯一键，
+// 重复跑同一天只会更新 synced_at，不会产生重复打卡。
+async function runDingTalkAttendanceSync({ dateFrom, dateTo, employeeIds = [] }) {
+  const from = normalizeAttendanceDate(dateFrom);
+  const to = normalizeAttendanceDate(dateTo) || from;
+  if (!from) throw new Error('请提供同步开始日期');
+  if (to < from) throw new Error('结束日期不能早于开始日期');
+  const days = Math.round((new Date(`${to}T00:00:00`) - new Date(`${from}T00:00:00`)) / 86400000) + 1;
+  if (days > 31) throw new Error('单次最多同步 31 天，请分段同步');
+  const requestedEmployeeIds = [...new Set((Array.isArray(employeeIds) ? employeeIds : [])
+    .map(Number).filter(id => Number.isInteger(id) && id > 0))];
+  const selectionClause = requestedEmployeeIds.length ? ` AND id IN (${requestedEmployeeIds.map(() => '?').join(',')})` : '';
+  const mapped = db.queryAll(`SELECT id,name,dingtalk_user_id FROM employees WHERE TRIM(COALESCE(dingtalk_user_id,''))!=''${selectionClause}`, requestedEmployeeIds);
+  if (!mapped.length) throw new Error(requestedEmployeeIds.length ? '选中的员工尚未绑定钉钉员工 ID' : '暂无已绑定钉钉员工 ID 的员工，请先在员工档案基础信息中填写钉钉员工 ID');
+  const byDingTalkId = new Map(mapped.map(employee => [employee.dingtalk_user_id, employee]));
+  const records = [];
+  // 钉钉 attendance/listRecord 单次查询窗口较短；按 7 天拆分后合并入库。
+  for (const range of splitAttendanceDateRange(from, to, 7)) {
+    for (const ids of splitIntoChunks(mapped.map(item => item.dingtalk_user_id))) {
+      records.push(...await dingtalkAttendance.fetchAttendance({ userIds: ids, dateFrom: range.dateFrom, dateTo: range.dateTo }));
+    }
+  }
+  let matchedCount = 0;
+  let unmatchedCount = 0;
+  for (const record of records) {
+    const employee = byDingTalkId.get(record.dingtalkUserId);
+    if (employee) matchedCount += 1; else unmatchedCount += 1;
+    db.run(`INSERT INTO dingtalk_attendance_records
+      (employee_id,dingtalk_user_id,work_date,check_time,check_type,time_result,location_result,source_data,synced_at)
+      VALUES (?,?,?,?,?,?,?,?,datetime('now','localtime'))
+      ON CONFLICT(dingtalk_user_id,check_time,check_type) DO UPDATE SET
+        employee_id=excluded.employee_id,work_date=excluded.work_date,time_result=excluded.time_result,
+        location_result=excluded.location_result,source_data=excluded.source_data,synced_at=excluded.synced_at`,
+      [employee?.id || null, record.dingtalkUserId, record.workDate, record.checkTime, record.checkType, record.timeResult, record.locationResult, JSON.stringify(record.raw)]);
+  }
+  const message = `已同步 ${mapped.length} 名员工的 ${records.length} 条打卡记录，已匹配 ${matchedCount} 条`;
+  db.insert('INSERT INTO dingtalk_attendance_sync_runs (date_from,date_to,status,record_count,matched_count,unmatched_count,message) VALUES (?,?,?,?,?,?,?)', [from, to, 'success', records.length, matchedCount, unmatchedCount, message]);
+  db.save();
+  return { date_from: from, date_to: to, employee_count: mapped.length, record_count: records.length, matched_count: matchedCount, unmatched_count: unmatchedCount, message };
+}
+
 // 只在管理员主动点击“同步”后访问钉钉。默认同步单天，以免意外拉取大范围个人考勤数据。
 app.post('/api/staff/dingtalk/sync', async (req, res) => {
   const dateFrom = normalizeAttendanceDate(req.body?.date_from) || new Date().toISOString().slice(0, 10);
   const dateTo = normalizeAttendanceDate(req.body?.date_to) || dateFrom;
-  if (dateTo < dateFrom) return res.status(400).json({ error: '结束日期不能早于开始日期' });
-  const days = Math.round((new Date(`${dateTo}T00:00:00`) - new Date(`${dateFrom}T00:00:00`)) / 86400000) + 1;
-  if (days > 31) return res.status(400).json({ error: '单次最多同步 31 天，请分段同步' });
   try {
-    const mapped = db.queryAll("SELECT id,name,dingtalk_user_id FROM employees WHERE TRIM(COALESCE(dingtalk_user_id,''))!=''");
-    if (!mapped.length) return res.status(400).json({ error: '暂无已绑定钉钉员工 ID 的员工，请先在员工档案 A 级资料中填写钉钉员工 ID' });
-    const byDingTalkId = new Map(mapped.map(employee => [employee.dingtalk_user_id, employee]));
-    const records = [];
-    for (const ids of splitIntoChunks(mapped.map(item => item.dingtalk_user_id))) {
-      records.push(...await dingtalkAttendance.fetchAttendance({ userIds: ids, dateFrom, dateTo }));
-    }
-    let matchedCount = 0;
-    let unmatchedCount = 0;
-    for (const record of records) {
-      const employee = byDingTalkId.get(record.dingtalkUserId);
-      if (employee) matchedCount += 1; else unmatchedCount += 1;
-      db.run(`INSERT INTO dingtalk_attendance_records
-        (employee_id,dingtalk_user_id,work_date,check_time,check_type,time_result,location_result,source_data,synced_at)
-        VALUES (?,?,?,?,?,?,?,?,datetime('now','localtime'))
-        ON CONFLICT(dingtalk_user_id,check_time,check_type) DO UPDATE SET
-          employee_id=excluded.employee_id,work_date=excluded.work_date,time_result=excluded.time_result,
-          location_result=excluded.location_result,source_data=excluded.source_data,synced_at=excluded.synced_at`,
-        [employee?.id || null, record.dingtalkUserId, record.workDate, record.checkTime, record.checkType, record.timeResult, record.locationResult, JSON.stringify(record.raw)]);
-    }
-    const message = `已同步 ${records.length} 条打卡记录，已匹配 ${matchedCount} 条`;
-    db.insert('INSERT INTO dingtalk_attendance_sync_runs (date_from,date_to,status,record_count,matched_count,unmatched_count,message) VALUES (?,?,?,?,?,?,?)', [dateFrom, dateTo, 'success', records.length, matchedCount, unmatchedCount, message]);
-    db.save();
-    res.json({ ok: true, date_from: dateFrom, date_to: dateTo, record_count: records.length, matched_count: matchedCount, unmatched_count: unmatchedCount, message });
+    const result = await runDingTalkAttendanceSync({ dateFrom, dateTo, employeeIds: req.body?.employee_ids });
+    res.json({ ok: true, ...result });
   } catch (e) {
     const message = String(e.message || '钉钉同步失败');
     try { db.insert('INSERT INTO dingtalk_attendance_sync_runs (date_from,date_to,status,message) VALUES (?,?,?,?)', [dateFrom, dateTo, 'failed', message]); db.save(); } catch {}
@@ -1766,11 +2661,133 @@ app.post('/api/staff/dingtalk/sync', async (req, res) => {
   }
 });
 
+// ===== 钉钉考勤：每日自动回扫 =====
+// 设计：服务内定时器（不依赖系统 crontab），用「已执行日期」去重，崩溃重启后当天到点会补跑。
+// 回扫窗口默认 30 天：员工漏打卡后补卡会改到历史日期，只同步"上一天"会漏掉这些补卡，
+// 所以每天把最近 N 天整段重拉一遍（幂等 upsert，不会产生重复）。
+const ATTENDANCE_AUTO_DEFAULTS = { enabled: true, hour: 1, minute: 0, lookbackDays: 30 };
+let attendanceAutoLastRun = '';     // 记录已自动同步的目标日期，防止一天内重复跑
+function attendanceAutoSettings() {
+  const section = loadConfig().dingtalkAttendance || {};
+  const fromEnvEnabled = String(process.env.ATTENDANCE_AUTO_SYNC || '').trim();
+  const hour = Number(section.hour !== undefined ? section.hour : process.env.ATTENDANCE_AUTO_HOUR);
+  const minute = Number(section.minute !== undefined ? section.minute : process.env.ATTENDANCE_AUTO_MINUTE);
+  const lookback = Number(section.lookback_days !== undefined ? section.lookback_days : process.env.ATTENDANCE_AUTO_LOOKBACK_DAYS);
+  return {
+    enabled: fromEnvEnabled ? !['0', 'false', 'off', 'no'].includes(fromEnvEnabled.toLowerCase()) : section.enabled !== false,
+    hour: Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : ATTENDANCE_AUTO_DEFAULTS.hour,
+    minute: Number.isInteger(minute) && minute >= 0 && minute <= 59 ? minute : ATTENDANCE_AUTO_DEFAULTS.minute,
+    // 1 天 = 只同步上一天；30 天 = 每天回扫近 30 天（覆盖补卡）
+    lookbackDays: Number.isInteger(lookback) && lookback >= 1 && lookback <= 31 ? lookback : ATTENDANCE_AUTO_DEFAULTS.lookbackDays,
+  };
+}
+function localDateText(date = new Date()) {
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+function shiftLocalDate(dateText, days) {
+  const base = new Date(`${dateText}T00:00:00`);
+  base.setDate(base.getDate() + days);
+  return localDateText(base);
+}
+// 到点检查：只在「已过当天设定时刻」且「该回扫窗口还没自动跑过」时执行
+async function checkAttendanceAutoSync(now = new Date()) {
+  const settings = attendanceAutoSettings();
+  if (!settings.enabled) return { ran: false, reason: 'disabled' };
+  const today = localDateText(now);
+  const target = shiftLocalDate(today, -1);                                   // 回扫窗口的结束日 = 昨天
+  const windowStart = shiftLocalDate(target, -(settings.lookbackDays - 1));   // 起始日 = 昨天往前 N-1 天
+  const dueMinutes = settings.hour * 60 + settings.minute;
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  if (nowMinutes < dueMinutes) return { ran: false, reason: 'not_due', next_at: `${today} ${String(settings.hour).padStart(2, '0')}:${String(settings.minute).padStart(2, '0')}` };
+  if (attendanceAutoLastRun === target) return { ran: false, reason: 'already_ran', target };
+  // 重启补跑保护：上次成功批次已覆盖到目标日（且窗口够长）就不重复拉钉钉
+  const lastSuccess = db.queryOne("SELECT date_from,date_to FROM dingtalk_attendance_sync_runs WHERE status='success' ORDER BY id DESC LIMIT 1");
+  if (lastSuccess?.date_to && String(lastSuccess.date_to) >= target
+    && (!lastSuccess.date_from || String(lastSuccess.date_from) <= windowStart)) {
+    attendanceAutoLastRun = target;
+    return { ran: false, reason: 'already_synced', target, covered: `${lastSuccess.date_from}~${lastSuccess.date_to}` };
+  }
+  const configured = dingtalkAttendance.getDingTalkConfig();
+  if (!configured?.configured) {
+    // 未配置钉钉凭据时不打扰，也不写失败批次
+    return { ran: false, reason: 'not_configured' };
+  }
+  try {
+    const started = Date.now();
+    const result = await runDingTalkAttendanceSync({ dateFrom: windowStart, dateTo: target });
+    attendanceAutoLastRun = target;
+    console.log(`[attendance-auto] 已自动回扫 ${windowStart}~${target}（${Math.round((Date.now() - started) / 1000)}s）：${result.message}`);
+    return { ran: true, target, window_start: windowStart, lookback_days: settings.lookbackDays, elapsed_ms: Date.now() - started, ...result };
+  } catch (error) {
+    attendanceAutoLastRun = target;   // 失败也记账，避免同一目标日期反复重试刷日志
+    console.warn(`[attendance-auto] 自动回扫 ${windowStart}~${target} 失败：${error.message}`);
+    return { ran: false, reason: 'failed', target, window_start: windowStart, error: error.message };
+  }
+}
+function startAttendanceAutoSync() {
+  const settings = attendanceAutoSettings();
+  if (!settings.enabled) { console.log('⏰ 钉钉考勤自动同步：已停用'); return null; }
+  const at = `${String(settings.hour).padStart(2, '0')}:${String(settings.minute).padStart(2, '0')}`;
+  console.log(`⏰ 钉钉考勤自动同步：每天 ${at} 回扫最近 ${settings.lookbackDays} 天（覆盖漏打卡后的补卡）`);
+  // 每 30 秒检查一次，分钟级精度足够；到点只跑一次，重启后当天到点会补跑
+  const timer = setInterval(() => { checkAttendanceAutoSync().catch(() => {}); }, 30000);
+  if (timer.unref) timer.unref();
+  // 启动后先查一次（服务在 01:00 之后才启动时能补上当天）
+  setTimeout(() => { checkAttendanceAutoSync().catch(() => {}); }, 8000).unref?.();
+  return timer;
+}
+// 批次表没有单独存人数，从留痕文本里取出来补成字段，界面才能直接显示"更新人数"
+function attendanceRunEmployeeCount(run) {
+  const matched = /已同步\s*(\d+)\s*名员工/.exec(String(run?.message || ''));
+  return matched ? Number(matched[1]) : null;
+}
+// 查看自动同步状态与最近批次（企业设置 → 考勤同步 用）
+app.get('/api/staff/dingtalk/auto-sync', (req, res) => {
+  try {
+    const settings = attendanceAutoSettings();
+    const mappedEmployees = db.queryOne("SELECT COUNT(*) AS cnt FROM employees WHERE TRIM(COALESCE(dingtalk_user_id,''))!=''")?.cnt || 0;
+    const latest = db.queryOne('SELECT * FROM dingtalk_attendance_sync_runs ORDER BY id DESC LIMIT 1') || null;
+    const recent = db.queryAll('SELECT id,date_from,date_to,status,record_count,matched_count,unmatched_count,message,created_at FROM dingtalk_attendance_sync_runs ORDER BY id DESC LIMIT 10')
+      .map(run => ({ ...run, employee_count: attendanceRunEmployeeCount(run) }));
+    const coverage = db.queryOne("SELECT COUNT(*) AS total, COUNT(DISTINCT employee_id) AS employees, MIN(work_date) AS first_day, MAX(work_date) AS last_day FROM dingtalk_attendance_records") || {};
+    res.json({
+      ok: true,
+      ...settings,
+      configured: Boolean(dingtalkAttendance.getDingTalkConfig().configured),
+      mapped_employees: mappedEmployees,
+      last_auto_target: attendanceAutoLastRun || '',
+      server_time: localDateText() + ' ' + new Date().toTimeString().slice(0, 8),
+      next_run_at: `${localDateText()} ${String(settings.hour).padStart(2, '0')}:${String(settings.minute).padStart(2, '0')}`,
+      latest_run: latest ? { ...latest, employee_count: attendanceRunEmployeeCount(latest) } : null,
+      recent_runs: recent,
+      coverage: {
+        records: Number(coverage.total || 0),
+        employees: Number(coverage.employees || 0),
+        first_day: coverage.first_day || '',
+        last_day: coverage.last_day || '',
+      },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// 手动触发一次自动同步检查（用于验证；不传日期时按回扫窗口「近 N 天」）
+app.post('/api/staff/dingtalk/auto-sync/run', async (req, res) => {
+  try {
+    const settings = attendanceAutoSettings();
+    const target = normalizeAttendanceDate(req.body?.date) || shiftLocalDate(localDateText(), -1);
+    // 传了具体日期就只同步那一天；否则按当前回扫窗口（默认近 30 天）
+    const from = normalizeAttendanceDate(req.body?.date)
+      ? target
+      : shiftLocalDate(target, -(settings.lookbackDays - 1));
+    const started = Date.now();
+    const result = await runDingTalkAttendanceSync({ dateFrom: from, dateTo: target });
+    res.json({ ok: true, target, window_start: from, elapsed_ms: Date.now() - started, ...result });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 app.get('/api/staff/:id/dingtalk-attendance', (req, res) => {
   try {
     const employee = db.queryOne('SELECT id,name,dingtalk_user_id FROM employees WHERE id=?', [req.params.id]);
-    if (!employee) return res.status(404).json({ error: '员工不存在' });
-    const dateFrom = normalizeAttendanceDate(req.query.date_from) || '';
+    if (!employee) return res.status(404).json({ error: '员工不存在' });    const dateFrom = normalizeAttendanceDate(req.query.date_from) || '';
     const dateTo = normalizeAttendanceDate(req.query.date_to) || '';
     const where = ['employee_id=?']; const params = [employee.id];
     if (dateFrom) { where.push('work_date>=?'); params.push(dateFrom); }
@@ -1885,6 +2902,8 @@ app.get('/api/staff/sync-pull', async (req, res) => {
       }
     }
 
+    require('./lib/staff-affiliation').normalizeStaffAffiliations(db);
+    require('./lib/staff-age').refreshStaffAges(db);
     db.save();
     const message = `同步完成：新增 ${created} 人，更新 ${updated} 人，跳过 ${skipped} 条空记录`;
     console.log(`[staff pull] ${message}`);
@@ -2802,7 +3821,11 @@ app.get('/api/poultry/consumption', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/poultry/consumption', (req, res) => {
-  try { res.json({ ok: true, ...poultryAccounting.saveConsumption(req.body) }); }
+  try {
+    // 带 entries 数组 = 批量录入（一次提交同一门店+日期的多个禽类）
+    if (Array.isArray(req.body?.entries)) return res.json({ ok: true, ...poultryAccounting.saveConsumptionBatch(req.body) });
+    res.json({ ok: true, ...poultryAccounting.saveConsumption(req.body) });
+  }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.delete('/api/poultry/consumption/:id', (req, res) => {
@@ -2986,6 +4009,165 @@ app.get('/api/dashboard/stats', (req, res) => {
 // ===== 推送日志 =====
 app.get('/api/push-logs', (req, res) => { try { const { status, limit } = req.query; let sql = 'SELECT * FROM push_logs WHERE 1=1'; const params = []; if (status) { sql += ' AND status=?'; params.push(status); } sql += ' ORDER BY id DESC LIMIT ?'; params.push(limit || 50); res.json({ ok: true, logs: db.queryAll(sql, params) }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/push-logs', (req, res) => { try { const { push_type, target, content_preview, status, error_msg } = req.body; const id = db.insert('INSERT INTO push_logs (push_type,target,content_preview,status,error_msg) VALUES (?,?,?,?,?)', [push_type||'', target||'', content_preview||'', status||'success', error_msg||'']); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
+
+// ===== 员工证件/银行卡照片（只存受保护文件地址，不把 base64 写进数据库）=====
+const STAFF_PHOTO_DIR = path.join(__dirname, 'data', 'uploads', 'staff-photos');
+if (!fs.existsSync(STAFF_PHOTO_DIR)) fs.mkdirSync(STAFF_PHOTO_DIR, { recursive: true });
+const STAFF_PHOTO_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+const staffPhotoBody = express.raw({ type: () => true, limit: '6mb' });
+
+// 上传：请求体直接是图片二进制；文件名用内容 SHA-256 前 24 位，重复上传同一张图自动复用。
+app.post('/api/staff/photos', staffPhotoBody, (req, res) => {
+  try {
+    const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buffer || !buffer.length) return res.status(400).json({ error: '请选择要上传的图片文件' });
+    if (buffer.length > 5 * 1024 * 1024) return res.status(400).json({ error: '图片不能超过 5 MB，请先压缩后再上传' });
+    // 不能只信 Content-Type：同时校验文件头，避免把任意文件当图片存进来。
+    const declared = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    const sniffed = buffer[0] === 0xFF && buffer[1] === 0xD8 ? 'image/jpeg'
+      : buffer[0] === 0x89 && buffer[1] === 0x50 ? 'image/png'
+      : buffer[0] === 0x47 && buffer[1] === 0x49 ? 'image/gif'
+      : (buffer.slice(8, 12).toString('ascii') === 'WEBP' ? 'image/webp' : '');
+    if (!sniffed || !STAFF_PHOTO_TYPES[sniffed]) return res.status(400).json({ error: '仅支持 jpg / png / webp / gif 图片' });
+    if (declared && declared !== sniffed) return res.status(400).json({ error: '文件类型与内容不一致，请重新选择图片' });
+    const hash = crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 24);
+    const filename = `${hash}.${STAFF_PHOTO_TYPES[sniffed]}`;
+    const filePath = path.join(STAFF_PHOTO_DIR, filename);
+    if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, buffer);
+    res.json({ ok: true, url: `/api/staff/photos/${filename}`, bytes: buffer.length, sha256: hash });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 读取：受登录保护（证件/银行卡照片含敏感信息，不做公开静态目录）
+app.get('/api/staff/photos/:file', (req, res) => {
+  try {
+    const filename = path.basename(String(req.params.file || ''));
+    const filePath = path.join(STAFF_PHOTO_DIR, filename);
+    if (path.dirname(filePath) !== STAFF_PHOTO_DIR || !fs.existsSync(filePath)) return res.status(404).json({ error: '图片不存在' });
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.sendFile(filePath);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 员工调整附件：岗位、转正与离职调整使用，支持图片或 PDF；文件受登录保护。
+const STAFF_ATTACHMENT_DIR = path.join(__dirname, 'data', 'uploads', 'staff-attachments');
+if (!fs.existsSync(STAFF_ATTACHMENT_DIR)) fs.mkdirSync(STAFF_ATTACHMENT_DIR, { recursive: true });
+const staffAttachmentBody = express.raw({ type: () => true, limit: '12mb' });
+// 上传：请求体直接是文件二进制。校验与存储走下方的 saveAttachmentFile（与门店凭证共用同一套逻辑，
+// 避免两份类型白名单各自漂移）。响应形状保持不变：{ ok, url, name, type, bytes }。
+app.post('/api/staff/attachments', staffAttachmentBody, (req, res) => {
+  try {
+    const saved = saveAttachmentFile({
+      buffer: Buffer.isBuffer(req.body) ? req.body : null,
+      declaredType: String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase(),
+      headerName: req.headers['x-file-name'],
+      dir: STAFF_ATTACHMENT_DIR, urlPrefix: '/api/staff/attachments', fallbackName: '调整附件',
+    });
+    res.json({ ok: true, ...saved });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+// 上传文件名解码：兼容 URL 编码、百分号编码乱码与历史遗留的错误编码。
+function decodeUploadFileName(raw, fallback) {
+  let name = String(raw || '').trim();
+  if (!name) return fallback;
+  if (/%[0-9A-Fa-f]{2}/.test(name)) {
+    try { name = decodeURIComponent(name); } catch {}
+  }
+  // 历史数据里存在「UTF-8 字节被当成 latin1 解码」的乱码，尝试还原。
+  if (/[\u00C2-\u00F4][\u0080-\u00BF]/.test(name)) {
+    try {
+      const restored = Buffer.from(name, 'latin1').toString('utf8');
+      if (restored && !restored.includes('\uFFFD')) name = restored;
+    } catch {}
+  }
+  name = name.replace(/[\r\n\t]/g, ' ').trim();
+  return path.basename(name).slice(0, 160) || fallback;
+}
+// 附件读取（员工附件与门店凭证共用同一套实现：文件名白名单 + 类型映射 + 内联预览）
+function sendAttachmentFile(res, baseDir, rawFile, wantedName) {
+  const filename = path.basename(String(rawFile || ''));
+  const filePath = path.join(baseDir, filename);
+  if (path.dirname(filePath) !== baseDir || !fs.existsSync(filePath)) return res.status(404).json({ error: '附件不存在' });
+  const ext = path.extname(filename).toLowerCase();
+  const types = { '.pdf': 'application/pdf', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
+  res.setHeader('Content-Type', types[ext] || 'application/octet-stream');
+  // inline 让图片与 PDF 在浏览器内直接预览；name 参数可让前端指定预览/保存用的文件名。
+  if (wantedName) res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(wantedName)}`);
+  // 内联预览必须允许同源 iframe/object 渲染
+  res.removeHeader('X-Frame-Options');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.sendFile(filePath);
+}
+
+// 附件入库（校验类型 + 按内容 sha256 命名去重），返回 { url, name, type, bytes }
+const ATTACHMENT_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' };
+function saveAttachmentFile({ buffer, declaredType, headerName, dir, urlPrefix, fallbackName }) {
+  if (!buffer?.length) throw Object.assign(new Error('请选择附件'), { status: 400 });
+  if (buffer.length > 10 * 1024 * 1024) throw Object.assign(new Error('附件不能超过 10 MB'), { status: 400 });
+  const type = buffer.slice(0, 4).toString('ascii') === '%PDF' ? 'application/pdf'
+    : buffer[0] === 0xFF && buffer[1] === 0xD8 ? 'image/jpeg'
+    : buffer[0] === 0x89 && buffer[1] === 0x50 ? 'image/png'
+    : buffer[0] === 0x47 && buffer[1] === 0x49 ? 'image/gif'
+    : buffer.slice(8, 12).toString('ascii') === 'WEBP' ? 'image/webp' : '';
+  if (!type || !ATTACHMENT_TYPES[type] || (declaredType && declaredType !== type)) {
+    throw Object.assign(new Error('仅支持 PDF、JPG、PNG、WebP 或 GIF 附件'), { status: 400 });
+  }
+  const hash = crypto.createHash('sha256').update(buffer).digest('hex').slice(0, 24);
+  const filename = `${hash}.${ATTACHMENT_TYPES[type]}`;
+  const filePath = path.join(dir, filename);
+  if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, buffer);
+  // 前端用 encodeURIComponent 传文件名（中文），这里必须解码后再保存，否则显示成 %E5%B2%97... 乱码。
+  const originalName = decodeUploadFileName(headerName, fallbackName || `附件.${ATTACHMENT_TYPES[type]}`);
+  return { url: `${urlPrefix}/${filename}`, name: originalName, type, bytes: buffer.length };
+}
+
+app.get('/api/staff/attachments/:file', (req, res) => {
+  try {
+    sendAttachmentFile(res, STAFF_ATTACHMENT_DIR, req.params.file, decodeUploadFileName(String(req.query.name || ''), ''));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ===== 门店凭证：闭店通知、租约、迁址协议 =====
+// 与员工附件同一套存储与校验，但权限走 store.manage（员工附件要 staff.view，不该混）。
+const STORE_ATTACHMENT_DIR = path.join(__dirname, 'data', 'uploads', 'store-attachments');
+if (!fs.existsSync(STORE_ATTACHMENT_DIR)) fs.mkdirSync(STORE_ATTACHMENT_DIR, { recursive: true });
+app.post('/api/store-attachments', staffAttachmentBody, (req, res) => {
+  try {
+    const saved = saveAttachmentFile({
+      buffer: Buffer.isBuffer(req.body) ? req.body : null,
+      declaredType: String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase(),
+      headerName: req.headers['x-file-name'],
+      dir: STORE_ATTACHMENT_DIR, urlPrefix: '/api/store-attachments', fallbackName: '门店凭证',
+    });
+    res.json({ ok: true, ...saved });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.get('/api/store-attachments/:file', (req, res) => {
+  try {
+    sendAttachmentFile(res, STORE_ATTACHMENT_DIR, req.params.file, decodeUploadFileName(String(req.query.name || ''), ''));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// 身份证识别核对：识别照片上的姓名与号码，与当前员工档案比对。
+// 严格口径（人工 2026-09-17 确认）：姓名与号码都要一致才算通过。
+// 未配置识别凭据时返回 not_configured，前端只提示、不阻断保存。
+app.post('/api/staff/idcard-scan', staffPhotoBody, async (req, res) => {
+  try {
+    const buffer = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buffer || !buffer.length) return res.status(400).json({ error: '请先上传身份证正面照片' });
+    if (buffer.length > 5 * 1024 * 1024) return res.status(400).json({ error: '图片不能超过 5 MB' });
+    if (!(buffer[0] === 0xFF && buffer[1] === 0xD8) && !(buffer[0] === 0x89 && buffer[1] === 0x50)) {
+      return res.status(400).json({ error: '仅支持 jpg / png 图片' });
+    }
+    const employeeId = Number(req.query.employee_id);
+    const employee = Number.isInteger(employeeId) && employeeId > 0
+      ? db.queryOne('SELECT id,name,id_card_number FROM employees WHERE id=?', [employeeId])
+      : null;
+    if (!employee) return res.status(400).json({ error: '请先保存员工基础资料，再进行身份证核对' });
+    const result = await idCardOcr.scanAndVerify({ imageBuffer: buffer, employee, config });
+    res.json({ ok: true, employee_id: employee.id, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ===== 认证 =====
 function getAuthUserById(id) {
@@ -3427,7 +4609,9 @@ app.get('/api/positions', (req, res) => {
   try {
     const positions = db.queryAll(`SELECT p.*, COUNT(u.id) AS member_count FROM position_settings p LEFT JOIN users u ON u.position_id=p.id GROUP BY p.id ORDER BY p.is_system DESC,p.id`)
       .map(positionResponse);
-    res.json({ ok: true, positions });
+    // 权限目录随岗位列表一起下发，岗位设置界面直接用后端这一份，
+    // 避免前端再维护一份硬编码分组导致「新增入口但勾不到权限」。
+    res.json({ ok: true, positions, permission_catalog: positionPermissions.PERMISSION_CATALOG });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/positions', (req, res) => {
@@ -3768,6 +4952,233 @@ function monthlyDashboardRange(month, asOf) {
   const cutoff = String(asOf || end);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoff) || cutoff < start || cutoff > end) throw new Error('截止日期必须在所选月份内');
   return { month: `${matched[1]}-${matched[2]}`, start, end, cutoff, days_in_month: daysInMonth, elapsed_days: Number(cutoff.slice(-2)) };
+}
+
+// ===== 人效（仅单门店）：当日出勤人员工资 ÷ 当日收银机总实收 =====
+// 运营门店范围：默认只算深圳市，按 config.json 的 laborEfficiency.includedCities 或环境变量 LABOR_EFFICIENCY_CITIES 扩充。
+// 该开关只决定「哪些门店展示人效」，不做任何数据写入，也没有防作弊作用。
+const DEFAULT_LABOR_EFFICIENCY_CITIES = ['深圳市'];
+// 全职：月工资构成合计 ÷ 当月应出勤天数 × 出勤天数；兼职：当天工作时长 × 时薪。
+// 当月应出勤天数与工资表模块同一默认值 26，可在 config.json 的 laborEfficiency.scheduledDaysPerMonth 覆盖。
+const LABOR_EFFICIENCY_SCHEDULED_DAYS = 26;
+const LABOR_EFFICIENCY_PART_TIME_TITLE = '兼职';
+const LABOR_EFFICIENCY_ROWS_LIMIT = 500;
+const round2 = value => Math.round(Number(value || 0) * 100) / 100;
+function laborEfficiencyRegion(config) {
+  const section = (config || {}).laborEfficiency || {};
+  const fromEnv = String(process.env.LABOR_EFFICIENCY_CITIES || '').split(/[,，\s]+/);
+  const configured = Array.isArray(section.includedCities) ? section.includedCities : [];
+  const source = configured.length ? 'config.laborEfficiency.includedCities' : (fromEnv.some(city => String(city).trim()) ? 'LABOR_EFFICIENCY_CITIES' : 'default');
+  const raw = configured.length ? configured : (source === 'default' ? DEFAULT_LABOR_EFFICIENCY_CITIES : fromEnv);
+  const cities = [...new Set(raw.map(city => String(city || '').trim()).filter(Boolean))];
+  const scheduledDays = Math.max(1, Math.min(31, Number(section.scheduledDaysPerMonth) || LABOR_EFFICIENCY_SCHEDULED_DAYS));
+  return { enabled: section.enabled !== false && cities.length > 0, source, cities, scheduled_days: scheduledDays };
+}
+// 从钉钉原始打卡算工时：按时间顺序把 OnDuty→OffDuty 配成对并累加，中间的空档（午休等）不计。
+// 不能用「最早上班→最晚下班」，那样会把休息时段算成工时；实测兼职平均会虚增 40%~70%。
+function laborEfficiencyWorkHours(records) {
+  const byKey = new Map();
+  records.forEach(record => {
+    const time = String(record.check_time || '').slice(11, 19);
+    if (!/^\d{2}:\d{2}:\d{2}$/.test(time)) return;
+    const key = `${time}#${record.check_type || ''}`;
+    const current = byKey.get(key);
+    if (!current || String(record.check_time) < String(current.check_time)) byKey.set(key, { check_time: record.check_time, check_type: record.check_type, time });
+  });
+  const punches = [...byKey.values()].sort((a, b) => a.time.localeCompare(b.time));
+  const toSeconds = time => Number(time.slice(0, 2)) * 3600 + Number(time.slice(3, 5)) * 60 + Number(time.slice(6, 8));
+  let hours = 0;
+  let openAt = null;
+  punches.forEach(punch => {
+    const seconds = toSeconds(punch.time);
+    if (punch.check_type === 'OnDuty') {
+      if (openAt === null) openAt = seconds;
+    } else if (punch.check_type === 'OffDuty' && openAt !== null) {
+      if (seconds > openAt) hours += Math.min(seconds - openAt, 16 * 3600) / 3600;
+      openAt = null;
+    }
+  });
+  return round2(hours);
+}
+function buildLaborEfficiency({ period, store, storeId, region }) {
+  const days = Number(period.days_in_month) || 30;
+  const scheduledDays = Number(region.scheduled_days) || LABOR_EFFICIENCY_SCHEDULED_DAYS;
+  const wageParts = parts => ({
+    base_salary: round2(parts.base_salary), position_allowance: round2(parts.position_allowance),
+    performance_salary: round2(parts.performance_salary), attendance_bonus: round2(parts.attendance_bonus),
+    housing_allowance: round2(parts.housing_allowance), monthly_total: round2(parts.monthly_total),
+  });
+  const common = {
+    enabled: region.enabled,
+    region,
+    included: false,
+    period: { month: period.month, start: period.start, end: period.cutoff, days_in_month: days },
+    scheduled_days_per_month: scheduledDays,
+    formula: {
+      full_time: `月工资构成合计（基本工资+岗位津贴+绩效工资+全勤奖+住房补贴）÷ 当月应出勤 ${scheduledDays} 天 × 出勤天数`,
+      part_time: '兼职：当天工作时长 × 时薪（时长按钉钉上下班打卡配对累加，中间休息不计）',
+      denominator: '当日/本期收银机渠道「店内销售」记录金额合计',
+      attendance_rule: '当天任意一次打卡即视为出勤；兼职工时 = 上班卡→下班卡逐对累加，单对最多计 16 小时',
+    },
+  };
+  if (!region.enabled) return { ...common, reason: 'not_configured' };
+  if (!store) return { ...common, reason: 'no_store' };
+  const storeCity = String(store.city || '').trim();
+  if (!region.cities.includes(storeCity)) return { ...common, reason: 'out_of_region', store_city: storeCity || null };
+
+  const dateFrom = period.start;
+  const dateTo = period.cutoff;
+  // 人员归属以当天实际工作门店为准：有效支援安排优先于员工的常驻门店。
+  // 这样员工在 A 打卡但被安排支援 B 时，只会进入 B 的经营看板与人效名单。
+  const dispatchedStoreByEmployeeDate = new Map();
+  db.queryAll("SELECT * FROM employee_store_dispatches WHERE status='有效'").forEach(dispatch => {
+    dispatchDates(dispatch).filter(day => day >= dateFrom && day <= dateTo).forEach(day => {
+      const key = `${Number(dispatch.employee_id)}:${day}`;
+      if (!dispatchedStoreByEmployeeDate.has(key)) dispatchedStoreByEmployeeDate.set(key, Number(dispatch.support_store_id));
+    });
+  });
+  const attendanceRows = db.queryAll(
+    `SELECT a.employee_id, a.work_date, a.check_time, a.check_type, a.source_data, e.store_id AS home_store_id
+       FROM dingtalk_attendance_records a JOIN employees e ON e.id = a.employee_id
+      WHERE a.work_date >= ? AND a.work_date <= ?
+      ORDER BY a.employee_id, a.work_date, a.check_time`,
+    [dateFrom, dateTo]
+  ).filter(record => Number(dispatchedStoreByEmployeeDate.get(`${Number(record.employee_id)}:${record.work_date}`) || record.home_store_id) === Number(storeId));
+  const dailyRows = db.queryAll(
+    `SELECT biz_date, COALESCE(SUM(recorded_amount), 0) AS amount FROM business_revenue_records
+      WHERE store_id=? AND channel='store_sales' AND biz_date>=? AND biz_date<=? GROUP BY biz_date ORDER BY biz_date`,
+    [storeId, dateFrom, dateTo]
+  );
+  const revenueByDate = new Map(dailyRows.map(row => [row.biz_date, Number(row.amount || 0)]));
+  const storeSalesDaily = round2(revenueByDate.get(dateTo) || 0);
+  const storeSalesPeriod = round2(dailyRows.reduce((sum, row) => sum + Number(row.amount || 0), 0));
+
+  const byEmployee = new Map();
+  attendanceRows.forEach(record => {
+    const id = Number(record.employee_id);
+    if (!id) return;
+    const item = byEmployee.get(id) || { employee_id: id, dates: new Set(), dateRecords: new Map(), punches: 0 };
+    item.dates.add(record.work_date);
+    const list = item.dateRecords.get(record.work_date) || [];
+    list.push({ check_time: record.check_time, check_type: record.check_type });
+    item.dateRecords.set(record.work_date, list);
+    item.punches += 1;
+    byEmployee.set(id, item);
+  });
+
+  const ids = [...byEmployee.keys()];
+  const employeeById = new Map();
+  if (ids.length) {
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = db.queryAll(
+      `SELECT e.id, e.name, e.store_name, e.position, e.hire_type, e.salary,
+              COALESCE(p.base_salary,0) AS base_salary, COALESCE(p.position_allowance,0) AS position_allowance,
+              COALESCE(p.performance_salary,0) AS performance_salary, COALESCE(p.attendance_bonus,0) AS attendance_bonus,
+              COALESCE(p.housing_allowance,0) AS housing_allowance, COALESCE(p.part_time_hourly_rate,0) AS part_time_hourly_rate,
+              CASE WHEN p.employee_id IS NULL THEN 0 ELSE 1 END AS has_profile
+         FROM employees e LEFT JOIN employee_salary_profiles p ON p.employee_id = e.id
+        WHERE e.id IN (${placeholders})`,
+      ids
+    );
+    rows.forEach(row => employeeById.set(Number(row.id), row));
+  }
+
+  const periodGaps = new Set();
+  const dayGaps = new Set();
+  const periodRows = [];
+  const dayRows = [];
+  const buildRow = (id, item, scope) => {
+    const employee = employeeById.get(id) || {};
+    const isPartTime = String(employee.hire_type || '').trim() === LABOR_EFFICIENCY_PART_TIME_TITLE;
+    const profile = {
+      base_salary: Number(employee.base_salary || 0), position_allowance: Number(employee.position_allowance || 0),
+      performance_salary: Number(employee.performance_salary || 0), attendance_bonus: Number(employee.attendance_bonus || 0),
+      housing_allowance: Number(employee.housing_allowance || 0),
+    };
+    profile.monthly_total = profile.base_salary + profile.position_allowance + profile.performance_salary + profile.attendance_bonus + profile.housing_allowance;
+    const hourlyRate = Number(employee.part_time_hourly_rate || 0) || (isPartTime ? Number(employee.salary || 0) : 0);
+    const isDayScope = scope === 'day';
+    const attendanceDays = isDayScope ? 1 : item.dates.size;
+    const dayRecords = item.dateRecords.get(dateTo) || [];
+    // 工时对全职只作参考（全职按天算），对兼职是计件依据。
+    const hours = isDayScope
+      ? laborEfficiencyWorkHours(dayRecords)
+      : round2([...item.dateRecords.values()].reduce((sum, list) => sum + laborEfficiencyWorkHours(list), 0));
+    const dailyFullTimeWage = round2(profile.monthly_total / scheduledDays);
+    // 日工资先精确到分，再乘出勤天数，避免月末合计出现分位漂移。
+    const fullTimeWage = round2(dailyFullTimeWage * attendanceDays);
+    const partTimeWage = round2(hours * hourlyRate);
+    const rateMissing = isPartTime ? hourlyRate <= 0 : profile.monthly_total <= 0;
+    if (rateMissing) (isDayScope ? dayGaps : periodGaps).add(employee.name || `员工 ${id}`);
+    return {
+      employee_id: id,
+      name: employee.name || '',
+      store_name: employee.store_name || '',
+      position: employee.position || '',
+      hire_type: isPartTime ? LABOR_EFFICIENCY_PART_TIME_TITLE : '全职',
+      attendance_days: attendanceDays,
+      total_attendance_days: item.dates.size,
+      work_hours: hours,
+      hourly_rate: round2(hourlyRate),
+      daily_full_time_wage: dailyFullTimeWage,
+      monthly_wage_total: round2(profile.monthly_total),
+      wage_parts: isPartTime ? null : wageParts(profile),
+      wage: isPartTime ? partTimeWage : fullTimeWage,
+      wage_note: isPartTime
+        ? `${hours} 小时 × ${round2(hourlyRate)} 元/时`
+        : `${round2(profile.monthly_total)} ÷ ${scheduledDays} 天 × ${attendanceDays} 天`,
+      has_wage_basis: !rateMissing,
+      punches: isDayScope ? dayRecords.length : item.punches,
+    };
+  };
+
+  byEmployee.forEach((item, id) => {
+    periodRows.push(buildRow(id, item, 'period'));
+    if (item.dateRecords.has(dateTo)) dayRows.push(buildRow(id, item, 'day'));
+  });
+  periodRows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  dayRows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+
+  const summarize = rows => ({
+    people: rows.length,
+    full_time_people: rows.filter(row => row.hire_type === '全职').length,
+    part_time_people: rows.filter(row => row.hire_type === '兼职').length,
+    attendance_days: rows.filter(row => row.hire_type === '全职').reduce((sum, row) => sum + row.total_attendance_days, 0),
+    work_hours: round2(rows.filter(row => row.hire_type === '兼职').reduce((sum, row) => sum + row.work_hours, 0)),
+    wage_total: round2(rows.reduce((sum, row) => sum + row.wage, 0)),
+    missing_basis_count: rows.filter(row => !row.has_wage_basis).length,
+  });
+  const daySummary = summarize(dayRows);
+  const periodSummary = summarize(periodRows);
+  const dayRatio = (wage, revenue) => revenue > 0 ? Math.round(wage / revenue * 10000) / 10000 : null;
+
+  return {
+    ...common,
+    included: true,
+    store_name: store.store_name,
+    store_city: storeCity,
+    range: { date_from: dateFrom, date_to: dateTo },
+    days_in_month: days,
+    // 当日口径：截止日当天出勤的人，每人算当天工资
+    day: {
+      ...daySummary,
+      date: dateTo,
+      rows: dayRows,
+      store_sales: storeSalesDaily,
+      ratio: dayRatio(daySummary.wage_total, storeSalesDaily),
+    },
+    // 期间口径：月初至截止日期间出勤过的所有人，每人按各自出勤推算工资
+    range_totals: {
+      ...periodSummary,
+      rows: periodRows.slice(0, LABOR_EFFICIENCY_ROWS_LIMIT),
+      rows_total: periodRows.length,
+      rows_truncated: periodRows.length > LABOR_EFFICIENCY_ROWS_LIMIT,
+      store_sales: storeSalesPeriod,
+      ratio: dayRatio(periodSummary.wage_total, storeSalesPeriod),
+    },
+    daily_rows: dailyRows.map(row => ({ date: row.biz_date, revenue: round2(row.amount) })),
+    data_gap: { names: [...periodGaps], day_names: [...dayGaps] },
+  };
 }
 
 function previousMonthRange(month) {
@@ -4168,16 +5579,25 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
     const cumulativeExpense = totals(expenseRows, 'cumulative_amount');
     const storedValue = rows => rows.reduce((sum, row) => isStoredValue(row) && Number(row.amount || 0) > 0 ? sum + Number(row.amount) : sum, 0);
     let storeName = '全门店汇总';
+    let laborEfficiencyStore = null;
     if (scopedStoreIds.length === 1) {
-      const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [scopedStoreIds[0]]);
+      const store = db.queryOne('SELECT id, store_name, city FROM stores WHERE id=?', [scopedStoreIds[0]]);
       if (!store) return res.status(404).json({ error: '门店不存在' });
       storeName = store.store_name;
+      laborEfficiencyStore = store;
     } else if (scopedStoreIds.length > 1) {
       storeName = `${scopedStoreIds.length} 家门店汇总`;
     }
+    const laborEfficiency = buildLaborEfficiency({
+      period,
+      store: laborEfficiencyStore,
+      storeId: scopedStoreIds.length === 1 ? scopedStoreIds[0] : null,
+      region: laborEfficiencyRegion(loadConfig()),
+    });
     res.json({
       ok: true,
       store_name: storeName,
+      labor_efficiency: laborEfficiency,
       period,
       view,
       revenue_source: {
@@ -5130,6 +6550,140 @@ app.get('/api/business-analytics/template', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ================================================================
+// ===== AI 自动导报表运行审计 =====================================
+// ================================================================
+
+// ================================================================
+// ===== 自动同步与日报计划（配置页 + 内部 HMAC 通道） =============
+// ================================================================
+// 默认**全部 disabled**：本模块只提供配置、闸门与"项目侧推送"能力；
+// 计划由 syncbot 侧独立 worker 经回环 + HMAC 主动拉取，中控不创建任何 timer/cron。
+// 挂载失败不影响其余功能（try/catch 兜底）。
+try {
+  require('./lib/schedule-wiring').mountSchedule({
+    app, express, db,
+    permissions: positionPermissions,
+    syncJobAudit,
+    daily: { loadConfig, httpPost, ensureDailyDataLoaded, dailyStoreState, drawStoreDailyReport, toReportData, crypto },
+  });
+} catch (e) {
+  console.error('[schedule] 自动同步与日报计划模块挂载失败（其余功能不受影响）：', e.message);
+}
+
+/**
+ * POST /api/internal/syncbot/events —— syncbot 结构化事件上报（**本机回环 + HMAC**）
+ *
+ * 鉴权：不走 JWT，改由独立 HMAC 密钥 + 时间戳窗口校验（X-Syncbot-Timestamp / X-Syncbot-Signature）。
+ * 签名原文：`${timestamp}.${原始请求体字节}`（HMAC-SHA256，hex）。因此必须发送原始 JSON 字节
+ * （Content-Type: application/octet-stream），以便签名覆盖未被重新序列化的确切内容。
+ * 安全：
+ *  - 密钥仅从服务端配置文件读取（不回显、不写日志）；
+ *  - 拒绝经由反向代理到达的请求（存在 X-Forwarded-For / X-Real-IP / Via 即拒绝），
+ *    使该接口只能由本机直连调用，不因 nginx 暴露到公网而可用；
+ *  - 只接受脱敏白名单字段；event_id 幂等；非法 report_type / 阶段一律拒绝。
+ */
+// Stage 1: coverage-only internal route. No schedule, webhook, timer, write, or task execution.
+try {
+  const { mountCoverage } = require('./lib/syncbot-coverage');
+  mountCoverage({ app, express, db, audit: syncJobAudit });
+} catch (e) {
+  console.error('[syncbot-coverage] mount failed:', e.message);
+}
+
+app.post('/api/internal/syncbot/events', express.raw({ type: () => true, limit: '1mb' }), (req, res) => {
+  try {
+    const viaProxy = req.get('x-forwarded-for') || req.get('x-real-ip') || req.get('via') || req.get('forwarded');
+    if (viaProxy) return res.status(403).json({ error: '该接口不接受经代理的请求（仅限本机直连）' });
+    const remote = (req.socket && req.socket.remoteAddress) || '';
+    if (!/^(127\.|::1$|::ffff:127\.)/.test(remote)) return res.status(403).json({ error: '该接口仅接受本机回环请求' });
+
+    const secret = syncJobAudit.loadSecret();
+    if (!secret) return res.status(503).json({ error: '审计上报未配置（缺少 HMAC 密钥文件）' });
+    if (!Buffer.isBuffer(req.body)) {
+      return res.status(415).json({ error: '请求体必须为原始 JSON 字节（Content-Type: application/octet-stream）' });
+    }
+    const rawBody = req.body.toString('utf8');
+    const ts = String(req.get('x-syncbot-timestamp') || '');
+    const sig = String(req.get('x-syncbot-signature') || '');
+    const tsv = syncJobAudit.timestampAcceptable(ts);
+    if (!tsv.ok) return res.status(401).json({ error: '时间戳缺失、非法或偏差过大', reason: tsv.reason });
+    const sv = syncJobAudit.verifySignature({ secret, timestamp: ts, signature: sig, rawBody });
+    if (!sv.ok) return res.status(401).json({ error: 'HMAC 校验失败', reason: sv.reason });
+
+    let payload = null;
+    try { payload = JSON.parse(rawBody); } catch { return res.status(400).json({ error: '请求体不是合法 JSON' }); }
+    const events = Array.isArray(payload && payload.events) ? payload.events
+      : (payload && payload.event_id ? [payload] : null);
+    if (!events || !events.length) return res.status(400).json({ error: 'events 必须为非空数组' });
+    if (events.length > 200) return res.status(400).json({ error: '单批事件数不能超过 200' });
+
+    const result = syncJobAudit.ingestEvents(db, events);
+    const okAll = result.rejected.length === 0;
+    const status = result.accepted.length ? 201 : (result.rejected.length === events.length ? 400 : 200);
+    res.status(status).json({
+      ok: okAll,
+      accepted: result.accepted.length,
+      duplicates: result.duplicates.length,
+      rejected: result.rejected,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * POST /api/internal/syncbot/test-cleanup —— 内部测试 fixture 的**精确清理**能力
+ *
+ * 不是泛用删除接口：只接受一个精确 test_run_id，只删除
+ * `is_test=1 AND test_run_id=<该值>` 的 runs/events，事务内执行并返回删除数量。
+ * 安全边界与上报接口一致（仅本机回环、拒绝经代理、HMAC + 时间戳、原始字节签名），
+ * 且**不提供**按日期、按 task_id 模糊匹配或任意删除的能力。
+ */
+app.post('/api/internal/syncbot/test-cleanup', express.raw({ type: () => true, limit: '256kb' }), (req, res) => {
+  try {
+    const viaProxy = req.get('x-forwarded-for') || req.get('x-real-ip') || req.get('via') || req.get('forwarded');
+    if (viaProxy) return res.status(403).json({ error: '该接口不接受经代理的请求（仅限本机直连）' });
+    const remote = (req.socket && req.socket.remoteAddress) || '';
+    if (!/^(127\.|::1$|::ffff:127\.)/.test(remote)) return res.status(403).json({ error: '该接口仅接受本机回环请求' });
+    const secret = syncJobAudit.loadSecret();
+    if (!secret) return res.status(503).json({ error: '审计上报未配置（缺少 HMAC 密钥文件）' });
+    if (!Buffer.isBuffer(req.body)) return res.status(415).json({ error: '请求体必须为原始 JSON 字节（Content-Type: application/octet-stream）' });
+    const rawBody = req.body.toString('utf8');
+    const ts = String(req.get('x-syncbot-timestamp') || '');
+    const sig = String(req.get('x-syncbot-signature') || '');
+    const tsv = syncJobAudit.timestampAcceptable(ts);
+    if (!tsv.ok) return res.status(401).json({ error: '时间戳缺失、非法或偏差过大', reason: tsv.reason });
+    const sv = syncJobAudit.verifySignature({ secret, timestamp: ts, signature: sig, rawBody });
+    if (!sv.ok) return res.status(401).json({ error: 'HMAC 校验失败', reason: sv.reason });
+    let payload = null;
+    try { payload = JSON.parse(rawBody); } catch { return res.status(400).json({ error: '请求体不是合法 JSON' }); }
+    const testRunId = payload && typeof payload.test_run_id === 'string' ? payload.test_run_id : '';
+    const result = syncJobAudit.cleanupTestRun(db, testRunId);
+    if (!result.ok) return res.status(result.refused ? 400 : 500).json({ ok: false, ...result });
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/** 概览：最近一次运行 / 最近成功时间 / 今日成功失败等待人工数 / 待处理异常数 */
+app.get('/api/business-analytics/sync-runs/overview', (req, res) => {
+  try { res.json({ ok: true, ...syncJobAudit.overview(db) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/** 运行列表（筛选：平台/报表类型/业务日期范围/状态/是否补录/是否已导入/是否已推送） */
+app.get('/api/business-analytics/sync-runs', (req, res) => {
+  try { res.json({ ok: true, ...syncJobAudit.listRuns(db, req.query || {}) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/** 运行详情：阶段时间线 + 脱敏证据摘要 + 文件校验结果（不含绝对路径/密钥/令牌，且不提供原始 Excel 下载） */
+app.get('/api/business-analytics/sync-runs/:id', (req, res) => {
+  try {
+    const detail = syncJobAudit.getRun(db, req.params.id);
+    if (!detail) return res.status(404).json({ error: '运行记录不存在' });
+    res.json({ ok: true, ...detail });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ===== 数据导出 =====
 app.get('/api/data/export', (req, res) => {
   try { const { type } = req.query; let data; switch (type) { case 'stores': data = db.queryAll('SELECT * FROM stores'); break; case 'daily': data = db.queryAll('SELECT * FROM daily_reports ORDER BY date DESC LIMIT 200'); break; case 'cost': data = db.queryAll('SELECT * FROM cost_accounting ORDER BY date DESC LIMIT 200'); break; case 'menu': data = db.queryAll('SELECT * FROM menu_items'); break; default: data = { stores: db.queryAll('SELECT * FROM stores'), menu: db.queryAll('SELECT * FROM menu_items') }; } res.json({ ok: true, type, data }); }
@@ -5343,6 +6897,12 @@ app.get('/api/bot/status', (_req, res) => {
     db.save();
   })();
 
+  // 员工多岗位：把历史 employees.position 回填成主岗位记录（幂等，只补缺失的）。
+  (function backfillPositions() {
+    const count = backfillEmployeePositions();
+    if (count) console.log(`👥 员工岗位回填：${count} 条历史岗位已转为主岗位记录`);
+  })();
+
   // 确保 admin 用户存在；管理员身份完全由“系统管理员”岗位承载。
   (function ensureUsers() {
     const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
@@ -5383,6 +6943,8 @@ app.post('/api/webhook/smartsheet', async (req, res) => {
   const server = app.listen(PORT, () => {
     console.log(`🚀 中控后台已启动: http://localhost:${PORT}`);
     console.log(`📦 数据库: data/database.sqlite`);
+    // 每日自动同步钉钉考勤（默认 01:00 同步上一天，可在 config.json 的 dingtalkAttendance 调整）
+    startAttendanceAutoSync();
   });
 
   // 优雅退出：断开智能机器人

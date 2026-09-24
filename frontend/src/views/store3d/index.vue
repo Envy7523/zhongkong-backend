@@ -31,7 +31,7 @@
       </div>
 
       <el-table :data="pagedStores" v-loading="storesLoading" stripe class="model-table" empty-text="暂无匹配的门店">
-        <el-table-column type="index" label="#" width="58" :index="tableIndex" />
+        <el-table-column type="index" label="序号" width="64" :index="tableIndex" align="center" />
         <el-table-column prop="store_name" label="门店名称" min-width="210" fixed="left" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="104"><template #default="{ row }"><el-tag :type="statusTag(row.status)" effect="plain" size="small">{{ row.status || '—' }}</el-tag></template></el-table-column>
         <el-table-column prop="store_type" label="店型" width="94" />

@@ -132,6 +132,13 @@ const routes = [
     meta: { analysisKey: 'analysis-delivery-store', analysisTitle: '外卖视角 · 门店视角', analysisScope: 'delivery', analysisMode: 'store' },
   },
   {
+    // AI 自动导报表记录：与数据分析同组渲染（走 router-view 的特殊路由），权限沿用 analysis.view
+    path: '/business-analytics/sync-runs',
+    name: 'analysis-sync-runs',
+    component: () => import('@/views/analysis/SyncRuns.vue'),
+    meta: { analysisKey: 'analysis-sync-runs', analysisTitle: 'AI 自动导报表记录', analysisScope: 'total', analysisMode: 'sync-runs' },
+  },
+  {
     path: '/data-import',
     redirect: '/data-import/pos',
   },
@@ -214,6 +221,21 @@ const routes = [
     component: () => import('@/views/staff/SalaryPlaceholder.vue'),
   },
   {
+    path: '/staff-management/dispatch',
+    name: 'staff-management-dispatch',
+    component: () => import('@/views/staff/StaffDispatch.vue'),
+  },
+  {
+    path: '/notifications',
+    name: 'notifications',
+    component: () => import('@/views/NotificationCenterView.vue'),
+  },
+  {
+    path: '/notification-rules',
+    name: 'notification-rules',
+    component: () => import('@/views/NotificationRulesView.vue'),
+  },
+  {
     path: '/collab',
     redirect: '/collab/list',
   },
@@ -279,6 +301,8 @@ const ROUTE_PERMISSION_RULES = [
   ['reports-', 'data-import.manage'],
   ['workspace-pipeline', 'pipeline.manage'],
   ['workspace-ai-assistant', 'ai-assistant.view'],
+  ['notification-rules', 'notifications.rules'],
+  ['notifications', 'notifications.view'],
   // 更具体的规则必须排在前面，否则会被宽前缀先命中（如 store-3d 被 store- 拿走）
   ['store-3d', 'store-preparation.manage'],
   ['store-', 'store.manage'],
@@ -291,6 +315,7 @@ const ROUTE_PERMISSION_RULES = [
   ['workspace-user', 'users.manage'],
   ['workspace-settings', 'settings.manage'],
   ['enterprise-settings-', 'enterprise-settings.manage'],
+  ['notifications', 'notifications.view'],
   ['db-viewer', 'db-viewer.view'],
   ['analysis-', 'analysis.view'],
 ]

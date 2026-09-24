@@ -16,6 +16,8 @@ export const PERMISSION_KEYS = [
   'data-import.manage',
   'pipeline.manage',
   'ai-assistant.view',
+  'notifications.view',
+  'notifications.rules',
   'db-viewer.view',
   'enterprise-settings.manage',
   'users.manage',
@@ -27,8 +29,8 @@ export const PERMISSION_KEYS = [
 export const NAV_GROUP_PERMISSIONS = {
   dashboard: ['dashboard.view'],
   'core-business': ['analysis.view', 'store.manage', 'store-preparation.manage', 'menu.manage', 'cost.manage', 'staff.view'],
-  'operation-tools': ['collab.manage', 'bookkeeping.manage', 'data-import.manage', 'pipeline.manage', 'ai-assistant.view'],
-  system: ['db-viewer.view', 'enterprise-settings.manage', 'users.manage', 'positions.manage', 'settings.manage'],
+  'operation-tools': ['collab.manage', 'bookkeeping.manage', 'data-import.manage', 'pipeline.manage', 'ai-assistant.view', 'notifications.view'],
+  system: ['db-viewer.view', 'enterprise-settings.manage', 'users.manage', 'positions.manage', 'settings.manage', 'notifications.rules'],
 }
 
 // 菜单项 index → 需要的权限码
@@ -45,6 +47,8 @@ export const NAV_ITEM_PERMISSIONS = {
   'data-import-group': 'data-import.manage',
   pipeline: 'pipeline.manage',
   'ai-assistant': 'ai-assistant.view',
+  notifications: 'notifications.view',
+  'notification-rules': 'notifications.rules',
   'db-viewer': 'db-viewer.view',
   'enterprise-settings': 'enterprise-settings.manage',
   'user-management': 'users.manage',

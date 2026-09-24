@@ -24,8 +24,13 @@ http.interceptors.response.use(
         window.location.href = '/login'
       }
     }
-    const msg = err.response?.data?.error || err.message || '请求失败'
-    return Promise.reject(new Error(msg))
+    const payload = err.response?.data
+    const msg = payload?.error || err.message || '请求失败'
+    const error = new Error(msg)
+    // 把响应体的其余字段（如闭店接口返回的 pending_employees）一并挂到 error 上，
+    // 需要结构化信息时不必再去翻 err.response。已有字段仍以 message 为准，不影响既有调用方。
+    if (payload && typeof payload === 'object') Object.assign(error, payload)
+    return Promise.reject(error)
   }
 )
 
@@ -113,6 +118,20 @@ export const setStoreRegionMembership = (storeId, regionId) => http.put(`/api/st
 
 // ===== 门店统计 =====
 export const getStoreStats = () => http.get('/api/db/stores/stats')
+
+// ===== 门店生命周期：闭店 / 迁址 / 重开 / 履历 =====
+// 口径见后端 lib/store-lifecycle.js：状态只有三态，迁址=老店闭店+新建门店+双向关联，闭店前员工必须全部处置。
+export const getStoreLifecycleMeta = () => http.get('/api/store-lifecycle/meta')
+export const getStoreLifecycle = (id) => http.get(`/api/db/stores/${id}/lifecycle`)
+export const closeStore = (id, data) => http.post(`/api/db/stores/${id}/close`, data)
+export const relocateStore = (id, data) => http.post(`/api/db/stores/${id}/relocate`, data)
+export const reopenStore = (id, data) => http.post(`/api/db/stores/${id}/reopen`, data)
+
+// ===== 门店级看板设置（按门店保存口径，不跟浏览器走）=====
+// 目前用于「每日均摊成本」里工资 / 房租物业 / 水电各项的取数来源。
+export const getStoreDashboardSettings = (id) => http.get(`/api/db/stores/${id}/dashboard-settings`)
+export const saveStoreDashboardSettings = (id, settings) => http.put(`/api/db/stores/${id}/dashboard-settings`, { settings })
+export const resetStoreDashboardSettings = (id) => http.delete(`/api/db/stores/${id}/dashboard-settings`)
 export const getStoreByProvince = () => http.get('/api/db/stores/by-province')
 export const getStoreByCity = (province) => http.get('/api/db/stores/by-city', { params: { province } })
 
@@ -264,6 +283,11 @@ export const importTaobaoFlashData = (data) => http.post('/api/business-analytic
 export const getBusinessImportBatches = (params) => http.get('/api/business-analytics/import-batches', { params })
 export const getBusinessTemplate = (sourceType) => http.get('/api/business-analytics/template', { params: { source_type: sourceType } })
 
+// ===== AI 自动导报表运行审计（结构化事件；不从普通日志解析）=====
+export const getSyncRunsOverview = () => http.get('/api/business-analytics/sync-runs/overview')
+export const getSyncRuns = (params) => http.get('/api/business-analytics/sync-runs', { params })
+export const getSyncRunDetail = (id) => http.get(`/api/business-analytics/sync-runs/${id}`)
+
 // ===== 菜品销售分析 =====
 export const getDishSalesAnalytics = (params) => http.get('/api/dish-sales/analytics', { params })
 // 合并口径：双表按区间分段 + 按标准菜品聚合（总视角「菜品销售分析」用）
@@ -351,6 +375,8 @@ export const getStaffLifecycle = (id) => http.get(`/api/staff/${id}/lifecycle`)
 export const getStaffSalaryProfile = (id) => http.get(`/api/staff/${id}/salary-profile`)
 export const saveStaffSalaryProfile = (id, data) => http.put(`/api/staff/${id}/salary-profile`, data)
 export const generateStaffPayrollSheet = (data) => http.post('/api/staff/payroll-sheet', data, { responseType: 'blob', timeout: 120000 })
+export const getPayrollMonthSetting = (period) => http.get(`/api/payroll-month-settings/${period}`)
+export const savePayrollMonthSetting = (period, data) => http.put(`/api/payroll-month-settings/${period}`, data)
 export const getPayrollSheets = () => http.get('/api/payroll-sheets')
 export const preparePayrollSheet = (data) => http.post('/api/payroll-sheets/prepare', data)
 export const getPayrollSheet = (id) => http.get(`/api/payroll-sheets/${id}`)
@@ -358,6 +384,9 @@ export const savePayrollSheet = (id, data) => http.put(`/api/payroll-sheets/${id
 export const exportPayrollSheet = (id) => http.get(`/api/payroll-sheets/${id}/export`, { responseType: 'blob', timeout: 120000 })
 export const getDingTalkAttendanceStatus = () => http.get('/api/staff/dingtalk/status')
 export const syncDingTalkAttendance = (data) => http.post('/api/staff/dingtalk/sync', data)
+// 考勤每日自动同步：企业设置里查看状态 / 手动触发一次
+export const getDingTalkAutoSync = () => http.get('/api/staff/dingtalk/auto-sync')
+export const runDingTalkAutoSync = (data) => http.post('/api/staff/dingtalk/auto-sync/run', data || {})
 export const getStaffDingTalkAttendance = (id, params) => http.get(`/api/staff/${id}/dingtalk-attendance`, { params })
 export const seedStaff = () => http.post('/api/staff/seed')
 export const syncPullStaff = () => http.get('/api/staff/sync-pull')
@@ -365,6 +394,26 @@ export const syncPullStaff = () => http.get('/api/staff/sync-pull')
 export const syncStaffFromWecom = () => http.post('/api/staff/sync-wecom', {})
 export const getStaffStoreManagers = () => http.get('/api/staff/store-managers')
 export const saveStaffStoreManager = (storeId, employeeId) => http.put(`/api/staff/store-managers/${storeId}`, { employee_id: employeeId })
+export const getStaffDispatches = (params) => http.get('/api/staff/dispatches', { params })
+export const createStaffDispatch = (data) => http.post('/api/staff/dispatches', data)
+export const cancelStaffDispatch = (id) => http.put(`/api/staff/dispatches/${id}`, { status: '已取消' })
+
+// ===== 消息通知 =====
+export const getNotifications = (params) => http.get('/api/notifications', { params })
+export const getNotificationSummary = () => http.get('/api/notifications/summary')
+// 手动创建通知：人选人、多选接收者、可定时到分钟
+export const createNotification = (data) => http.post('/api/notifications/create', data)
+export const getNotificationCreated = () => http.get('/api/notifications/created')
+// 仅「定时未发布」的通知可改可撤
+export const updateCreatedNotification = (id, data) => http.put(`/api/notifications/created/${id}`, data)
+export const withdrawNotification = (id) => http.delete(`/api/notifications/created/${id}`)
+// 首次弹窗：返回还没弹过的通知，并标记为已弹（每条只弹一次）
+export const getNotificationPopup = () => http.get('/api/notifications/popup')
+export const updateNotification = (id, data) => http.put(`/api/notifications/${id}`, data)
+export const getNotificationSettings = () => http.get('/api/notifications/settings')
+export const saveNotificationSettings = (data) => http.put('/api/notifications/settings', data)
+export const checkNotifications = () => http.post('/api/notifications/check', {})
+export const sendTestNotification = () => http.post('/api/notifications/test', {})
 
 // ===== 数据库查看器（只读，开发辅助）=====
 export const dbViewerOverview = () => http.get('/api/db-viewer/overview')

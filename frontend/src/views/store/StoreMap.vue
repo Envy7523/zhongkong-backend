@@ -339,6 +339,21 @@ const FULL_TO_SHORT = {
   '香港特别行政区':'香港','澳门特别行政区':'澳门',
 }
 
+const MUNICIPALITY_NAMES = new Set(['北京市','天津市','上海市','重庆市','北京','天津','上海','重庆'])
+function isMunicipality(name) { return MUNICIPALITY_NAMES.has(String(name || '').trim()) }
+async function loadBoundary(adcode, { allowBase = false } = {}) {
+  const paths = [`${adcode}_full.json`, ...(allowBase ? [`${adcode}.json`] : [])]
+  for (const path of paths) {
+    try {
+      const response = await fetch(`${GEO_BASE}?path=${path}`)
+      if (!response.ok) continue
+      const geo = await response.json()
+      if (Array.isArray(geo?.features) && geo.features.length) return geo
+    } catch {}
+  }
+  return null
+}
+
 const chartRef = ref(null)
 const amapRef = ref(null)
 const total = ref(0)
@@ -915,8 +930,8 @@ async function drillToProvince(name) {
   loading.value = true
   try {
     const [geo,stats] = await Promise.all([
-      fetch(`${GEO_BASE}?path=${adcode}_full.json`).then(r=>r.json()),
-      getCityStats(name).catch(()=>({data:[]})),
+      loadBoundary(adcode),
+      (isMunicipality(name) ? getDistrictStats(name, name) : getCityStats(name)).catch(()=>({data:[]})),
     ])
     if (!chartRef.value||!geo) return
     const dl = stats.data||[]; provinceCache={name,geo,dataList:dl}
@@ -934,6 +949,13 @@ async function drillToCity(name) {
   if (drillLevel.value!=='province'||!provinceCache) return
   startLevelTransition('forward')
   const features = provinceCache.geo.features||[]
+  // 直辖市省级边界的下级已经是区县：省、市名称相同，点击后直接进入区级实景地图。
+  if (isMunicipality(provinceName.value)) {
+    cityCache = { name: provinceName.value, geo: provinceCache.geo, dataList: provinceCache.dataList }
+    drillLevel.value='city'; cityName.value=provinceName.value; districtName.value=''
+    await drillToDistrict(name)
+    return
+  }
   const f = features.find(x=>normalize(x.properties?.name||'')===normalize(name)||x.properties?.name===name)
   const adcode = f?.properties?.adcode
   if (!adcode) { finishLevelTransition(); return }
@@ -948,10 +970,15 @@ async function drillToCity(name) {
   loading.value = true
   try {
     const [geo,stats] = await Promise.all([
-      fetch(`${GEO_BASE}?path=${adcode}_full.json`).then(r=>r.json()),
+      loadBoundary(adcode, { allowBase: true }),
       getDistrictStats(provinceName.value, name).catch(()=>({data:[]})),
     ])
-    if (!chartRef.value||!geo) return
+    if (!chartRef.value) return
+    // 东莞、中山等城市没有区县级 _full 边界；备用市级文件只有城市自身一个面，自动进入镇街实景图。
+    const isCityOnlyBoundary = geo?.features?.length === 1
+      && String(geo.features[0]?.properties?.adcode || '') === String(adcode)
+      && Number(geo.features[0]?.properties?.childrenNum || 0) === 0
+    if (!geo || isCityOnlyBoundary) { await drillToCityStreetMap(name, f); return }
     const dl = stats.data||[]; cityCache={name,geo,dataList:dl}
     destroyAmap()
     drillLevel.value='city'; cityName.value=name; districtName.value=''
@@ -961,6 +988,26 @@ async function drillToCity(name) {
     loading.value = false
     finishLevelTransition()
   }
+}
+
+// 无区县边界的城市（如东莞、中山）直接使用高德实景地图承载镇街和门店点位。
+async function drillToCityStreetMap(city, feature) {
+  loading.value = true
+  try {
+    await waitForAMap()
+    const locs = await getStoreLocations({ province: provinceName.value, city }).catch(()=>({data:[]}))
+    storesLocs.value = locs.data || []
+    customPins.value = await getMapPins({ province: provinceName.value, city }).then(r => r.data).catch(() => [])
+    const geo = await loadBoundary(feature?.properties?.adcode, { allowBase: true })
+    if (!geo) throw new Error('未找到该城市边界')
+    cityCache = { name: city, geo, dataList: [{ name: city, value: storesLocs.value.length }] }
+    drillLevel.value='district'; cityName.value=city; districtName.value=`${city}（镇街）`
+    total.value=storesLocs.value.length
+    await nextTick(); await new Promise(r => requestAnimationFrame(r))
+    if (!amapRef.value) return
+    renderAmap(geo, [{ name: city, value: storesLocs.value.length }], geo.features?.[0], storesLocs.value)
+  } catch (e) { console.error('镇街实景地图加载失败:', e); finishLevelTransition() }
+  finally { loading.value=false }
 }
 
 // ═══ 区 → 高德真实 2D 地图 ═══
