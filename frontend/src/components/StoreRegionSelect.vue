@@ -84,21 +84,15 @@ function leafStoreIds(regionId) {
   }, new Set())
 }
 
-const CLOSED_STATUSES = ['已闭店', '闭店', '迁址']
-const isClosedStore = (store) => CLOSED_STATUSES.includes(String(store?.status || '').trim())
-// 已闭店门店不进选择器：这里是为“现在要录的东西”挑门店，闭店门店集中在系统分组
-// 「闭店门店」里，从「门店基本信息」页查看（那里能看到履历与迁址关联）。
-const visibleStores = computed(() => props.stores.filter(store => !isClosedStore(store)))
-
 function makeRegionNode(region) {
   const children = directChildren(region.id)
   const storeIds = leafStoreIds(region.id)
   const node = { key: `region-${region.id}`, kind: 'region', label: region.name, storeCount: storeIds.size, children: [] }
   // 正常从当前页面提供的门店列表取名称；列表按页加载或刚新建门店时，
   // 则回退到区域接口自带的成员名称，避免“显示 1 家却没有门店行”。
-  const directStores = visibleStores.value.filter(store => storeIds.has(Number(store.id)))
+  const directStores = props.stores.filter(store => storeIds.has(Number(store.id)))
   const knownStoreIds = new Set(directStores.map(store => Number(store.id)))
-  const fallbackStores = (region.stores || []).filter(store => !knownStoreIds.has(Number(store.id)) && !isClosedStore(store))
+  const fallbackStores = (region.stores || []).filter(store => !knownStoreIds.has(Number(store.id)))
   node.children = children.length
     ? children.map(makeRegionNode)
     : [...directStores, ...fallbackStores]
@@ -107,9 +101,9 @@ function makeRegionNode(region) {
 }
 
 const assignedStoreIds = computed(() => new Set(regions.value.flatMap(region => (region.store_ids || []).map(Number))))
-const unassignedStores = computed(() => visibleStores.value.filter(store => !assignedStoreIds.value.has(Number(store.id))))
+const unassignedStores = computed(() => props.stores.filter(store => !assignedStoreIds.value.has(Number(store.id))))
 const treeData = computed(() => {
-  const nodes = directChildren(null).filter(region => region.code !== 'closed').map(makeRegionNode)
+  const nodes = directChildren(null).map(makeRegionNode)
   if (props.showGroup && !props.multiple) nodes.unshift(...GROUP_NAMES.map(name => ({ key: `group-${name}`, kind: 'group', label: name, groupName: name, leaf: true })))
   if (unassignedStores.value.length) {
     nodes.push({

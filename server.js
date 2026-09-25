@@ -6469,7 +6469,8 @@ app.post('/api/business-analytics/diagnoses', (req, res) => {
 app.post('/api/business-analytics/import', (req, res) => {
   try {
     const result = businessAnalytics.importWorkbook(db, req.body || {}, req.user);
-    res.status(201).json({ ok: true, ...result });
+    const amountEvidence = require('./lib/import-amount-evidence').buildAmountEvidence(db, result);
+    res.status(201).json({ ok: true, ...result, ...amountEvidence });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -6638,6 +6639,50 @@ app.post('/api/internal/syncbot/events', express.raw({ type: () => true, limit: 
  * 安全边界与上报接口一致（仅本机回环、拒绝经代理、HMAC + 时间戳、原始字节签名），
  * 且**不提供**按日期、按 task_id 模糊匹配或任意删除的能力。
  */
+app.post('/api/internal/syncbot/run-settle', express.raw({ type: () => true, limit: '64kb' }), (req, res) => {
+  try {
+    const viaProxy = req.get('x-forwarded-for') || req.get('x-real-ip') || req.get('via') || req.get('forwarded');
+    if (viaProxy) return res.status(403).json({ error: '该接口不接受经代理的请求（仅限本机直连）' });
+    const remote = (req.socket && req.socket.remoteAddress) || '';
+    if (!/^(127\.|::1$|::ffff:127\.)/.test(remote)) return res.status(403).json({ error: '该接口仅接受本机回环请求' });
+    const secret = syncJobAudit.loadSecret();
+    if (!secret) return res.status(503).json({ error: '审计上报未配置（缺少 HMAC 密钥文件）' });
+    if (!Buffer.isBuffer(req.body)) return res.status(415).json({ error: '请求体必须为原始 JSON 字节（Content-Type: application/octet-stream）' });
+    const rawBody = req.body.toString('utf8');
+    const ts = String(req.get('x-syncbot-timestamp') || '');
+    const sig = String(req.get('x-syncbot-signature') || '');
+    const tsv = syncJobAudit.timestampAcceptable(ts);
+    if (!tsv.ok) return res.status(401).json({ error: '时间戳缺失、非法或偏差过大', reason: tsv.reason });
+    const sv = syncJobAudit.verifySignature({ secret, timestamp: ts, signature: sig, rawBody });
+    if (!sv.ok) return res.status(401).json({ error: 'HMAC 校验失败', reason: sv.reason });
+    let payload = null;
+    try { payload = JSON.parse(rawBody); } catch { return res.status(400).json({ error: '请求体不是合法 JSON' }); }
+    const out = require('./lib/sync-job-settle').settleRun(db, payload);
+    res.status(out.ok ? 200 : 400).json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/internal/syncbot/run-reconcile', express.raw({ type: () => true, limit: '64kb' }), (req, res) => {
+  try {
+    const viaProxy = req.get('x-forwarded-for') || req.get('x-real-ip') || req.get('via') || req.get('forwarded');
+    if (viaProxy) return res.status(403).json({ error: '该接口不接受经代理的请求（仅限本机直连）' });
+    const remote = (req.socket && req.socket.remoteAddress) || '';
+    if (!/^(127\.|::1$|::ffff:127\.)/.test(remote)) return res.status(403).json({ error: '该接口仅接受本机回环请求' });
+    const secret = syncJobAudit.loadSecret();
+    if (!secret) return res.status(503).json({ error: '审计上报未配置（缺少 HMAC 密钥文件）' });
+    if (!Buffer.isBuffer(req.body)) return res.status(415).json({ error: '请求体必须为原始 JSON 字节（Content-Type: application/octet-stream）' });
+    const rawBody = req.body.toString('utf8');
+    const ts = String(req.get('x-syncbot-timestamp') || '');
+    const sig = String(req.get('x-syncbot-signature') || '');
+    const tsv = syncJobAudit.timestampAcceptable(ts);
+    if (!tsv.ok) return res.status(401).json({ error: '时间戳缺失、非法或偏差过大', reason: tsv.reason });
+    const sv = syncJobAudit.verifySignature({ secret, timestamp: ts, signature: sig, rawBody });
+    if (!sv.ok) return res.status(401).json({ error: 'HMAC 校验失败', reason: sv.reason });
+    let payload = null;
+    try { payload = JSON.parse(rawBody); } catch { return res.status(400).json({ error: '请求体不是合法 JSON' }); }
+    const out = require('./lib/sync-job-reconcile').reconcile(db, payload);
+    res.status(out.ok ? 200 : 400).json(out);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.post('/api/internal/syncbot/test-cleanup', express.raw({ type: () => true, limit: '256kb' }), (req, res) => {
   try {
     const viaProxy = req.get('x-forwarded-for') || req.get('x-real-ip') || req.get('via') || req.get('forwarded');

@@ -40,7 +40,7 @@ const SUB_LABELS = {
   'staff-management': { manager: '店长管理', clerk: '店员管理', test: '测试数据', employees: '员工管理', store: '门店管理', salary: '工资表制作', dispatch: '员工调岗' },
   bookkeeping: { entry: '门店记账', categories: '记账分类', records: '门店账本' },
   'store-preparation': { '3d': '门店渲染' },
-  'data-import': { pos: '收银系统数据', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' },
+  'data-import': { pos: '收银系统数据', 'pos-automation': '收银系统 · 自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' },
 }
 
 // 从 menu index 解析 page 和 sub

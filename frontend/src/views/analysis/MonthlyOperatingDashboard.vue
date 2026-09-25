@@ -15,7 +15,7 @@
       <div class="query-field store-select"><span>选择门店</span><StoreRegionSelect v-model="filters.storeIds" :stores="stores" multiple placeholder="全部门店或按区域勾选" /></div>
       <div class="query-field view-select"><span>数据口径</span><el-radio-group v-model="filters.view"><el-radio-button label="cash">现金收支</el-radio-button><el-radio-button label="accrual">经营盈亏</el-radio-button></el-radio-group></div>
       <div class="query-field revenue-view-select"><span>收入数据视角</span><el-radio-group v-model="filters.dataView"><el-radio-button label="cashier">收银机</el-radio-button><el-radio-button label="real">真实数据</el-radio-button></el-radio-group></div>
-      <el-button v-if="filters.dataView === 'real'" class="platform-source-button" @click="openSourceDialog">平台来源 · {{ platformSourceSummary }}</el-button>
+      <el-button v-if="filters.dataView === 'real'" class="platform-source-button" @click="sourceDialogVisible = true">平台来源 · {{ platformSourceSummary }}</el-button>
       <el-button type="primary" :loading="loading" @click="queryBoard">查询看板</el-button>
     </section>
 
@@ -23,14 +23,7 @@
       <section class="revenue-source-panel"><div><span>REVENUE SOURCE</span><h3>{{ board.revenue_source?.view === 'cashier' ? '收银机视角' : '真实数据视角' }}</h3><p>{{ board.revenue_source?.view === 'cashier' ? '全部销售渠道按收银机原始数据计算。' : '店内销售与自提来自收银机；第三方渠道按当前平台来源设置解析。' }}</p></div><div class="revenue-source-metrics"><article><span>销售营业额</span><b>{{ money(board.revenue_source?.gross_amount) }}</b></article><article><span>优惠后收入</span><b>{{ money(board.revenue_source?.income_amount) }}</b></article><article><span>平台费用</span><b class="fee">{{ money(board.revenue_source?.platform_fee_amount) }}</b></article><article><span>实际到账</span><b>{{ money(board.revenue_source?.settled_amount) }}</b></article></div></section>
       <section v-if="isAccrual" class="daily-cost-panel">
         <header>
-          <div><span>DAILY ACCRUED COST</span><h3>每日均摊成本</h3><p>固定由工资、房租/物业、水电构成；每个项目可独立设置来源，按本月 {{ board.period.days_in_month }} 天均摊。</p>
-            <small v-if="singleStoreId" class="store-scope-note" :class="{ saved: costSourceSaved }">
-              {{ costSourceSaved ? '来源设置已按本门店保存，切换门店会各自带出各自的口径' : '来源设置将按本门店保存（本店尚未保存过，当前为默认值）' }}<template v-if="costSourceSaving"> · 保存中…</template>
-            </small>
-            <small v-else class="store-scope-note warn">
-              当前选了 {{ filters.storeIds.length }} 家门店（或未选），来源设置不会按店保存；请单选一家门店再调整，才会记住该店的口径
-            </small>
-          </div>
+          <div><span>DAILY ACCRUED COST</span><h3>每日均摊成本</h3><p>固定由工资、房租/物业、水电构成；每个项目可独立设置来源，按本月 {{ board.period.days_in_month }} 天均摊。</p></div>
           <small class="cost-source-tip">调整后需点击“查询看板”重新计算</small>
         </header>
         <div class="daily-cost-grid">
@@ -196,54 +189,37 @@
     <el-empty v-else description="请选择月份、截止日期和门店后查询月经营数据看板" :image-size="120" class="board-empty" />
 
     <el-dialog v-model="costSourceDialogVisible" :title="`调整${costSourceTargetLabel}来源`" width="520px" class="cost-source-dialog" destroy-on-close>
-      <p class="dialog-hint">仅调整{{ costSourceTargetLabel }}的取数来源。<b v-if="singleStoreId">确认后会保存到本门店</b><b v-else>当前未单选门店，不会按店保存</b>；保存完成后请点击页面的“查询看板”重新计算。</p>
+      <p class="dialog-hint">仅调整{{ costSourceTargetLabel }}的取数来源。选择完成后，请点击页面的“查询看板”重新计算。</p>
       <el-radio-group v-model="draftCostSource" class="cost-source-options">
         <el-radio v-for="option in costSourceOptions" :key="option.value" :label="option.value" border>
           <b>{{ option.label }}</b><span>{{ option.description }}</span>
         </el-radio>
       </el-radio-group>
-      <template #footer>
-        <el-button v-if="singleStoreId && costSourceSaved" text type="warning" @click="resetCostSources">恢复默认</el-button>
-        <el-button @click="costSourceDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="applyCostSource">确认选择</el-button>
-      </template>
+      <template #footer><el-button @click="costSourceDialogVisible = false">取消</el-button><el-button type="primary" @click="applyCostSource">确认选择</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="sourceDialogVisible" title="真实数据视角 · 平台来源" width="720px" class="source-config-dialog" destroy-on-close>
-      <p class="dialog-hint">店内销售与自提固定取收银机；四个可切换平台可选择收银机或第三方。美团团购始终采用第三方收益明细（该项不可改）。
-        <b v-if="singleStoreId">确认后会保存到本门店{{ sourceSaved ? '（本店已保存过）' : '（本店尚未保存过，当前为默认值）' }}</b>
-        <b v-else>当前未单选门店，不会按店保存</b>；保存完成后请点击查询看板重新计算。</p>
-      <div class="platform-source-grid"><article v-for="item in platformSourceOptions" :key="item.key"><div><b>{{ item.label }}</b><span>{{ item.note }}</span></div><el-radio-group v-model="draftSourceOverrides[item.key]" size="small" :disabled="item.key === 'meituan_group'"><el-radio-button label="platform">第三方</el-radio-button><el-radio-button label="pos">收银机</el-radio-button></el-radio-group></article></div>
-      <template #footer>
-        <el-button v-if="singleStoreId && sourceSaved" text type="warning" @click="resetPlatformSources">恢复默认</el-button>
-        <el-button @click="sourceDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="sourceSaving" @click="applySourceOverrides">确认选择</el-button>
-      </template>
+      <p class="dialog-hint">店内销售与自提固定取收银机；四个可切换平台可选择收银机或第三方。美团团购始终采用第三方收益明细。切换仅影响本次查询结果，不修改任何原始导入数据。</p>
+      <div class="platform-source-grid"><article v-for="item in platformSourceOptions" :key="item.key"><div><b>{{ item.label }}</b><span>{{ item.note }}</span></div><el-radio-group v-model="filters.sourceOverrides[item.key]" size="small"><el-radio-button label="platform">第三方</el-radio-button><el-radio-button label="pos">收银机</el-radio-button></el-radio-group></article></div>
+      <template #footer><el-button @click="sourceDialogVisible = false">取消</el-button><el-button type="primary" @click="sourceDialogVisible = false; ElMessage.info('平台来源已调整，请点击查询看板重新计算')">确认选择</el-button></template>
     </el-dialog>
   </main>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
-import { getMonthlyOperatingDashboard, getStoreDashboardSettings, getStores, resetStoreDashboardSettings, saveStoreDashboardSettings } from '@/api'
+import { getMonthlyOperatingDashboard, getStores } from '@/api'
 import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 
 function today() { return new Date().toISOString().slice(0, 10) }
-const DEFAULT_COST_SOURCES = { wage: 'operating_previous', rent: 'bookkeeping', utilities: 'bookkeeping' }
-const DEFAULT_SOURCE_OVERRIDES = { meituan_delivery: 'platform', taobao_flash: 'platform', jd_delivery: 'platform', douyin_group: 'platform', meituan_group: 'platform' }
 const filters = reactive({ month: today().slice(0, 7), asOf: today(), storeIds: [], view: 'cash', dataView: 'real', sourceOverrides: { meituan_delivery: 'platform', taobao_flash: 'platform', jd_delivery: 'platform', douyin_group: 'platform', meituan_group: 'platform' }, costSources: { wage: 'operating_previous', rent: 'bookkeeping', utilities: 'bookkeeping' } })
 const stores = ref([])
 const loading = ref(false)
 const queried = ref(false)
 const queriedAt = ref('')
 const costSourceDialogVisible = ref(false)
-const costSourceSaved = ref(false)
-const sourceSaved = ref(false)
-// 平台来源对话框用草稿副本：原实现直接把单选绑在 filters.sourceOverrides 上，
-// 导致点「取消」并不会撤销已改的选项。
-const draftSourceOverrides = ref({ ...DEFAULT_SOURCE_OVERRIDES })
 const sourceDialogVisible = ref(false)
 const draftCostSource = ref('operating_previous')
 const costSourceTarget = ref('wage')
@@ -365,54 +341,6 @@ onBeforeUnmount(() => {
   cumulativeProfitChart?.dispose()
 })
 
-// 看板的两组取数设置都**按门店保存**（同一张 store_dashboard_settings）：
-//   · costSources     —— 每日均摊成本里 工资 / 房租物业 / 水电 的来源
-//   · sourceOverrides —— 真实数据视角里各第三方平台的来源（第三方 / 收银机）
-// 它们都会改变算出来的钱，属于口径而不是个人偏好：同一家店不同人看到不同口径，数字就对不上了。
-const costSourceSaving = ref(false)
-const sourceSaving = ref(false)
-// 只有「恰好选中一家门店」时才有明确的归属，此时读写该门店的设置；
-// 选 0 家（全部）或多家的语义不唯一，沿用当前会话值并在界面提示。
-const singleStoreId = computed(() => (filters.storeIds.length === 1 ? Number(filters.storeIds[0]) : null))
-
-function pickSettings(saved, defaults) {
-  return saved && typeof saved === 'object' ? { ...defaults, ...saved } : { ...defaults }
-}
-
-async function loadDashboardSettingsForCurrentStore() {
-  const id = singleStoreId.value
-  if (!id) return
-  try {
-    const data = await getStoreDashboardSettings(id)
-    const saved = data?.settings || {}
-    // 没保存过就回到默认，避免上一家门店的值“串”到这一家
-    filters.costSources = pickSettings(saved.costSources, DEFAULT_COST_SOURCES)
-    filters.sourceOverrides = pickSettings(saved.sourceOverrides, DEFAULT_SOURCE_OVERRIDES)
-    costSourceSaved.value = Boolean(saved.costSources)
-    sourceSaved.value = Boolean(saved.sourceOverrides)
-  } catch (error) {
-    // 读不到就退回默认值，不打断查询（例如老库还没建这张表）
-    filters.costSources = { ...DEFAULT_COST_SOURCES }
-    filters.sourceOverrides = { ...DEFAULT_SOURCE_OVERRIDES }
-    costSourceSaved.value = false
-    sourceSaved.value = false
-  }
-}
-
-/** 把当前两组设置保存到单选的那家门店；返回是否真的保存了 */
-async function persistDashboardSettings(patch, label) {
-  const id = singleStoreId.value
-  if (!id) return false
-  sourceSaving.value = true
-  try {
-    await saveStoreDashboardSettings(id, patch)
-    return true
-  } catch (error) {
-    ElMessage.warning(`${label}已在本页生效，但保存到门店失败：${error.message}`)
-    return false
-  } finally { sourceSaving.value = false }
-}
-
 async function queryBoard() {
   if (!filters.month || !filters.asOf) return ElMessage.warning('请先选择月份和截止日期')
   loading.value = true
@@ -432,34 +360,6 @@ async function queryBoard() {
   } finally { loading.value = false }
 }
 
-async function resetPlatformSources() {
-  const id = singleStoreId.value
-  if (!id) return
-  try {
-    await resetStoreDashboardSettings(id)
-    filters.costSources = { ...DEFAULT_COST_SOURCES }
-    filters.sourceOverrides = { ...DEFAULT_SOURCE_OVERRIDES }
-    costSourceSaved.value = false
-    sourceSaved.value = false
-    sourceDialogVisible.value = false
-    ElMessage.success('已恢复本门店的默认来源（均摊成本与平台来源），请点击查询看板重新计算')
-  } catch (error) { ElMessage.error('恢复默认失败：' + error.message) }
-}
-
-async function resetCostSources() {
-  const id = singleStoreId.value
-  if (!id) return
-  try {
-    await resetStoreDashboardSettings(id)
-    filters.costSources = { ...DEFAULT_COST_SOURCES }
-    filters.sourceOverrides = { ...DEFAULT_SOURCE_OVERRIDES }
-    costSourceSaved.value = false
-    sourceSaved.value = false
-    costSourceDialogVisible.value = false
-    ElMessage.success('已恢复本门店的默认来源（均摊成本与平台来源），请点击“查询看板”重新计算')
-  } catch (error) { ElMessage.error('恢复默认失败：' + error.message) }
-}
-
 function openCostSourceDialog(key) {
   costSourceTarget.value = key
   draftCostSource.value = filters.costSources[key]
@@ -468,32 +368,7 @@ function openCostSourceDialog(key) {
 function applyCostSource() {
   filters.costSources[costSourceTarget.value] = draftCostSource.value
   costSourceDialogVisible.value = false
-  const id = singleStoreId.value
-  if (!id) {
-    ElMessage.info(`${costSourceTargetLabel.value}来源已调整（当前未单选门店，不会按店保存），请点击“查询看板”重新计算`)
-    return
-  }
-  // 按门店保存：单选门店时立即落库，下次切回这家店会自动带出同一套来源。
-  costSourceSaving.value = true
-  saveStoreDashboardSettings(id, { costSources: { ...filters.costSources } })
-    .then(() => { costSourceSaved.value = true; ElMessage.info(`${costSourceTargetLabel.value}来源已保存到本门店，请点击“查询看板”重新计算`) })
-    .catch(error => ElMessage.warning(`${costSourceTargetLabel.value}来源已在本页生效，但保存到门店失败：${error.message}`))
-    .finally(() => { costSourceSaving.value = false })
-}
-
-function openSourceDialog() {
-  draftSourceOverrides.value = { ...filters.sourceOverrides }
-  sourceDialogVisible.value = true
-}
-async function applySourceOverrides() {
-  filters.sourceOverrides = { ...draftSourceOverrides.value }
-  sourceDialogVisible.value = false
-  if (!singleStoreId.value) {
-    ElMessage.info('平台来源已调整（当前未单选门店，不会按店保存），请点击查询看板重新计算')
-    return
-  }
-  const ok = await persistDashboardSettings({ sourceOverrides: { ...filters.sourceOverrides } }, '平台来源')
-  if (ok) { sourceSaved.value = true; ElMessage.info('平台来源已保存到本门店，请点击查询看板重新计算') }
+  ElMessage.info(`${costSourceTargetLabel.value}来源已调整，请点击“查询看板”重新计算`)
 }
 
 function chartInstance(chart, target) {
@@ -550,10 +425,6 @@ function tableRowClass({ row }) {
   return row.is_group ? 'dashboard-group-row' : ''
 }
 function netClass(value) { return Number(value) >= 0 ? 'positive-net' : 'negative-net' }
-
-// 门店选择变化时，把该门店已保存的「每日均摊成本来源」带出来。
-// 这样从 A 店切到 B 店会各自用自己的口径，切回来也不用重设 —— 这是本次修的“全门店同步”问题。
-watch(() => filters.storeIds.join(','), () => { loadDashboardSettingsForCurrentStore() })
 </script>
 
 <style scoped>
@@ -570,10 +441,7 @@ watch(() => filters.storeIds.join(','), () => { loadDashboardSettingsForCurrentS
 .store-select { min-width:260px; }
 .view-select,.revenue-view-select { min-width:214px; }.view-select :deep(.el-radio-group),.revenue-view-select :deep(.el-radio-group) { display:flex; }.view-select :deep(.el-radio-button__inner),.revenue-view-select :deep(.el-radio-button__inner) { padding:9px 12px; font-size:12px; }.platform-source-button{border-color:#b9d6fb;background:#f4f9ff;color:#2868b9;font-weight:700;}
 .revenue-source-panel{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:0 0 18px;padding:16px 19px;border:1px solid #d9e8fc;border-radius:14px;background:linear-gradient(115deg,#f7fbff,#fffdf7);box-shadow:0 6px 16px rgba(29,73,132,.05)}.revenue-source-panel>div:first-child>span{color:#6685bb;font-size:10px;font-weight:700;letter-spacing:.12em}.revenue-source-panel h3{margin:3px 0;color:#29476f;font-size:18px}.revenue-source-panel p{margin:0;color:#71839a;font-size:12px}.revenue-source-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;min-width:min(720px,62%)}.revenue-source-metrics article{min-width:0;padding:10px 12px;border:1px solid #e4ebf4;border-radius:10px;background:#fff}.revenue-source-metrics span,.revenue-source-metrics b{display:block}.revenue-source-metrics span{color:#718096;font-size:10px}.revenue-source-metrics b{margin-top:6px;color:#245fae;font-size:16px;white-space:nowrap}.revenue-source-metrics b.fee{color:#c47c12}.platform-source-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.platform-source-grid article{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:72px;padding:12px;border:1px solid #e3eaf3;border-radius:10px;background:#fbfdff}.platform-source-grid b,.platform-source-grid span{display:block}.platform-source-grid b{color:#2c476a;font-size:13px}.platform-source-grid span{margin-top:4px;color:#93a0b1;font-size:10px}.platform-source-grid :deep(.el-radio-button__inner){padding:6px 8px;font-size:11px}
-.daily-cost-panel { overflow:hidden; margin-bottom:18px; border:1px solid #dce7fb; border-radius:15px; background:linear-gradient(130deg,#f9fbff 0%,#fff 56%); box-shadow:0 8px 22px rgba(38,78,139,.06); }.daily-cost-panel > header { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:17px 20px; border-bottom:1px solid #e7eef9; }.daily-cost-panel header > div:first-child > span { color:#6685bb; font-size:10px; font-weight:700; letter-spacing:.12em; }.daily-cost-panel h3 { margin:3px 0; color:#26466f; font-size:18px; }.daily-cost-panel p { margin:0; color:#75869d; font-size:12px; }.cost-source-tip { color:#7890b0; font-size:11px; }
-.store-scope-note { display:block; margin-top:6px; color:#6b8f5f; font-size:11px; line-height:1.6; }
-.store-scope-note.saved { color:#2f8f5b; }
-.store-scope-note.warn { color:#c07a16; }.daily-cost-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0; }.daily-cost-grid article { min-height:132px; display:flex; flex-direction:column; gap:7px; padding:16px 20px; border-right:1px solid #e9eff8; }.daily-cost-grid article:last-child { border-right:0; }.daily-cost-grid article > div { display:flex; justify-content:space-between; align-items:center; gap:8px; }.daily-cost-grid article :deep(.el-button.is-text) { padding:3px 0; color:#5d7fbd; font-size:11px; }.daily-cost-grid span { color:#607694; font-size:12px; }.daily-cost-grid b { color:#29476f; font-size:24px; line-height:1.1; }.daily-cost-grid b small { margin-left:3px; color:#8090a5; font-size:11px; font-weight:500; }.daily-cost-grid p { color:#657994; font-size:11px; }.daily-cost-grid em { overflow:hidden; color:#99a6b6; font-size:10px; font-style:normal; text-overflow:ellipsis; white-space:nowrap; }.daily-cost-grid .cost-wage { box-shadow:inset 0 3px #5b85e9; }.daily-cost-grid .cost-rent { box-shadow:inset 0 3px #d99b58; }.daily-cost-grid .cost-utilities { box-shadow:inset 0 3px #4da99d; }
+.daily-cost-panel { overflow:hidden; margin-bottom:18px; border:1px solid #dce7fb; border-radius:15px; background:linear-gradient(130deg,#f9fbff 0%,#fff 56%); box-shadow:0 8px 22px rgba(38,78,139,.06); }.daily-cost-panel > header { display:flex; justify-content:space-between; align-items:center; gap:18px; padding:17px 20px; border-bottom:1px solid #e7eef9; }.daily-cost-panel header > div:first-child > span { color:#6685bb; font-size:10px; font-weight:700; letter-spacing:.12em; }.daily-cost-panel h3 { margin:3px 0; color:#26466f; font-size:18px; }.daily-cost-panel p { margin:0; color:#75869d; font-size:12px; }.cost-source-tip { color:#7890b0; font-size:11px; }.daily-cost-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0; }.daily-cost-grid article { min-height:132px; display:flex; flex-direction:column; gap:7px; padding:16px 20px; border-right:1px solid #e9eff8; }.daily-cost-grid article:last-child { border-right:0; }.daily-cost-grid article > div { display:flex; justify-content:space-between; align-items:center; gap:8px; }.daily-cost-grid article :deep(.el-button.is-text) { padding:3px 0; color:#5d7fbd; font-size:11px; }.daily-cost-grid span { color:#607694; font-size:12px; }.daily-cost-grid b { color:#29476f; font-size:24px; line-height:1.1; }.daily-cost-grid b small { margin-left:3px; color:#8090a5; font-size:11px; font-weight:500; }.daily-cost-grid p { color:#657994; font-size:11px; }.daily-cost-grid em { overflow:hidden; color:#99a6b6; font-size:10px; font-style:normal; text-overflow:ellipsis; white-space:nowrap; }.daily-cost-grid .cost-wage { box-shadow:inset 0 3px #5b85e9; }.daily-cost-grid .cost-rent { box-shadow:inset 0 3px #d99b58; }.daily-cost-grid .cost-utilities { box-shadow:inset 0 3px #4da99d; }
 .dialog-hint { margin:0 0 16px; color:#708099; font-size:13px; line-height:1.65; }.cost-source-options { display:flex; flex-direction:column; width:100%; gap:10px; }.cost-source-options :deep(.el-radio) { display:flex; align-items:flex-start; width:100%; height:auto; min-height:74px; margin-right:0; padding:14px; white-space:normal; }.cost-source-options :deep(.el-radio__label) { display:flex; flex-direction:column; gap:5px; padding-left:9px; }.cost-source-options b { color:#2d4568; font-size:13px; }.cost-source-options span { color:#7d8c9f; font-size:11px; line-height:1.55; }
 .tables-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
 .board-panel { overflow:hidden; border:1px solid #e5ebf3; border-radius:14px; background:#fff; box-shadow:0 5px 16px rgba(30,54,86,.05); }

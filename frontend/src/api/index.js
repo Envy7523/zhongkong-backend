@@ -24,13 +24,8 @@ http.interceptors.response.use(
         window.location.href = '/login'
       }
     }
-    const payload = err.response?.data
-    const msg = payload?.error || err.message || '请求失败'
-    const error = new Error(msg)
-    // 把响应体的其余字段（如闭店接口返回的 pending_employees）一并挂到 error 上，
-    // 需要结构化信息时不必再去翻 err.response。已有字段仍以 message 为准，不影响既有调用方。
-    if (payload && typeof payload === 'object') Object.assign(error, payload)
-    return Promise.reject(error)
+    const msg = err.response?.data?.error || err.message || '请求失败'
+    return Promise.reject(new Error(msg))
   }
 )
 
@@ -47,6 +42,10 @@ export const reconnectEnterpriseRobot = () => http.post('/api/enterprise-setting
 export const previewEnterpriseBotQuestion = (content) => http.post('/api/enterprise-settings/robot/preview-query', { content })
 export const createEnterpriseAiProfile = (data) => http.post('/api/enterprise-settings/ai-profiles', data)
 export const updateEnterpriseAiProfile = (profileId, data) => http.put(`/api/enterprise-settings/ai-profiles/${profileId}`, data)
+// 保存仅影响未来计划，不立即执行或补跑历史日期。
+export const getAutomationSchedule = () => http.get('/api/enterprise-settings/schedule')
+export const saveAutomationSchedule = (data) => http.post('/api/enterprise-settings/schedule', data)
+export const disableAutomationSchedule = () => http.post('/api/enterprise-settings/schedule/disable')
 
 // ===== 企业微信 Token =====
 export const getToken = () => http.get('/api/wechat/token')
@@ -118,20 +117,6 @@ export const setStoreRegionMembership = (storeId, regionId) => http.put(`/api/st
 
 // ===== 门店统计 =====
 export const getStoreStats = () => http.get('/api/db/stores/stats')
-
-// ===== 门店生命周期：闭店 / 迁址 / 重开 / 履历 =====
-// 口径见后端 lib/store-lifecycle.js：状态只有三态，迁址=老店闭店+新建门店+双向关联，闭店前员工必须全部处置。
-export const getStoreLifecycleMeta = () => http.get('/api/store-lifecycle/meta')
-export const getStoreLifecycle = (id) => http.get(`/api/db/stores/${id}/lifecycle`)
-export const closeStore = (id, data) => http.post(`/api/db/stores/${id}/close`, data)
-export const relocateStore = (id, data) => http.post(`/api/db/stores/${id}/relocate`, data)
-export const reopenStore = (id, data) => http.post(`/api/db/stores/${id}/reopen`, data)
-
-// ===== 门店级看板设置（按门店保存口径，不跟浏览器走）=====
-// 目前用于「每日均摊成本」里工资 / 房租物业 / 水电各项的取数来源。
-export const getStoreDashboardSettings = (id) => http.get(`/api/db/stores/${id}/dashboard-settings`)
-export const saveStoreDashboardSettings = (id, settings) => http.put(`/api/db/stores/${id}/dashboard-settings`, { settings })
-export const resetStoreDashboardSettings = (id) => http.delete(`/api/db/stores/${id}/dashboard-settings`)
 export const getStoreByProvince = () => http.get('/api/db/stores/by-province')
 export const getStoreByCity = (province) => http.get('/api/db/stores/by-city', { params: { province } })
 
@@ -384,9 +369,6 @@ export const savePayrollSheet = (id, data) => http.put(`/api/payroll-sheets/${id
 export const exportPayrollSheet = (id) => http.get(`/api/payroll-sheets/${id}/export`, { responseType: 'blob', timeout: 120000 })
 export const getDingTalkAttendanceStatus = () => http.get('/api/staff/dingtalk/status')
 export const syncDingTalkAttendance = (data) => http.post('/api/staff/dingtalk/sync', data)
-// 考勤每日自动同步：企业设置里查看状态 / 手动触发一次
-export const getDingTalkAutoSync = () => http.get('/api/staff/dingtalk/auto-sync')
-export const runDingTalkAutoSync = (data) => http.post('/api/staff/dingtalk/auto-sync/run', data || {})
 export const getStaffDingTalkAttendance = (id, params) => http.get(`/api/staff/${id}/dingtalk-attendance`, { params })
 export const seedStaff = () => http.post('/api/staff/seed')
 export const syncPullStaff = () => http.get('/api/staff/sync-pull')

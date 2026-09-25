@@ -406,12 +406,6 @@ const POPUP_CONFIG = {
           { index: 'analysis-delivery-binding', label: '外卖菜品绑定' },
         ],
       },
-      {
-        title: '自动化同步',
-        items: [
-          { index: 'analysis-sync-runs', label: 'AI 自动导报表记录' },
-        ],
-      },
     ],
   },
   'store-management': {
@@ -504,6 +498,7 @@ const POPUP_CONFIG = {
         title: '经营数据',
         items: [
           { index: 'data-import-pos', label: '收银系统数据' },
+          { index: 'data-import-pos-automation', label: '收银系统 · 自动导报表' },
           { index: 'data-import-group-buy', label: '团购平台数据' },
           { index: 'data-import-delivery', label: '外卖平台数据' },
         ],
@@ -577,6 +572,7 @@ const isSpecialRoute = computed(() => isCollabRoute.value || isBusinessAnalytics
 const businessRouteTabId = computed(() => router.currentRoute.value.meta.analysisKey || 'analysis-total-brand')
 const dataImportRouteTabId = computed(() => ({
   pos: 'data-import-pos',
+  'pos-automation': 'data-import-pos-automation',
   'group-buy': 'data-import-group-buy',
   delivery: 'data-import-delivery',
   legacy: 'data-import-legacy',
@@ -592,10 +588,10 @@ const pageTitle = computed(() => {
     return `数据分析 · ${router.currentRoute.value.meta.analysisTitle || '总数据视角'}`
   }
   if (isDataImportRoute.value) {
-    const label = { pos: '收银系统数据', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
+    const label = { pos: '收银系统数据', 'pos-automation': '收银系统 · 自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
     return `数据导入 · ${label}`
   }
-  if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
+  if (isEnterpriseSettingsRoute.value) return router.currentRoute.value.meta.enterpriseSection === 'schedule' ? '企业设置 · 自动报表与日报' : '企业设置 · 机器人设置'
   if (isStore3dRoute.value) return '筹建门店 · 门店渲染'
   if (isDbViewerRoute.value) return '数据库查看'
   if (isStaffManagementRoute.value) return ({ 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作', 'staff-management-dispatch': '人事专区 · 员工调岗' }[staffRouteTabId.value] || '人事专区 · 员工管理')
@@ -861,6 +857,7 @@ async function selectPopupItem(index) {
     store.openTabFromId(index)
     const routePath = {
       'data-import-pos': '/data-import/pos',
+      'data-import-pos-automation': '/data-import/pos/automation',
       'data-import-group-buy': '/data-import/group-buy',
       'data-import-delivery': '/data-import/delivery',
       'data-import-legacy': '/data-import/legacy',
@@ -960,6 +957,7 @@ async function selectTab(id) {
     store.activeTabId = id
     const routePath = {
       'data-import-pos': '/data-import/pos',
+      'data-import-pos-automation': '/data-import/pos/automation',
       'data-import-group-buy': '/data-import/group-buy',
       'data-import-delivery': '/data-import/delivery',
       'data-import-legacy': '/data-import/legacy',

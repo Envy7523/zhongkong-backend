@@ -132,11 +132,9 @@ const routes = [
     meta: { analysisKey: 'analysis-delivery-store', analysisTitle: '外卖视角 · 门店视角', analysisScope: 'delivery', analysisMode: 'store' },
   },
   {
-    // AI 自动导报表记录：与数据分析同组渲染（走 router-view 的特殊路由），权限沿用 analysis.view
+    // 兼容旧链接；自动导报表属于收银系统数据导入，不是第三方美团业务平台。
     path: '/business-analytics/sync-runs',
-    name: 'analysis-sync-runs',
-    component: () => import('@/views/analysis/SyncRuns.vue'),
-    meta: { analysisKey: 'analysis-sync-runs', analysisTitle: 'AI 自动导报表记录', analysisScope: 'total', analysisMode: 'sync-runs' },
+    redirect: '/data-import/pos/automation',
   },
   {
     path: '/data-import',
@@ -147,6 +145,18 @@ const routes = [
     name: 'data-import-pos',
     component: () => import('@/views/BusinessDataImport.vue'),
     meta: { importMode: 'pos' },
+  },
+  {
+    path: '/data-import/pos/automation',
+    name: 'data-import-pos-automation',
+    component: () => import('@/views/PosAutomation.vue'),
+    meta: { importMode: 'pos-automation', automationSection: 'runs' },
+  },
+  {
+    path: '/data-import/pos/automation/schedule',
+    name: 'data-import-pos-automation-schedule',
+    component: () => import('@/views/PosAutomation.vue'),
+    meta: { importMode: 'pos-automation', automationSection: 'schedule', requiredPermission: 'enterprise-settings.manage' },
   },
   {
     path: '/data-import/group-buy',
@@ -264,6 +274,12 @@ const routes = [
     meta: { enterpriseSection: 'robot' },
   },
   {
+    path: '/enterprise-settings/schedule',
+    name: 'enterprise-settings-schedule',
+    component: () => import('@/views/EnterpriseSettingsView.vue'),
+    meta: { enterpriseSection: 'schedule' },
+  },
+  {
     path: '/enterprise-settings/:pathMatch(.*)*',
     redirect: '/enterprise-settings/robot',
   },
@@ -321,6 +337,7 @@ const ROUTE_PERMISSION_RULES = [
 ]
 
 function permissionFor(route) {
+  if (route.meta.requiredPermission) return route.meta.requiredPermission
   const name = String(route.name || '')
   for (const [prefix, code] of ROUTE_PERMISSION_RULES) {
     if (name === prefix || name.startsWith(prefix)) return code

@@ -4,7 +4,7 @@
     <el-card shadow="never" class="overview-card">
       <template #header>
         <div class="card-header">
-          <span class="title">AI 自动导报表记录</span>
+          <span class="title">综合营业统计 · 自动导入记录</span>
           <div class="header-actions">
             <el-tag size="small" type="info" effect="plain">今日：{{ overview.today || '-' }}</el-tag>
             <el-button size="small" :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
@@ -50,8 +50,8 @@
     <!-- ===== 筛选 ===== -->
     <el-card shadow="never" class="filter-card">
       <div class="filters">
-        <el-select v-model="filters.platform" placeholder="平台" clearable size="small" style="width: 120px" @change="reload">
-          <el-option label="美团" value="meituan" />
+        <el-select v-model="filters.platform" placeholder="采集站点" clearable size="small" style="width: 120px" @change="reload">
+          <el-option label="美团管家" value="meituan" />
         </el-select>
         <el-select v-model="filters.report_type" placeholder="报表类型" clearable size="small" style="width: 190px" @change="reload">
           <el-option label="综合营业统计" value="cashier_composite" />
@@ -86,8 +86,9 @@
     <!-- ===== 运行列表 ===== -->
     <el-card shadow="never">
       <el-table :data="runs" v-loading="loading" size="small" border stripe @row-click="openDetail" style="width: 100%">
-        <el-table-column label="平台" width="80">
-          <template #default="{ row }">{{ row.platform === 'meituan' ? '美团' : row.platform }}</template>
+        <el-table-column label="业务来源" width="100"><template #default>收银系统</template></el-table-column>
+        <el-table-column label="采集站点" width="100">
+          <template #default="{ row }">{{ row.platform === 'meituan' ? '美团管家' : row.platform }}</template>
         </el-table-column>
         <el-table-column label="报表类型" width="140">
           <template #default="{ row }">{{ row.report_type === 'cashier_composite' ? '综合营业统计' : row.report_type }}</template>
@@ -100,9 +101,8 @@
         <el-table-column prop="phase" label="当前阶段" width="150" show-overflow-tooltip />
         <el-table-column label="状态" width="150">
           <template #default="{ row }">
-            <!-- 补录记录不得显示「运行中」：三标记任一为真即以「历史补录」替代状态标签 -->
-            <el-tag v-if="isBackfill(row)" size="small" type="warning">历史补录</el-tag>
-            <el-tag v-else size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+            <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+            <el-tag v-if="row.is_backfill" size="small" type="warning" effect="plain" class="ml4">历史补录</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="失败原因" min-width="180" show-overflow-tooltip>
@@ -151,8 +151,8 @@
           <el-descriptions-item label="task_id">{{ detail.run.task_id }}</el-descriptions-item>
           <el-descriptions-item label="业务日期">{{ detail.run.business_date }}</el-descriptions-item>
           <el-descriptions-item label="状态">
-            <el-tag v-if="isBackfill(detail.run)" size="small" type="warning">历史补录</el-tag>
-            <el-tag v-else size="small" :type="statusType(detail.run.status)">{{ statusLabel(detail.run.status) }}</el-tag>
+            <el-tag size="small" :type="statusType(detail.run.status)">{{ statusLabel(detail.run.status) }}</el-tag>
+            <el-tag v-if="detail.run.is_backfill" size="small" type="warning" effect="plain" class="ml4">历史补录</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="当前阶段">{{ detail.run.phase || '-' }}</el-descriptions-item>
           <el-descriptions-item label="开始">{{ fmtTime(detail.run.started_at || detail.run.first_event_at) }}</el-descriptions-item>
@@ -230,13 +230,6 @@ const STATUS_LABEL = { success: '成功', failed: '失败', running: '运行中'
 const STATUS_TYPE = { success: 'success', failed: 'danger', running: 'primary', waiting_human: 'warning' }
 const statusLabel = (s) => STATUS_LABEL[s] || s || '-'
 const statusType = (s) => STATUS_TYPE[s] || 'info'
-/**
- * 历史补录判定：is_backfill / reconstructed / not_a_realtime_success 任一为真即为补录。
- * 补录运行的库内 status 仍是 running（阶段停在 FILE_VALIDATED），但展示口径必须显示
- * 「历史补录」而不是「运行中」，避免被误解为一次实时同步。
- * 注意：只调整展示口径，不修改任何历史状态数据。
- */
-const isBackfill = (r) => !!(r && (r.is_backfill || r.reconstructed || r.not_a_realtime_success))
 
 function fmtTime(v) {
   if (!v) return '-'
@@ -279,7 +272,7 @@ function queryParams() {
 
 async function loadOverview() {
   try {
-    const { data } = await getSyncRunsOverview()
+    const data = await getSyncRunsOverview()
     if (data && data.ok) {
       overview.value = {
         today: data.today,
@@ -295,7 +288,7 @@ async function loadOverview() {
 async function loadRuns() {
   loading.value = true
   try {
-    const { data } = await getSyncRuns({ ...queryParams(), page: page.value, page_size: pageSize.value })
+    const data = await getSyncRuns({ ...queryParams(), page: page.value, page_size: pageSize.value })
     if (data && data.ok) { runs.value = data.runs || []; total.value = data.total || 0 }
   } finally { loading.value = false }
 }
@@ -313,7 +306,7 @@ async function openDetail(row) {
   detailLoading.value = true
   detail.value = null
   try {
-    const { data } = await getSyncRunDetail(row.id)
+    const data = await getSyncRunDetail(row.id)
     if (data && data.ok) detail.value = { run: data.run, events: data.events || [], validation: data.validation || {}, evidence: data.evidence || {} }
   } finally { detailLoading.value = false }
 }

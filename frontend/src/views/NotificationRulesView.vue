@@ -4,41 +4,31 @@
       <div>
         <span class="eyebrow">NOTIFICATION RULES</span>
         <h2>通知规则</h2>
-        <p>设置各类到期提醒的提前天数和接收人。提醒会出现在运营工具的「消息通知」中。</p>
+        <p>设置员工转正提醒的提前天数和接收人。提醒会出现在运营工具的「消息通知」中。</p>
       </div>
       <el-button type="primary" :loading="saving" @click="save">保存规则</el-button>
     </section>
     <section class="rules-panel">
       <header>
-        <div><h3>到期提醒</h3><p>员工转正、劳动合同到期临近时，系统将通知所选人员。</p></div>
+        <div><h3>员工转正提醒</h3><p>员工转正日期临近时，系统将通知所选人员。</p></div>
         <el-button :loading="checking" @click="checkNow">立即检查</el-button>
       </header>
       <article v-for="(rule, type) in rules" :key="type" class="rule-card">
         <div class="rule-card__head">
-          <div><b>{{ rule.label || type }}</b><small>{{ rule.description || '按日期自动生成提醒' }}</small></div>
+          <div><b>{{ rule.name || '员工转正提醒' }}</b><small>{{ rule.description || '按转正日期自动生成提醒' }}</small></div>
           <el-switch v-model="rule.enabled" active-text="启用" inactive-text="停用" />
         </div>
         <div class="rule-card__body">
-          <label class="rule-field">
-            <span>提前提醒天数</span>
-            <el-input-number v-model="rule.lead_days" :min="0" :max="90" controls-position="right" />
-            <small>例如填 {{ rule.date_label === '合同到期日' ? 30 : 15 }}：在{{ rule.date_label || '日期' }}前该天数生成消息通知。</small>
-          </label>
-          <label class="rule-field">
-            <span>接收人员</span>
-            <el-select v-model="rule.user_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="请选择接收提醒的后台人员">
-              <el-option v-for="user in users" :key="user.id" :label="userLabel(user)" :value="user.id" />
-            </el-select>
-            <small>接收人可在运营工具的「消息通知」中确认、归档或稍后处理。</small>
-          </label>
+          <label class="rule-field"><span>提前提醒天数</span><el-input-number v-model="rule.lead_days" :min="1" :max="90" controls-position="right" /><small>例如填 30：在转正前 30 天生成消息通知。</small></label>
+          <label class="rule-field"><span>接收人员</span><el-select v-model="rule.recipient_user_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="请选择接收提醒的后台人员"><el-option v-for="user in users" :key="user.id" :label="userLabel(user)" :value="user.id" /></el-select><small>接收人可在运营工具的「消息通知」中确认、归档或稍后处理。</small></label>
         </div>
       </article>
-      <section v-for="(rule, type) in rules" v-show="upcomingOf(type).length" :key="'up-' + type" class="upcoming-panel">
-        <b>{{ rule.preview_title || '近期节点' }}</b>
+      <section v-if="upcoming.length" class="upcoming-panel">
+        <b>近期转正节点</b>
         <p>以下为系统已识别的员工；到预计触发日才会进入「消息通知」。</p>
-        <div v-for="item in upcomingOf(type)" :key="type + '-' + item.employee_id" class="upcoming-item">
+        <div v-for="item in upcoming" :key="item.employee_id" class="upcoming-item">
           <span><strong>{{ item.name }}</strong><em v-if="item.store_name"> · {{ item.store_name }}</em></span>
-          <span>{{ item.date_label || '日期' }} {{ item.milestone_date }}</span>
+          <span>转正 {{ item.probation_date }}</span>
           <span>预计 {{ item.trigger_date }} 生成提醒<small v-if="item.days_until_trigger > 0">（还有 {{ item.days_until_trigger }} 天）</small><small v-else>（已进入提醒范围）</small></span>
         </div>
       </section>
@@ -51,38 +41,13 @@ import { ElMessage } from 'element-plus'
 import { checkNotifications, getNotificationSettings, saveNotificationSettings } from '@/api'
 const rules = reactive({})
 const users = ref([])
-const upcomingByType = reactive({})
+const upcoming = ref([])
 const saving = ref(false)
 const checking = ref(false)
 const userLabel = (user) => (user.display_name || user.username) + '（' + (user.role || user.position_name || '未分配岗位') + '）'
-const upcomingOf = (type) => upcomingByType[type] || []
-function applyPayload(data) {
-  Object.keys(rules).forEach(key => delete rules[key])
-  // 接口已在每条规则里带上 label / description / date_label，直接整体替换即可。
-  Object.assign(rules, data.rules || {})
-  users.value = data.users || users.value
-  Object.keys(upcomingByType).forEach(key => delete upcomingByType[key])
-  const grouped = data.upcoming_by_type || (data.upcoming ? { probation_due: data.upcoming } : {})
-  Object.assign(upcomingByType, grouped)
-}
-async function load() {
-  try { applyPayload(await getNotificationSettings()) }
-  catch (error) { ElMessage.error('读取通知规则失败：' + error.message) }
-}
-async function save() {
-  saving.value = true
-  try { applyPayload(await saveNotificationSettings({ rules })); ElMessage.success('通知规则已保存') }
-  catch (error) { ElMessage.error('保存失败：' + error.message) }
-  finally { saving.value = false }
-}
-async function checkNow() {
-  checking.value = true
-  try {
-    const data = await checkNotifications()
-    ElMessage.success(data.generated ? '已生成 ' + data.generated + ' 条到期提醒' : '当前没有到期提醒')
-  } catch (error) { ElMessage.error('检查失败：' + error.message) }
-  finally { checking.value = false }
-}
+async function load() { try { const data = await getNotificationSettings(); Object.keys(rules).forEach(key => delete rules[key]); Object.assign(rules, data.rules || {}); users.value = data.users || []; upcoming.value = data.upcoming || [] } catch (error) { ElMessage.error('读取通知规则失败：' + error.message) } }
+async function save() { saving.value = true; try { const data = await saveNotificationSettings({ rules }); upcoming.value = data.upcoming || []; ElMessage.success('通知规则已保存') } catch (error) { ElMessage.error('保存失败：' + error.message) } finally { saving.value = false } }
+async function checkNow() { checking.value = true; try { const data = await checkNotifications(); ElMessage.success(data.generated ? '已生成 ' + data.generated + ' 条提醒' : '当前没有到期提醒') } catch (error) { ElMessage.error('检查失败：' + error.message) } finally { checking.value = false } }
 onMounted(load)
 </script>
 <style scoped>
@@ -96,7 +61,6 @@ onMounted(load)
 .rules-panel h3 { margin:0 0 5px; color:#243d5e; font-size:17px; }
 .rules-panel p { margin:0; color:#8b9aad; font-size:12px; }
 .rule-card { padding:16px 18px; border:1px solid #e5ecf5; border-radius:12px; background:#fbfcfe; }
-.rule-card + .rule-card { margin-top:12px; }
 .rule-card__head { display:flex; align-items:center; justify-content:space-between; gap:14px; }
 .rule-card__head b { display:block; color:#2c476a; font-size:14px; }
 .rule-card__head small { color:#8b9aad; font-size:11px; }
