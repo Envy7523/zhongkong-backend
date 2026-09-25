@@ -24,8 +24,13 @@ http.interceptors.response.use(
         window.location.href = '/login'
       }
     }
-    const msg = err.response?.data?.error || err.message || '请求失败'
-    return Promise.reject(new Error(msg))
+    const payload = err.response?.data
+    const msg = payload?.error || err.message || '请求失败'
+    const error = new Error(msg)
+    // 把响应体的其余字段（如闭店接口返回的 pending_employees）一并挂到 error 上，
+    // 需要结构化信息时不必再去翻 err.response。已有字段仍以 message 为准，不影响既有调用方。
+    if (payload && typeof payload === 'object') Object.assign(error, payload)
+    return Promise.reject(error)
   }
 )
 
@@ -125,6 +130,20 @@ export const setStoreRegionMembership = (storeId, regionId) => http.put(`/api/st
 
 // ===== 门店统计 =====
 export const getStoreStats = () => http.get('/api/db/stores/stats')
+
+// ===== 门店生命周期：闭店 / 迁址 / 重开 / 履历 =====
+// 口径见后端 lib/store-lifecycle.js：状态只有三态，迁址=老店闭店+新建门店+双向关联，闭店前员工必须全部处置。
+export const getStoreLifecycleMeta = () => http.get('/api/store-lifecycle/meta')
+export const getStoreLifecycle = (id) => http.get(`/api/db/stores/${id}/lifecycle`)
+export const closeStore = (id, data) => http.post(`/api/db/stores/${id}/close`, data)
+export const relocateStore = (id, data) => http.post(`/api/db/stores/${id}/relocate`, data)
+export const reopenStore = (id, data) => http.post(`/api/db/stores/${id}/reopen`, data)
+
+// ===== 门店级看板设置（按门店保存口径，不跟浏览器走）=====
+// 目前用于「每日均摊成本」里工资 / 房租物业 / 水电各项的取数来源。
+export const getStoreDashboardSettings = (id) => http.get(`/api/db/stores/${id}/dashboard-settings`)
+export const saveStoreDashboardSettings = (id, settings) => http.put(`/api/db/stores/${id}/dashboard-settings`, { settings })
+export const resetStoreDashboardSettings = (id) => http.delete(`/api/db/stores/${id}/dashboard-settings`)
 export const getStoreByProvince = () => http.get('/api/db/stores/by-province')
 export const getStoreByCity = (province) => http.get('/api/db/stores/by-city', { params: { province } })
 
