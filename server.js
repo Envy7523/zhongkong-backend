@@ -28,6 +28,7 @@ const { GROUP_NAMES, isGroupAffiliation } = require('./lib/staff-affiliation');
 const { createBusinessAssistant } = require('./lib/wecom-business-assistant');
 const syncJobAudit = require('./lib/sync-job-audit');
 const posDailyPush = require('./lib/pos-daily-push');
+const wecomRouting = require('./lib/wecom-routing');
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = 'etaigong-zhongkong-jwt-secret-2024';
@@ -286,6 +287,9 @@ app.post('/api/config', async (req, res) => {
   if (activeAiProfileId !== undefined) cfg.activeAiProfileId = String(activeAiProfileId || '').trim();
   if (aiEnabled !== undefined) cfg.aiEnabled = Boolean(aiEnabled);
   saveConfig(cfg);
+  // Existing default Webhook is an assignable robot too. A changed target closes
+  // its message routes; neither registration nor this config save sends anything.
+  wecomRouting.syncDefaultWebhookBot(db, cfg);
   if (botCredentialsChanged) await wecomBot.restart();
   res.json({
     ok: true,
@@ -5794,8 +5798,8 @@ app.put('/api/business-analytics/group-buy/daily-summary', (req, res) => {
 });
 
 // ===== 可维护推送通道 =====
-// 收银系统专用：多个机器人登记、按消息类型显式绑定；凭证只写不读，绝不回退全局默认机器人。
-app.use('/api/enterprise-settings/wecom-routing', require('./lib/wecom-routing').createRouter({ db }));
+// 机器人统一登记，具体发什么由消息路由决定；GET 不回传 Webhook 凭证。
+app.use('/api/enterprise-settings/wecom-routing', wecomRouting.createRouter({ db, loadConfig, saveConfig }));
 app.get('/api/enterprise-settings/pos-daily/preview', (req, res) => {
   try {
     const data = posDailyPush.preview(db, String(req.query.business_date || ''));
@@ -5804,6 +5808,18 @@ app.get('/api/enterprise-settings/pos-daily/preview', (req, res) => {
       store_count: data.store_count, excluded_stores: data.excluded_stores, totals: data.totals,
       image_data_url: `data:image/png;base64,${image.base64}` });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/enterprise-settings/pos-daily/test-send', async (req, res) => {
+  if (req.body?.confirm_template_approved !== true || req.body?.confirm_target_verified !== true)
+    return res.status(400).json({ error: '请先确认日报样式、数据口径和目标群' });
+  try {
+    const result = await posDailyPush.sendPosDailyTest({
+      db, business_date: String(req.body?.business_date || ''), bot_id: req.body?.bot_id,
+      request_id: req.body?.request_id, httpPost,
+    });
+    if (result.ok) return res.json(result);
+    return res.status(result.duplicate ? 409 : 400).json({ error: result.reason, ...result });
+  } catch (error) { return res.status(500).json({ error: `测试发送未完成：${String(error.message || error).slice(0, 120)}` }); }
 });
 // 每个业务可维护自己的一套机器人和文案；未填写机器人时自动回退到企业设置的默认机器人。
 function getPushProfile(code) {
@@ -6930,6 +6946,7 @@ app.get('/api/bot/status', (_req, res) => {
   setupConsoleEncoding();
   await db.init();
   db.seed();
+  wecomRouting.syncDefaultWebhookBot(db, loadConfig());
   // 历史京东门店经营日报早期仅写入外卖运营看板；启动时回填为平台营业记录，
   // 让总数据视角和外卖视角使用一致的第三方来源。
   businessAnalytics.rebuildJdRevenueFromOperation(db);

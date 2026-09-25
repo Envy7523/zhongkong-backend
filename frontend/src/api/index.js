@@ -53,6 +53,7 @@ export const bindWecomRoute = (code, data) => http.put(`/api/enterprise-settings
 export const activateWecomRoute = (code, data) => http.post(`/api/enterprise-settings/wecom-routing/routes/${code}/activation`, data)
 export const savePosDailyExclusions = (data) => http.put('/api/enterprise-settings/wecom-routing/pos-daily/exclusions', data)
 export const previewPosDaily = (businessDate) => http.get('/api/enterprise-settings/pos-daily/preview', { params: { business_date: businessDate } })
+export const sendPosDailyTest = (data) => http.post('/api/enterprise-settings/pos-daily/test-send', data, { timeout: 30000 })
 
 // ===== 企业微信 Token =====
 export const getToken = () => http.get('/api/wechat/token')
