@@ -17,17 +17,11 @@
           <div class="el-form-tip">已保存的密钥不会回显完整内容。如需修改，填入新值后保存</div>
         </el-form-item>
         <el-divider />
-        <el-form-item label="Webhook 地址">
-          <el-input v-model="form.webhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." />
-        </el-form-item>
-        <el-form-item label="机器人名称">
-          <el-input v-model="form.webhookName" placeholder="中控通知机器人" />
-        </el-form-item>
+        <el-alert type="info" :closable="false">群机器人只在“企业设置 → 机器人管理”登记，项目消息在该处分配。</el-alert>
         <el-form-item>
           <el-space>
             <el-button type="primary" @click="save" :loading="saving">💾 保存配置</el-button>
             <el-button @click="testToken" :loading="testingToken">🔑 测试 API 连接</el-button>
-            <el-button @click="testWebhook" :loading="testingWebhook">🔗 测试 Webhook</el-button>
           </el-space>
         </el-form-item>
       </el-form>
@@ -54,20 +48,17 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { getConfig, saveConfig, getToken, sendWebhook } from '@/api'
+import { getConfig, saveConfig, getToken } from '@/api'
 
-const form = reactive({ corpid: '', secret: '', webhook: '', webhookName: '' })
+const form = reactive({ corpid: '', secret: '' })
 const result = reactive({ type: 'info', text: '' })
 const saving = ref(false)
 const testingToken = ref(false)
-const testingWebhook = ref(false)
 
 onMounted(async () => {
   try {
     const cfg = await getConfig()
     form.corpid = cfg.corpid || ''
-    form.webhook = cfg.webhook || ''
-    form.webhookName = cfg.webhookName || ''
   } catch (e) {
     result.type = 'error'
     result.text = '无法加载配置：' + e.message
@@ -78,12 +69,12 @@ async function save() {
   if (!form.corpid) { result.type = 'error'; result.text = '请输入 CorpID'; return }
   saving.value = true
   try {
-    const body = { corpid: form.corpid, webhook: form.webhook, webhookName: form.webhookName }
+    const body = { corpid: form.corpid }
     if (form.secret) body.corpsecret = form.secret
     const data = await saveConfig(body)
     form.secret = ''
     result.type = 'success'
-    result.text = `配置已保存 · API:${data.configured ? '已配置' : '未配置'} · Webhook:${data.webhookConfigured ? '已配置' : '未配置'}`
+    result.text = `配置已保存 · API:${data.configured ? '已配置' : '未配置'}`
   } catch (e) {
     result.type = 'error'; result.text = '保存失败：' + e.message
   } finally { saving.value = false }
@@ -101,16 +92,6 @@ async function testToken() {
   } finally { testingToken.value = false }
 }
 
-async function testWebhook() {
-  testingWebhook.value = true
-  result.type = 'info'; result.text = '⏳ 正在发送测试消息...'
-  try {
-    await sendWebhook({ msgtype: 'text', content: `✅ 中控后台连接测试成功！\n时间：${new Date().toLocaleString()}` })
-    result.type = 'success'; result.text = '测试消息已发送到群聊！'
-  } catch (e) {
-    result.type = 'error'; result.text = '发送失败：' + e.message
-  } finally { testingWebhook.value = false }
-}
 </script>
 
 <style scoped>

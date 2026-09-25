@@ -24,7 +24,7 @@
         </template>
       </section>
 
-      <aside class="send-card"><div class="send-step">③ 确认推送</div><h3>发送到企业微信群</h3><p>发送内容与左侧预览一致。系统会记录时间、目标群与推送结果。</p><div class="send-target"><span>目标群</span><b>{{ target.name }}</b><small>{{ target.configured ? '使用企业设置中已保存的通知机器人' : '请先完成企业设置' }}</small></div><el-button type="primary" class="send-button" :disabled="!canSend" :loading="sending" @click="confirmSend">确认推送日报</el-button><el-button text class="settings-link" @click="openSettings">前往配置机器人</el-button><el-alert v-if="notice.text" :type="notice.type" :closable="false" show-icon>{{ notice.text }}</el-alert></aside>
+      <aside class="send-card"><div class="send-step">③ 确认推送</div><h3>发送到企业微信群</h3><p>发送内容与左侧预览一致。系统会记录时间、目标群与推送结果。</p><div class="send-target"><span>目标群</span><b>{{ target.name }}</b><small>{{ target.configured ? '项目消息路由已启用' : (target.bot_id ? '已分配，等待审批启用' : '尚未分配机器人') }}</small></div><template v-if="canManageBots && target.bot_id && !target.route_enabled"><el-checkbox v-model="templateApproved">已核对预览内容与数据口径</el-checkbox><el-checkbox v-model="targetVerified">已核对机器人对应的群</el-checkbox><el-button type="warning" plain :disabled="!preview?.records?.length || !templateApproved || !targetVerified" :loading="routeSaving" @click="activateGroupBuy(true)">启用团购日报路由</el-button></template><el-button v-if="canManageBots && target.route_enabled" type="danger" plain :loading="routeSaving" @click="activateGroupBuy(false)">关闭团购日报路由</el-button><el-button type="primary" class="send-button" :disabled="!canSend" :loading="sending" @click="confirmSend">确认推送日报</el-button><el-button text class="settings-link" @click="openSettings">前往统一机器人管理</el-button><el-alert v-if="notice.text" :type="notice.type" :closable="false" show-icon>{{ notice.text }}</el-alert></aside>
     </div>
 
     <section class="history-card"><header><div><span>最近记录</span><h3>日报推送日志</h3></div><el-button text @click="loadLogs">刷新</el-button></header><el-table :data="logs" size="small" empty-text="暂无日报推送记录"><el-table-column prop="created_at" label="推送时间" min-width="170" /><el-table-column prop="target" label="目标群" min-width="160" /><el-table-column prop="content_preview" label="内容" min-width="260" /><el-table-column prop="status" label="状态" width="100"><template #default="{row}"><el-tag :type="row.status==='success'?'success':'danger'" size="small">{{ row.status==='success'?'成功':'失败' }}</el-tag></template></el-table-column></el-table></section>
@@ -32,11 +32,10 @@
     <el-dialog v-model="confirmVisible" title="确认推送日报" width="420px" :close-on-click-modal="false"><p class="confirm-copy">将把 <b>{{ preview?.biz_date }}</b> 的团购运营日报（{{ preview?.summary.store_count || 0 }} 家门店）发送至 <b>{{ target.name }}</b>。</p><template #footer><el-button @click="confirmVisible=false">取消</el-button><el-button type="primary" :loading="sending" @click="send">确认发送</el-button></template></el-dialog>
     <el-dialog v-model="profileVisible" title="推送通道配置" width="760px" :close-on-click-modal="false" class="profile-dialog">
       <template v-if="profileForm">
-        <div class="profile-tip">此处配置只作用于「{{ profileForm.name || '团购每日总结日报' }}」。机器人地址留空时，自动沿用企业设置里的默认机器人。</div>
+        <div class="profile-tip">此处只维护日报内容。机器人在“企业设置 → 机器人管理”唯一登记并分配；不会自动沿用其他项目的目标群。</div>
         <el-form label-position="top" class="profile-form">
-          <div class="form-grid"><el-form-item label="推送功能名称"><el-input v-model="profileForm.name" maxlength="60" show-word-limit /></el-form-item><el-form-item label="机器人群名称"><el-input v-model="profileForm.webhook_name" placeholder="例如：团购运营日报群" maxlength="80" /></el-form-item></div>
+          <el-form-item label="推送功能名称"><el-input v-model="profileForm.name" maxlength="60" show-word-limit /></el-form-item>
           <el-form-item label="功能说明"><el-input v-model="profileForm.description" maxlength="300" show-word-limit /></el-form-item>
-          <el-form-item label="企业微信机器人 Webhook"><el-input v-model="profileForm.webhook" placeholder="留空 = 使用企业设置默认机器人" /></el-form-item>
           <el-form-item label="日报文案模板"><el-input v-model="profileForm.content_template" type="textarea" :rows="7" /><p class="form-help">可用变量：<code v-pre>{{title}}</code>、<code v-pre>{{date}}</code>、<code v-pre>{{store_count}}</code>、<code v-pre>{{body}}</code>。其中 <code v-pre>{{body}}</code> 是系统按门店生成的日报明细。</p></el-form-item>
           <el-form-item label="图片卡片文案"><el-input v-model="profileForm.image_template" type="textarea" :rows="3" placeholder="例如：{{title}}&#10;数据日期 {{date}} · 团购运营日报" /><p class="form-help">每家门店都会生成一张图片卡片；这里可填写卡片标题或注释。可使用上方相同变量。</p></el-form-item>
           <el-form-item><el-switch v-model="profileForm.enabled" active-text="启用此推送通道" inactive-text="暂停此推送通道" /></el-form-item>
@@ -52,29 +51,34 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getConfig, getPushLogs, getPushProfiles, getStores, previewGroupBuyDailyPush, sendGroupBuyDailyPush, updatePushProfile } from '@/api'
+import { activateWecomRoute, getPushLogs, getPushProfiles, getStores, previewGroupBuyDailyPush, sendGroupBuyDailyPush, updatePushProfile } from '@/api'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 
 const app = useAppStore()
+const auth = useAuthStore()
+const canManageBots = computed(() => auth.can('enterprise-settings.manage'))
 const router = useRouter()
 const now = new Date()
 const bizDate = ref(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`)
 const stores = ref([]), storeIds = ref([]), preview = ref(null), logs = ref([]), loading = ref(false), sending = ref(false), confirmVisible = ref(false)
 const profileVisible = ref(false), profileSaving = ref(false), profileForm = ref(null)
-const target = reactive({ configured:false, name:'未命名企业微信群' })
+const target = reactive({ configured:false, name:'尚未分配机器人', bot_id:null, route_enabled:false, revision:0 })
+const routeSaving = ref(false), templateApproved = ref(false), targetVerified = ref(false)
 const notice = reactive({ type:'info', text:'' })
 const canSend = computed(() => Boolean(target.configured && preview.value?.records?.length))
 const scoreText = value => value == null ? '—' : Number(value).toFixed(1)
 const targetText = value => value == null ? '—' : value
 function negativeText(row) { const text=[]; if (Number(row.meituan_negative_reviews)) text.push(`美团差评 ${row.meituan_negative_reviews}${row.meituan_negative_reason ? `：${row.meituan_negative_reason}` : ''}`); if (Number(row.douyin_negative_reviews)) text.push(`抖音差评 ${row.douyin_negative_reviews}${row.douyin_negative_reason ? `：${row.douyin_negative_reason}` : ''}`); return text.join('；') }
-async function loadPreview() { loading.value=true; notice.text=''; try { const result=await previewGroupBuyDailyPush({ biz_date:bizDate.value, store_ids:storeIds.value }); preview.value=result; Object.assign(target,result.target||{}); if (!result.target?.configured) notice.type='warning',notice.text='机器人尚未配置，预览可用，但暂不能推送。' } catch(error) { notice.type='error';notice.text=`生成预览失败：${error.message}` } finally { loading.value=false } }
+async function loadPreview() { loading.value=true; notice.text=''; templateApproved.value=false; targetVerified.value=false; try { const result=await previewGroupBuyDailyPush({ biz_date:bizDate.value, store_ids:storeIds.value }); preview.value=result; Object.assign(target,result.target||{}); if (!result.target?.configured) notice.type='warning',notice.text='团购日报机器人尚未分配或路由未启用，预览可用，但暂不能推送。' } catch(error) { notice.type='error';notice.text=`生成预览失败：${error.message}` } finally { loading.value=false } }
 async function loadLogs() { try { const result=await getPushLogs({limit:20}); logs.value=(result.logs||[]).filter(row=>row.push_type==='group_buy_daily') } catch(error) { ElMessage.error(`读取推送日志失败：${error.message}`) } }
 function confirmSend() { if (!canSend.value) return; confirmVisible.value=true }
 async function send() { sending.value=true; try { const result=await sendGroupBuyDailyPush({biz_date:bizDate.value,store_ids:storeIds.value}); notice.type='success';notice.text=result.message;confirmVisible.value=false;await loadLogs() } catch(error) { notice.type='error';notice.text=`推送失败：${error.message}` } finally { sending.value=false } }
-function openSettings() { app.openTabFromId('enterprise-settings'); router.push('/enterprise-settings/robot') }
+function openSettings() { app.openTabFromId('enterprise-settings'); router.push('/enterprise-settings/robot#bot-registry') }
 async function openProfileDialog() { try { const result = await getPushProfiles(); const profile=(result.profiles||[]).find(item=>item.code==='group_buy_daily'); profileForm.value=profile ? { ...profile, enabled: Boolean(profile.enabled) } : null; profileVisible.value=true } catch(error) { ElMessage.error(`读取推送通道失败：${error.message}`) } }
-async function saveProfile() { if (!profileForm.value) return; profileSaving.value=true; try { const result=await updatePushProfile(profileForm.value.id, profileForm.value); const saved=result.profile||profileForm.value; target.configured=Boolean(saved.target_webhook);target.name=saved.target_name||'未命名企业微信群'; profileVisible.value=false; ElMessage.success('推送通道已保存，后续日报会立即使用新配置') } catch(error) { ElMessage.error(`保存失败：${error.message}`) } finally { profileSaving.value=false } }
-onMounted(async()=>{ try { const [storeResult,configResult,profilesResult]=await Promise.all([getStores({page:1,page_size:500}),getConfig(),getPushProfiles()]); stores.value=storeResult.stores||storeResult.rows||[]; const profile=(profilesResult.profiles||[]).find(item=>item.code==='group_buy_daily'); target.configured=profile ? Boolean(profile.configured) : Boolean(configResult.webhookConfigured);target.name=profile?.target_name||configResult.webhookName||'未命名企业微信群'; await loadLogs() } catch(error) { ElMessage.error(`推送中心初始化失败：${error.message}`) } })
+async function saveProfile() { if (!profileForm.value) return; profileSaving.value=true; try { const { id, name, description, content_template, image_template, enabled } = profileForm.value; const result=await updatePushProfile(id, { name, description, content_template, image_template, enabled }); const saved=result.profile||profileForm.value; target.configured=Boolean(saved.configured);target.name=saved.target_name||'尚未分配机器人'; profileVisible.value=false; preview.value=null; templateApproved.value=false; ElMessage.success('日报内容已保存，请重新预览；机器人分配只在企业设置维护') } catch(error) { ElMessage.error(`保存失败：${error.message}`) } finally { profileSaving.value=false } }
+async function activateGroupBuy(enabled) { routeSaving.value=true; try { await activateWecomRoute('group_buy_daily', { enabled, expected_bot_id: target.bot_id, expected_revision: target.revision, confirm_template_approved: templateApproved.value, confirm_target_verified: targetVerified.value }); await loadPreview(); ElMessage.success(enabled ? '团购日报路由已启用，仍需手动确认才会发送' : '团购日报路由已关闭') } catch(error) { ElMessage.error(`修改路由失败：${error.message}`) } finally { routeSaving.value=false } }
+onMounted(async()=>{ try { const [storeResult,profilesResult]=await Promise.all([getStores({page:1,page_size:500}),getPushProfiles()]); stores.value=storeResult.stores||storeResult.rows||[]; const profile=(profilesResult.profiles||[]).find(item=>item.code==='group_buy_daily'); target.configured=Boolean(profile?.configured);target.name=profile?.target_name||'尚未分配机器人';target.bot_id=profile?.target_bot_id||null;target.route_enabled=Boolean(profile?.route_enabled);target.revision=Number(profile?.route_revision||0); await loadLogs() } catch(error) { ElMessage.error(`推送中心初始化失败：${error.message}`) } })
 </script>
 
 <style scoped>

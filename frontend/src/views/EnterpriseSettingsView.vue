@@ -6,7 +6,7 @@
         <span class="settings-nav__icon">◉</span>
         <span>
           <b>机器人设置</b>
-          <small>企业微信长连接与对话</small>
+          <small>统一登记机器人并分配项目消息</small>
         </span>
       </button>
       <button class="settings-nav__item" :class="{ active: activeSection === 'schedule' }" type="button" @click="switchSection('schedule')">
@@ -22,7 +22,7 @@
         <div>
           <p class="eyebrow">WECHAT WORK · BOT CONSOLE</p>
           <h1>机器人设置</h1>
-          <p>管理企业微信连接与项目对话入口。密钥仅保存在后端，页面不会回显完整内容。</p>
+          <p>统一管理企业微信长连接、群机器人与项目消息分配。已保存的 Webhook 密钥不会回显到页面。</p>
         </div>
         <div class="hero-actions">
           <el-button :loading="loading" @click="loadSettings">刷新状态</el-button>
@@ -127,20 +127,14 @@
             <p class="form-help">暂时可选择“本地模拟解读”测试完整流程。后续每个 API 模型会保存成独立配置；切换后点击“保存配置”才会对机器人生效，旧配置不会被覆盖。</p>
           </div>
 
-          <details class="advanced-settings">
-            <summary>通知机器人（可选）</summary>
-            <div class="form-grid advanced-settings__content">
-              <el-form-item label="Webhook 地址"><el-input v-model="form.webhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?..." /></el-form-item>
-              <el-form-item label="机器人名称"><el-input v-model="form.webhookName" placeholder="经营通知机器人" /></el-form-item>
-            </div>
-          </details>
-
           <div class="form-actions">
             <el-button type="primary" :loading="saving" @click="save">保存配置</el-button>
             <el-button :loading="testingApi" @click="testApi">测试企业 API</el-button>
           </div>
         </el-form>
       </section>
+
+      <BotRegistryPanel />
 
       <section class="settings-card dialogue-card">
         <div class="section-heading">
@@ -203,10 +197,11 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { createEnterpriseAiProfile, getBotStatus, getConfig, getToken, previewEnterpriseBotQuestion, reconnectEnterpriseRobot, saveConfig, updateEnterpriseAiProfile } from '@/api'
 import ScheduleSettingsPanel from './ScheduleSettingsPanel.vue'
+import BotRegistryPanel from './BotRegistryPanel.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -226,7 +221,7 @@ const editingProfileId = ref('')
 const newProfile = reactive({ name: '', baseUrl: '', model: '', apiKey: '' })
 const config = reactive({ configured: false, webhookConfigured: false, botConfigured: false, botIdMasked: '', aiConfigured: false, aiEnabled: false, activeAiProfileId: '', activeAiProfileName: '', aiProfiles: [] })
 const botStatus = reactive({ configured: false, connected: false, authenticated: false, businessQueryEnabled: false, lastError: '', startedAt: null, lastInboundAt: null, lastInboundType: '', lastReplyAt: null, lastReplyError: null })
-const form = reactive({ corpid: '', corpsecret: '', botId: '', botSecret: '', webhook: '', webhookName: '', aiEnabled: false, activeAiProfileId: '' })
+const form = reactive({ corpid: '', corpsecret: '', botId: '', botSecret: '', aiEnabled: false, activeAiProfileId: '' })
 const notice = reactive({ type: 'info', text: '' })
 const selectedAiProfile = computed(() => {
   if (form.activeAiProfileId === 'local-simulation') return { name: '本地模拟解读', local: true }
@@ -236,8 +231,6 @@ const selectedAiProfile = computed(() => {
 function applyConfig(data) {
   Object.assign(config, data)
   form.corpid = data.corpid || ''
-  form.webhook = data.webhook || ''
-  form.webhookName = data.webhookName || ''
   form.aiEnabled = Boolean(data.aiEnabled)
   form.activeAiProfileId = data.activeAiProfileId || ''
 }
@@ -270,7 +263,7 @@ async function save() {
   notice.type = 'info'
   notice.text = ''
   try {
-    const body = { corpid: form.corpid, webhook: form.webhook, webhookName: form.webhookName, aiEnabled: form.aiEnabled, activeAiProfileId: form.activeAiProfileId }
+    const body = { corpid: form.corpid, aiEnabled: form.aiEnabled, activeAiProfileId: form.activeAiProfileId }
     if (form.corpsecret) body.corpsecret = form.corpsecret
     if (form.botId) body.botId = form.botId
     if (form.botSecret) body.botSecret = form.botSecret
@@ -366,6 +359,12 @@ async function previewQuestion() {
 }
 
 watch(activeSection, section => { if (section === 'bot') loadSettings() }, { immediate: true })
+watch(() => route.hash, async hash => {
+  if (hash === '#bot-registry' && activeSection.value === 'bot') {
+    await nextTick()
+    document.getElementById('bot-registry')?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
+}, { immediate: true })
 </script>
 
 <style scoped>

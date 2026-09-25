@@ -257,7 +257,6 @@ app.get('/api/config', (_req, res) => {
   res.json({
     corpid: cfg.corpid || '',
     corpsecret_masked: cfg.corpsecret ? cfg.corpsecret.slice(0, 6) + '****' + cfg.corpsecret.slice(-4) : '',
-    webhook: cfg.webhook || '',
     webhookName: cfg.webhookName || '',
     configured: !!(cfg.corpid && cfg.corpsecret),
     webhookConfigured: !!cfg.webhook,
@@ -269,13 +268,13 @@ app.get('/api/config', (_req, res) => {
   });
 });
 app.post('/api/config', async (req, res) => {
-  const { corpid, corpsecret, webhook, webhookName, botId, botSecret, activeAiProfileId, aiEnabled } = req.body;
+  if (Object.hasOwn(req.body || {}, 'webhook') || Object.hasOwn(req.body || {}, 'webhookName'))
+    return res.status(400).json({ error: '群机器人请在「企业设置 → 机器人管理」统一维护' });
+  const { corpid, corpsecret, botId, botSecret, activeAiProfileId, aiEnabled } = req.body;
   const cfg = loadConfig();
   let botCredentialsChanged = false;
   if (corpid !== undefined) cfg.corpid = corpid.trim();
   if (corpsecret !== undefined) cfg.corpsecret = corpsecret.trim();
-  if (webhook !== undefined) cfg.webhook = webhook.trim();
-  if (webhookName !== undefined) cfg.webhookName = webhookName.trim();
   if (botId !== undefined && botId.trim()) {
     cfg.botId = botId.trim();
     botCredentialsChanged = true;
@@ -380,7 +379,7 @@ app.get('/api/wechat/token', async (_req, res) => {
 // ===== Webhook 发送 =====
 app.post('/api/wechat/send', async (req, res) => {
   const cfg = loadConfig();
-  const webhookUrl = req.body.webhook || cfg.webhook;
+  const webhookUrl = cfg.webhook;
   if (!webhookUrl) return res.status(400).json({ error: '请先配置 Webhook 地址' });
   const { msgtype = 'text', content, title, picurl, url, mentioned_list, mentioned_mobile_list } = req.body;
   const mentions = {};
@@ -5821,25 +5820,26 @@ app.post('/api/enterprise-settings/pos-daily/test-send', async (req, res) => {
     return res.status(result.duplicate ? 409 : 400).json({ error: result.reason, ...result });
   } catch (error) { return res.status(500).json({ error: `测试发送未完成：${String(error.message || error).slice(0, 120)}` }); }
 });
-// 每个业务可维护自己的一套机器人和文案；未填写机器人时自动回退到企业设置的默认机器人。
+// 项目模板与机器人凭证分开：发送目标只由显式的项目消息路由决定。
 function getPushProfile(code) {
-  const cfg = loadConfig();
   const profile = db.queryOne('SELECT * FROM push_profiles WHERE code=?', [code]);
-  if (!profile) return { code, name: code, description: '', webhook: '', webhook_name: '', content_template: '', image_template: '', enabled: 1, target_webhook: cfg.webhook || '', target_name: cfg.webhookName || '未命名企业微信群' };
-  return { ...profile, target_webhook: profile.webhook || cfg.webhook || '', target_name: profile.webhook_name || cfg.webhookName || '未命名企业微信群' };
+  const route = db.queryOne(`SELECT r.bot_id,r.enabled AS route_enabled,r.revision,b.name AS bot_name,b.webhook_url,b.enabled AS bot_enabled
+    FROM wecom_message_routes r LEFT JOIN wecom_webhook_bots b ON b.id=r.bot_id WHERE r.message_code=?`, [code]);
+  const ready = Boolean(route?.bot_id && Number(route.route_enabled) === 1 && Number(route.bot_enabled) === 1 && route.webhook_url);
+  return { ...(profile || { code, name: code, description: '', content_template: '', image_template: '', enabled: 1 }),
+    target_webhook: ready ? route.webhook_url : '', target_name: route?.bot_name || '尚未分配机器人',
+    target_bot_id: route?.bot_id || null, route_enabled: Boolean(route?.route_enabled), route_revision: Number(route?.revision || 0) };
+}
+function publicPushProfile(profile) {
+  const { webhook, webhook_name, target_webhook, ...safe } = profile;
+  return { ...safe, configured: Boolean(target_webhook), supported_message_types: ['markdown', 'image'] };
 }
 function renderPushTemplate(template, values) {
   return String(template || '').replace(/\{\{(title|date|store_count|body)\}\}/g, (_, key) => String(values[key] ?? ''));
 }
 app.get('/api/push/profiles', (req, res) => {
   try {
-    const cfg = loadConfig();
-    const profiles = db.queryAll('SELECT * FROM push_profiles ORDER BY id').map(profile => ({
-      ...profile,
-      configured: Boolean(profile.webhook || cfg.webhook),
-      target_name: profile.webhook_name || cfg.webhookName || '未命名企业微信群',
-      supported_message_types: ['markdown', 'image'],
-    }));
+    const profiles = db.queryAll('SELECT code FROM push_profiles ORDER BY id').map(row => publicPushProfile(getPushProfile(row.code)));
     res.json({ ok: true, profiles });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -5848,17 +5848,17 @@ app.put('/api/push/profiles/:id', (req, res) => {
     const id = Number(req.params.id); const existing = db.queryOne('SELECT * FROM push_profiles WHERE id=?', [id]);
     if (!existing) return res.status(404).json({ error: '推送通道不存在' });
     const body = req.body || {};
+    if (Object.hasOwn(body, 'webhook') || Object.hasOwn(body, 'webhook_name'))
+      return res.status(400).json({ error: '机器人凭证与项目消息分配请在「企业设置 → 机器人管理」维护' });
     const name = String(body.name ?? existing.name).trim().slice(0, 60);
     if (!name) return res.status(400).json({ error: '请填写推送功能名称' });
     const description = String(body.description ?? existing.description ?? '').trim().slice(0, 300);
-    const webhook = String(body.webhook ?? existing.webhook ?? '').trim().slice(0, 1000);
-    const webhookName = String(body.webhook_name ?? existing.webhook_name ?? '').trim().slice(0, 80);
     const contentTemplate = String(body.content_template ?? existing.content_template ?? '').trim().slice(0, 5000);
     const imageTemplate = String(body.image_template ?? existing.image_template ?? '').trim().slice(0, 600);
     const enabled = body.enabled === undefined ? Number(existing.enabled) : (body.enabled ? 1 : 0);
-    db.run('UPDATE push_profiles SET name=?,description=?,webhook=?,webhook_name=?,content_template=?,image_template=?,enabled=?,updated_at=datetime(\'now\',\'localtime\') WHERE id=?', [name, description, webhook, webhookName, contentTemplate, imageTemplate, enabled, id]);
+    db.run('UPDATE push_profiles SET name=?,description=?,content_template=?,image_template=?,enabled=?,updated_at=datetime(\'now\',\'localtime\') WHERE id=?', [name, description, contentTemplate, imageTemplate, enabled, id]);
     db.save();
-    res.json({ ok: true, profile: getPushProfile(existing.code) });
+    res.json({ ok: true, profile: publicPushProfile(getPushProfile(existing.code)) });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -5896,7 +5896,7 @@ function buildGroupBuyDailyPushPayload(body = {}) {
   const markdown = renderPushTemplate(profile.content_template || fallbackTemplate, templateValues);
   // 团购每日总结默认发送图卡；通道配置中的图片文案只负责卡片标题/注释，不再决定是否渲染图片。
   const imageContent = profile.image_template ? renderPushTemplate(profile.image_template, templateValues) : '团购每日总结日报';
-  return { biz_date: bizDate, records, markdown, image_content: imageContent, summary, profile: { id: profile.id || null, code: profile.code, name: title, image_template: profile.image_template || '', enabled: Boolean(profile.enabled) }, target: { configured: Boolean(profile.target_webhook), name: profile.target_name } };
+  return { biz_date: bizDate, records, markdown, image_content: imageContent, summary, profile: { id: profile.id || null, code: profile.code, name: title, image_template: profile.image_template || '', enabled: Boolean(profile.enabled) }, target: { configured: Boolean(profile.target_webhook), name: profile.target_name, bot_id: profile.target_bot_id, route_enabled: profile.route_enabled, revision: profile.route_revision } };
 }
 app.post('/api/push/group-buy-daily/preview', (req, res) => {
   try {
@@ -5909,7 +5909,7 @@ app.post('/api/push/group-buy-daily/send', async (req, res) => {
     const payload = buildGroupBuyDailyPushPayload(req.body || {});
     const profile = getPushProfile('group_buy_daily');
     if (!profile.enabled) return res.status(400).json({ error: '团购每日总结日报通道已停用，请在一键推送中启用后再发送' });
-    if (!profile.target_webhook) return res.status(400).json({ error: '请先在「一键推送 → 推送通道配置」或企业设置中配置目标群的 Webhook 地址' });
+    if (!profile.target_webhook) return res.status(400).json({ error: '请先在「企业设置 → 机器人管理」分配团购日报机器人并启用该消息路由' });
     if (!payload.records.length) return res.status(400).json({ error: '当前日期没有已保存的门店总结，不能发送空日报' });
     // 一张图片只展示一家门店：批量请求也逐店发图。团购日报只保留图卡，避免群内重复出现文字版。
     if (payload.image_content) {
