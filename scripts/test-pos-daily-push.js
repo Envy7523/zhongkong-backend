@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const { preflight, pushPosDaily } = require('../lib/pos-daily-push');
+const { renderPosDailyImage } = require('../lib/pos-daily-image');
 const { validWebhook } = require('../lib/wecom-routing');
 
 const data = {
@@ -33,6 +34,10 @@ assert.equal(validWebhook('https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=
 assert.equal(preflight(fakeDb(null), '2026-09-24').reason, 'pos_daily_route_not_active');
 assert.equal(preflight(fakeDb({ route_enabled: 0, bot_id: 2, bot_enabled: 1, webhook_url: 'https://example.test' }), '2026-09-24').ok, false);
 assert.equal(preflight(fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, webhook_url: 'https://example.test' }), '2026-09-24').ok, true);
+const checked = preflight(fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, webhook_url: 'https://example.test' }), '2026-09-24');
+assert.notDeepEqual(renderPosDailyImage(checked.data, { mode: 'preview' }).buffer,
+  renderPosDailyImage(checked.data, { mode: 'send' }).buffer);
+assert.throws(() => renderPosDailyImage({ ...checked.data, ready: false }, { mode: 'send' }), /incomplete_preview_cannot_send/);
 
 (async () => {
   let calls = 0;
@@ -44,5 +49,5 @@ assert.equal(preflight(fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, web
   assert.equal(success.sent, true);
   assert.equal(success.pushed, 1);
   assert.equal(calls, 1);
-  console.log('pos-daily-push: 11 assertions passed');
+  console.log('pos-daily-push: 13 assertions passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
