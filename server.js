@@ -27,6 +27,7 @@ const storeLifecycle = require('./lib/store-lifecycle');
 const { GROUP_NAMES, isGroupAffiliation } = require('./lib/staff-affiliation');
 const { createBusinessAssistant } = require('./lib/wecom-business-assistant');
 const syncJobAudit = require('./lib/sync-job-audit');
+const posDailyPush = require('./lib/pos-daily-push');
 const jwt = require('jsonwebtoken');
 
 const JWT_SECRET = 'etaigong-zhongkong-jwt-secret-2024';
@@ -5793,6 +5794,17 @@ app.put('/api/business-analytics/group-buy/daily-summary', (req, res) => {
 });
 
 // ===== 可维护推送通道 =====
+// 收银系统专用：多个机器人登记、按消息类型显式绑定；凭证只写不读，绝不回退全局默认机器人。
+app.use('/api/enterprise-settings/wecom-routing', require('./lib/wecom-routing').createRouter({ db }));
+app.get('/api/enterprise-settings/pos-daily/preview', (req, res) => {
+  try {
+    const data = posDailyPush.preview(db, String(req.query.business_date || ''));
+    const image = require('./lib/pos-daily-image').renderPosDailyImage(data);
+    res.json({ ok: true, ready: data.ready, problems: data.problems, business_date: data.business_date,
+      store_count: data.store_count, excluded_stores: data.excluded_stores, totals: data.totals,
+      image_data_url: `data:image/png;base64,${image.base64}` });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 // 每个业务可维护自己的一套机器人和文案；未填写机器人时自动回退到企业设置的默认机器人。
 function getPushProfile(code) {
   const cfg = loadConfig();

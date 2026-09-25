@@ -159,6 +159,12 @@ const routes = [
     meta: { importMode: 'pos-automation', automationSection: 'schedule', requiredPermission: 'enterprise-settings.manage' },
   },
   {
+    path: '/data-import/pos/automation/daily-report',
+    name: 'data-import-pos-automation-daily-report',
+    component: () => import('@/views/PosAutomation.vue'),
+    meta: { importMode: 'pos-automation', automationSection: 'daily-report', requiredPermission: 'enterprise-settings.manage' },
+  },
+  {
     path: '/data-import/group-buy',
     name: 'data-import-group-buy',
     component: () => import('@/views/BusinessDataImport.vue'),

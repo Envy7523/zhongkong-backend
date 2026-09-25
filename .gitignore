@@ -25,6 +25,7 @@ data/*.sqlite-shm
 .chrome-diagnose/
 _tmp/
 dist/
+/previews/
 *.log
 npm-debug.log*
 

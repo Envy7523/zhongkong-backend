@@ -46,6 +46,13 @@ export const updateEnterpriseAiProfile = (profileId, data) => http.put(`/api/ent
 export const getAutomationSchedule = () => http.get('/api/enterprise-settings/schedule')
 export const saveAutomationSchedule = (data) => http.post('/api/enterprise-settings/schedule', data)
 export const disableAutomationSchedule = () => http.post('/api/enterprise-settings/schedule/disable')
+export const getWecomRouting = () => http.get('/api/enterprise-settings/wecom-routing')
+export const createWecomBot = (data) => http.post('/api/enterprise-settings/wecom-routing/bots', data)
+export const updateWecomBot = (id, data) => http.put(`/api/enterprise-settings/wecom-routing/bots/${id}`, data)
+export const bindWecomRoute = (code, data) => http.put(`/api/enterprise-settings/wecom-routing/routes/${code}`, data)
+export const activateWecomRoute = (code, data) => http.post(`/api/enterprise-settings/wecom-routing/routes/${code}/activation`, data)
+export const savePosDailyExclusions = (data) => http.put('/api/enterprise-settings/wecom-routing/pos-daily/exclusions', data)
+export const previewPosDaily = (businessDate) => http.get('/api/enterprise-settings/pos-daily/preview', { params: { business_date: businessDate } })
 
 // ===== 企业微信 Token =====
 export const getToken = () => http.get('/api/wechat/token')

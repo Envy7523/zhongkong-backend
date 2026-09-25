@@ -57,6 +57,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { disableAutomationSchedule, getAutomationSchedule, saveAutomationSchedule } from '@/api'
 
 const loading = ref(false)

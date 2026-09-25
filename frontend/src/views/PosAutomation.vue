@@ -11,9 +11,11 @@
     <nav class="project-nav" aria-label="收银系统自动导报表导航">
       <button type="button" :class="{ active: section === 'runs' }" :aria-current="section === 'runs' ? 'page' : undefined" @click="router.push('/data-import/pos/automation')">运行记录</button>
       <button v-if="canManageSchedule" type="button" :class="{ active: section === 'schedule' }" :aria-current="section === 'schedule' ? 'page' : undefined" @click="router.push('/data-import/pos/automation/schedule')">同步与日报时间</button>
+      <button v-if="canManageSchedule" type="button" :class="{ active: section === 'daily-report' }" :aria-current="section === 'daily-report' ? 'page' : undefined" @click="router.push('/data-import/pos/automation/daily-report')">日报预览与机器人</button>
     </nav>
     <SyncRuns v-if="section === 'runs'" />
-    <ScheduleSettingsPanel v-else />
+    <ScheduleSettingsPanel v-else-if="section === 'schedule'" />
+    <PosDailySettings v-else />
   </main>
 </template>
 
@@ -23,12 +25,13 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import SyncRuns from '@/views/analysis/SyncRuns.vue'
 import ScheduleSettingsPanel from '@/views/ScheduleSettingsPanel.vue'
+import PosDailySettings from '@/views/PosDailySettings.vue'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const canManageSchedule = computed(() => auth.can('enterprise-settings.manage'))
-const section = computed(() => route.meta.automationSection === 'schedule' ? 'schedule' : 'runs')
+const section = computed(() => route.meta.automationSection || 'runs')
 </script>
 
 <style scoped>
