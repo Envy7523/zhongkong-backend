@@ -24,7 +24,8 @@ const preview = buildPosDailyPreview(fakeDb({
   records: [record('store_sales', 'offline', 100, 80, 2), record('meituan_delivery', 'delivery', 20, 15), record('meituan_group', 'group_buy', 30, 30)],
   compositions: [{ store_id: 1, category: '现金', amount: 80 }],
 }), '2026-09-24');
-assert.equal(preview.ready, true);
+assert.equal(preview.ready, false);
+assert.match(preview.problems.join('|'), /至少 9 家/);
 assert.equal(preview.totals.gross_amount, 120);
 assert.equal(preview.totals.recorded_amount, 95);
 assert.equal(preview.totals.discount_amount, 25);
@@ -50,6 +51,14 @@ const scoped = buildPosDailyPreview(fakeDb({
   records: [record('store_sales', 'offline', 100, 80)],
   compositions: [{ store_id: 1, category: '现金', amount: 80 }],
 }), '2026-09-24', { excludedStores: { 13: '已停业' } });
-assert.equal(scoped.ready, true);
+assert.equal(scoped.ready, false);
 assert.deepEqual(scoped.excluded_stores, [{ store_id: 13, store_name: '坂田店', reason: '已停业' }]);
-console.log('pos-daily-preview: 16 assertions passed');
+const twenty = buildPosDailyPreview(fakeDb({
+  stores: Array.from({ length: 20 }, (_, i) => ({ id: i + 1, store_name: `门店${i + 1}` })),
+  records: Array.from({ length: 20 }, (_, i) => ({ store_id: i + 1, store_name: `门店${i + 1}`, channel: 'store_sales', channel_group: 'offline', gross_amount: 200 - i, recorded_amount: 100, order_count: 1 })),
+  compositions: Array.from({ length: 20 }, (_, i) => ({ store_id: i + 1, category: '现金', amount: 100 })),
+}), '2026-09-24');
+assert.equal(twenty.ready, true);
+assert.deepEqual(twenty.focus_groups.map(group => group.rows.map(row => row.rank_label)),
+  [['TOP1', 'TOP2', 'TOP3'], ['9', '10', '11'], ['最差3', '最差2', '最差1']]);
+console.log('pos-daily-preview: 19 assertions passed');

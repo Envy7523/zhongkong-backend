@@ -5,9 +5,9 @@ const { preflight, pushPosDaily } = require('../lib/pos-daily-push');
 const { validWebhook } = require('../lib/wecom-routing');
 
 const data = {
-  stores: [{ id: 1, store_name: '甲店' }],
-  records: [{ store_id: 1, store_name: '甲店', channel: 'store_sales', channel_group: 'offline', gross_amount: 100, recorded_amount: 80, order_count: 3 }],
-  compositions: [{ store_id: 1, category: '现金', amount: 80 }],
+  stores: Array.from({ length: 9 }, (_, i) => ({ id: i + 1, store_name: `门店${i + 1}` })),
+  records: Array.from({ length: 9 }, (_, i) => ({ store_id: i + 1, store_name: `门店${i + 1}`, channel: 'store_sales', channel_group: 'offline', gross_amount: 100, recorded_amount: 80, order_count: 3 })),
+  compositions: Array.from({ length: 9 }, (_, i) => ({ store_id: i + 1, category: '现金', amount: 80 })),
 };
 function fakeDb(target) {
   return {
