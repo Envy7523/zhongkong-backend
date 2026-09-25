@@ -22,7 +22,7 @@ const record = (channel, group, gross, recorded, orders = 1) => ({
 
 const preview = buildPosDailyPreview(fakeDb({
   records: [record('store_sales', 'offline', 100, 80, 2), record('meituan_delivery', 'delivery', 20, 15), record('meituan_group', 'group_buy', 30, 30)],
-  compositions: [{ store_id: 1, category: '现金', amount: 80 }],
+  compositions: [{ store_id: 1, category: '现金', amount: 80 }, { store_id: 1, category: '外卖', amount: 15 }],
 }), '2026-09-24');
 assert.equal(preview.ready, false);
 assert.match(preview.problems.join('|'), /至少 9 家/);
