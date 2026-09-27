@@ -11,7 +11,7 @@
       </button>
       <button class="settings-nav__item" :class="{ active: activeSection === 'schedule' }" type="button" @click="switchSection('schedule')">
         <span class="settings-nav__icon">◷</span>
-        <span><b>自动报表与日报</b><small>设置同步和发送时间</small></span>
+        <span><b>日报发送计划</b><small>中控汇总与发送时间</small></span>
       </button>
       <div class="settings-nav__hint">人员权限将待项目测试完成后，再统一配置。</div>
     </aside>

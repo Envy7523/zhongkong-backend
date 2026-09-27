@@ -1,7 +1,7 @@
 <template>
   <div class="daily-page">
     <el-alert title="发送仍受两道开关控制" type="warning" :closable="false" show-icon>
-      机器人与项目消息的分配统一在“企业设置 → 机器人管理”维护。本页只负责收银日报的范围、预览和发送审批；“同步与日报时间”中的自动计划仍须单独开启。
+      机器人与项目消息的分配统一在“企业设置 → 机器人管理”维护。本页只负责收银日报的范围、预览和发送审批；“企业设置 → 日报发送计划”须单独开启，与采集计划无关。
     </el-alert>
 
     <section class="panel">

@@ -66,6 +66,12 @@ const routes = [
     meta: { analysisKey: 'analysis-total-brand', analysisTitle: '总数据视角 · 品牌视角', analysisScope: 'total', analysisMode: 'brand' },
   },
   {
+    path: '/analysis/agents',
+    name: 'analysis-agents',
+    component: () => import('@/views/analysis/AgentAnalysis.vue'),
+    meta: { analysisKey: 'analysis-agents', analysisTitle: 'AI 经营分析' },
+  },
+  {
     path: '/analysis/total/store',
     name: 'analysis-total-store',
     component: () => import('@/views/analysis/BusinessAnalytics.vue'),
