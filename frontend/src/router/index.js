@@ -66,6 +66,12 @@ const routes = [
     meta: { analysisKey: 'analysis-total-brand', analysisTitle: '总数据视角 · 品牌视角', analysisScope: 'total', analysisMode: 'brand' },
   },
   {
+    path: '/analysis/agents',
+    name: 'analysis-agents',
+    component: () => import('@/views/analysis/AgentAnalysis.vue'),
+    meta: { analysisKey: 'analysis-agents', analysisTitle: 'AI 经营分析' },
+  },
+  {
     path: '/analysis/total/store',
     name: 'analysis-total-store',
     component: () => import('@/views/analysis/BusinessAnalytics.vue'),
@@ -160,9 +166,7 @@ const routes = [
   },
   {
     path: '/data-import/pos/automation/daily-report',
-    name: 'data-import-pos-automation-daily-report',
-    component: () => import('@/views/PosAutomation.vue'),
-    meta: { importMode: 'pos-automation', automationSection: 'daily-report', requiredPermission: 'enterprise-settings.manage' },
+    redirect: '/pipeline/pos-daily',
   },
   {
     path: '/data-import/group-buy',
@@ -212,7 +216,11 @@ const routes = [
   { path: '/cost-accounting/:section', name: 'workspace-cost-accounting', component: { render: () => null } },
   { path: '/bookkeeping', redirect: '/bookkeeping/entry' },
   { path: '/bookkeeping/:section', name: 'workspace-bookkeeping', component: { render: () => null } },
-  { path: '/pipeline', name: 'workspace-pipeline', component: { render: () => null } },
+  { path: '/pipeline', redirect: '/pipeline/group-buy-daily' },
+  { path: '/pipeline/group-buy-daily', name: 'workspace-pipeline-group-buy', component: { render: () => null }, meta: { pushSection: 'group-buy' } },
+  { path: '/pipeline/pos-daily', name: 'workspace-pipeline-pos', component: { render: () => null }, meta: { pushSection: 'pos', requiredPermission: 'enterprise-settings.manage' } },
+  { path: '/pipeline/pos-daily/schedule', name: 'workspace-pipeline-pos-schedule', component: { render: () => null }, meta: { pushSection: 'pos-schedule', requiredPermission: 'enterprise-settings.manage' } },
+  { path: '/pipeline/pos-store-daily', name: 'workspace-pipeline-pos-store', component: { render: () => null }, meta: { pushSection: 'pos-store', requiredPermission: 'enterprise-settings.manage' } },
   { path: '/ai-assistant', name: 'workspace-ai-assistant', component: { render: () => null } },
   { path: '/user-management', name: 'workspace-user-management', component: { render: () => null } },
   { path: '/position-settings', name: 'workspace-position-settings', component: { render: () => null } },
@@ -281,9 +289,7 @@ const routes = [
   },
   {
     path: '/enterprise-settings/schedule',
-    name: 'enterprise-settings-schedule',
-    component: () => import('@/views/EnterpriseSettingsView.vue'),
-    meta: { enterpriseSection: 'schedule' },
+    redirect: '/pipeline/pos-daily/schedule',
   },
   {
     path: '/enterprise-settings/:pathMatch(.*)*',
@@ -321,7 +327,9 @@ const ROUTE_PERMISSION_RULES = [
   ['workspace-bookkeeping', 'bookkeeping.manage'],
   ['data-import-', 'data-import.manage'],
   ['reports-', 'data-import.manage'],
-  ['workspace-pipeline', 'pipeline.manage'],
+  ['workspace-pipeline-pos', 'enterprise-settings.manage'],
+  ['workspace-pipeline-pos-schedule', 'enterprise-settings.manage'],
+  ['workspace-pipeline-group-buy', 'pipeline.manage'],
   ['workspace-ai-assistant', 'ai-assistant.view'],
   ['notification-rules', 'notifications.rules'],
   ['notifications', 'notifications.view'],

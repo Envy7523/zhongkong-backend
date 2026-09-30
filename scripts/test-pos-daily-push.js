@@ -16,10 +16,10 @@ function fakeDb(target) {
       if (sql.includes('FROM stores')) return data.stores;
       if (sql.includes('FROM business_revenue_records')) return data.records;
       if (sql.includes('FROM business_revenue_compositions')) return data.compositions;
-      if (sql.includes('FROM pos_daily_scope_exclusions')) return [];
       throw new Error(`unexpected query: ${sql}`);
     },
     queryOne(sql) {
+      if (sql.includes('FROM push_logs')) return null;
       if (sql.includes('FROM wecom_message_routes')) return target;
       throw new Error(`unexpected query: ${sql}`);
     },
@@ -32,7 +32,7 @@ function fakeTestDb(assignedBotId = 2) {
   db.queryOne = (sql, params = []) => {
     if (sql.includes('FROM pos_daily_test_sends') && sql.includes('request_id=')) return sends.find(row => row.request_id === params[0]) || null;
     if (sql.includes('FROM pos_daily_test_sends')) return sends.find(row => row.business_date === params[0] && row.bot_id === params[1] && ['started', 'unknown', 'success'].includes(row.status)) || null;
-    if (sql.includes('FROM wecom_webhook_bots')) return { id: 2, name: 'Nameless', webhook_url: 'https://example.test', enabled: 1 };
+    if (sql.includes('FROM wecom_webhook_bots')) return { id: 2, name: 'Nameless', webhook_url: 'https://example.test', enabled: 1, audience: 'management' };
     if (sql.includes('FROM wecom_message_routes')) return { bot_id: assignedBotId };
     throw new Error(`unexpected query: ${sql}`);
   };
@@ -52,8 +52,9 @@ assert.equal(validWebhook('https://evil.example/cgi-bin/webhook/send?key=1234567
 assert.equal(validWebhook('https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=12345678-abc&x=1'), false);
 assert.equal(preflight(fakeDb(null), '2026-09-24').reason, 'pos_daily_route_not_active');
 assert.equal(preflight(fakeDb({ route_enabled: 0, bot_id: 2, bot_enabled: 1, webhook_url: 'https://example.test' }), '2026-09-24').ok, false);
-assert.equal(preflight(fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, webhook_url: 'https://example.test' }), '2026-09-24').ok, true);
-const checked = preflight(fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, webhook_url: 'https://example.test' }), '2026-09-24');
+assert.equal(preflight(fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, bot_audience: 'store', webhook_url: 'https://example.test' }), '2026-09-24').ok, false);
+assert.equal(preflight(fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, bot_audience: 'management', webhook_url: 'https://example.test' }), '2026-09-24').ok, true);
+const checked = preflight(fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, bot_audience: 'management', webhook_url: 'https://example.test' }), '2026-09-24');
 assert.notDeepEqual(renderPosDailyImage(checked.data, { mode: 'preview' }).buffer,
   renderPosDailyImage(checked.data, { mode: 'send' }).buffer);
 assert.throws(() => renderPosDailyImage({ ...checked.data, ready: false }, { mode: 'send' }), /incomplete_preview_cannot_send/);
@@ -63,7 +64,7 @@ assert.throws(() => renderPosDailyImage({ ...checked.data, ready: false }, { mod
   const denied = await pushPosDaily({ db: fakeDb(null), business_date: '2026-09-24', httpPost: async () => { calls++; return { errcode: 0 }; } });
   assert.equal(denied.sent, false);
   assert.equal(calls, 0);
-  const success = await pushPosDaily({ db: fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, bot_name: '专用群', webhook_url: 'https://example.test' }),
+  const success = await pushPosDaily({ db: fakeDb({ route_enabled: 1, bot_id: 2, bot_enabled: 1, bot_audience: 'management', bot_name: '专用群', webhook_url: 'https://example.test' }),
     business_date: '2026-09-24', httpPost: async (_url, payload) => { calls++; assert.equal(payload.msgtype, 'image'); return { errcode: 0 }; } });
   assert.equal(success.sent, true);
   assert.equal(success.pushed, 1);

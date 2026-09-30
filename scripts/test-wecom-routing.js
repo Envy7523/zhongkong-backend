@@ -8,10 +8,10 @@ const { createRouter, syncDefaultWebhookBot } = require('../lib/wecom-routing');
 (async () => {
   const SQL = await initSqlJs();
   const raw = new SQL.Database();
-  raw.run("CREATE TABLE stores(id INTEGER PRIMARY KEY,store_name TEXT); INSERT INTO stores VALUES(1,'甲店')");
-  raw.run("CREATE TABLE wecom_webhook_bots(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE,webhook_url TEXT,enabled INTEGER,source TEXT DEFAULT 'manual',updated_at TEXT)");
+  raw.run("CREATE TABLE stores(id INTEGER PRIMARY KEY,store_name TEXT); INSERT INTO stores VALUES(1,'甲店'),(2,'乙店')");
+  raw.run("CREATE TABLE wecom_webhook_bots(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE,webhook_url TEXT,enabled INTEGER,source TEXT DEFAULT 'manual',audience TEXT NOT NULL DEFAULT 'management',store_id INTEGER,updated_at TEXT)");
+  raw.run("CREATE UNIQUE INDEX idx_wecom_bots_store ON wecom_webhook_bots(store_id) WHERE audience='store' AND store_id IS NOT NULL");
   raw.run("CREATE TABLE wecom_message_routes(message_code TEXT PRIMARY KEY,bot_id INTEGER,enabled INTEGER,revision INTEGER DEFAULT 0,updated_at TEXT); INSERT INTO wecom_message_routes VALUES('pos_daily',NULL,0,0,''); INSERT INTO wecom_message_routes VALUES('group_buy_daily',NULL,0,0,'')");
-  raw.run('CREATE TABLE pos_daily_scope_exclusions(store_id INTEGER PRIMARY KEY,reason TEXT)');
   const db = {
     queryAll(sql, params = []) { const stmt = raw.prepare(sql); stmt.bind(params); const rows = []; while (stmt.step()) rows.push(stmt.getAsObject()); stmt.free(); return rows; },
     queryOne(sql, params = []) { return this.queryAll(sql, params)[0] || null; },
@@ -50,6 +50,13 @@ const { createRouter, syncDefaultWebhookBot } = require('../lib/wecom-routing');
     listing = await request('GET', '/');
     assert.equal(listing.json.bots[1].name, '收银日报群');
     assert.equal(JSON.stringify(listing.json).includes(secret), false);
+    assert.deepEqual(listing.json.stores.map(store => store.store_name), ['乙店', '甲店']);
+    const storeBot = await request('POST', '/bots', { name: '甲店群', webhook_url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=storebot12345', audience: 'store', store_id: 1 });
+    assert.equal(storeBot.status, 201);
+    assert.equal(storeBot.json.bot.store_name, '甲店');
+    assert.equal((await request('POST', '/bots', { name: '甲店重复', webhook_url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=storebot67890', audience: 'store', store_id: 1 })).status, 409);
+    assert.equal((await request('PUT', '/routes/pos_daily', { bot_id: storeBot.json.bot.id })).status, 400);
+    assert.equal((await request('PUT', '/routes/group_buy_daily', { bot_id: storeBot.json.bot.id })).status, 400);
     assert.equal((await request('PUT', '/routes/pos_daily', { bot_id: null })).json.enabled, false);
     assert.equal((await request('POST', '/routes/pos_daily/activation', { enabled: true, expected_bot_id: originalId, expected_revision: 1, confirm_template_approved: true, confirm_target_verified: true })).status, 400);
     assert.equal((await request('PUT', '/routes/pos_daily', { bot_id: 2 })).json.enabled, false);
@@ -58,14 +65,17 @@ const { createRouter, syncDefaultWebhookBot } = require('../lib/wecom-routing');
     assert.equal((await request('POST', '/routes/pos_daily/activation', { enabled: true, expected_bot_id: 2, expected_revision: 4, confirm_template_approved: true, confirm_target_verified: true })).json.enabled, true);
     assert.equal((await request('PUT', '/bots/2', { webhook_url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=new12345678' })).status, 200);
     assert.equal(route((await request('GET', '/')).json).enabled, false);
+    assert.equal((await request('PUT', '/bots/2', { audience: 'store', store_id: 2 })).status, 200);
+    assert.equal((await request('PUT', '/routes/pos_daily', { bot_id: 2 })).status, 400);
+    assert.equal((await request('PUT', '/bots/2', { audience: 'management' })).status, 200);
     assert.equal((await request('PUT', '/routes/group_buy_daily', { bot_id: originalId })).json.enabled, false);
     assert.equal((await request('POST', '/routes/group_buy_daily/activation', { enabled: true, expected_bot_id: originalId, expected_revision: 1, confirm_template_approved: true, confirm_target_verified: true })).json.enabled, true);
     assert.equal((await request('PUT', '/routes/group_buy_daily', { bot_id: 2 })).json.enabled, false);
     assert.equal((await request('PUT', `/bots/${originalId}`, { name: 'Nameless 报表测试', webhook_url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=namelessTest12345' })).status, 200);
     assert.equal(legacy.webhookName, 'Nameless 报表测试');
     assert.equal(JSON.stringify((await request('GET', '/')).json).includes(legacy.webhook), false);
-    assert.equal((await request('PUT', '/pos-daily/exclusions', { exclusions: [{ store_id: 1, reason: '已停业' }] })).status, 200);
-    assert.equal((await request('GET', '/')).json.exclusions[0].reason, '已停业');
+    assert.equal((await fetch(base + '/pos-daily/exclusions', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ exclusions: [{ store_id: 1, reason: '已停业' }] }) })).status, 404);
+    assert.equal(Object.hasOwn((await request('GET', '/')).json, 'exclusions'), false);
     console.log('wecom-routing: existing bot registry, routing and secret safety passed');
   } finally { server.close(); raw.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

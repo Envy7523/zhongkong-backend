@@ -15,8 +15,10 @@ const { parseDailyExcel, toReportData } = require('./lib/daily-data');
 const db = require('./lib/db');
 const collabService = require('./lib/collab-service');
 const businessAnalytics = require('./lib/business-analytics');
+const analysisAgents = require('./lib/analysis-agents');
 const poultryAccounting = require('./lib/poultry-accounting');
 const ledgerBackupImport = require('./lib/bookkeeping-import');
+const posBookkeepingDaily = require('./lib/pos-bookkeeping-daily');
 const wecomBot = require('./lib/wecom-bot');
 const staffImport = require('./lib/staff-import');
 const idCardOcr = require('./lib/idcard-ocr');
@@ -4573,6 +4575,56 @@ app.post('/api/bookkeeping/import-replace', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// 与手工「快捷录入」共用 bookkeeping_entries，绝不调用会删除日期窗口的 import-replace。
+// 文件必须是单日、全门店/全类别原件；预览零写入，确认后只允许当日空档写入一次。
+app.get('/api/bookkeeping/pos-daily-import/coverage', (req, res) => {
+  try {
+    const date = String(req.query?.business_date || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(`${date}T00:00:00Z`))
+      || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date)
+      return res.status(400).json({ error: 'business_date_invalid' });
+    const count = db.queryOne('SELECT COUNT(*) AS n,ROUND(SUM(amount)*100) AS cents FROM bookkeeping_entries WHERE date=?', [date]);
+    const batch = db.queryOne(`SELECT id,row_count,store_count,total_cents,file_sha256
+      FROM pos_bookkeeping_daily_imports WHERE business_date=?`, [date]);
+    const links = batch ? db.queryOne(`SELECT COUNT(*) AS n FROM pos_bookkeeping_daily_import_rows l
+      JOIN bookkeeping_entries e ON e.id=l.entry_id WHERE l.batch_id=? AND e.date=?`, [batch.id, date]) : null;
+    res.json({ ok: true, report_type: 'pos_bookkeeping_daily', business_date: date,
+      entry_count: Number(count?.n || 0), total_cents: Number(count?.cents || 0),
+      import_batch: batch ? { id: Number(batch.id), row_count: Number(batch.row_count),
+        store_count: Number(batch.store_count), total_cents: Number(batch.total_cents),
+        sha256_prefix: String(batch.file_sha256 || '').slice(0, 12), linked_rows: Number(links?.n || 0) } : null,
+      safe_to_skip_sync: false });
+  } catch { res.status(503).json({ ok: false, error: 'coverage_query_failed' }); }
+});
+app.post('/api/bookkeeping/pos-daily-import/preview', (req, res) => {
+  try {
+    const base64 = String(req.body?.data || '');
+    if (!/^[A-Za-z0-9+/=]+$/.test(base64) || base64.length > 14 * 1024 * 1024)
+      return res.status(400).json({ error: 'file_payload_invalid' });
+    const parsed = posBookkeepingDaily.parsePosBookkeepingDaily(Buffer.from(base64, 'base64'), req.body?.business_date);
+    const gate = posBookkeepingDaily.inspectImport(db, parsed);
+    res.json({ ok: true, business_date: parsed.business_date, row_count: parsed.row_count,
+      store_count: parsed.store_count, total_cents: parsed.total_cents,
+      sha256_prefix: parsed.file_sha256.slice(0, 12), status: gate.status });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/bookkeeping/pos-daily-import/commit', (req, res) => {
+  try {
+    if (req.body?.confirm !== true) return res.status(400).json({ error: 'explicit_confirm_required' });
+    const base64 = String(req.body?.data || '');
+    if (!/^[A-Za-z0-9+/=]+$/.test(base64) || base64.length > 14 * 1024 * 1024)
+      return res.status(400).json({ error: 'file_payload_invalid' });
+    const buffer = Buffer.from(base64, 'base64');
+    const sha = crypto.createHash('sha256').update(buffer).digest('hex');
+    if (String(req.body?.expected_sha256 || '') !== sha)
+      return res.status(400).json({ error: 'file_sha256_mismatch' });
+    const result = posBookkeepingDaily.importPosBookkeepingDaily(db, buffer, req.body?.business_date, req.user);
+    res.status(result.already_imported ? 200 : 201).json(result);
+  } catch (e) {
+    const conflict = /^(daily_import_conflict|existing_manual_entries)/.test(e.message);
+    res.status(conflict ? 409 : 400).json({ error: e.message });
+  }
+});
 // ===== 用户管理 =====
 function parsePositionPermissions(value) {
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? [...new Set(parsed.map(item => String(item || '').trim()).filter(Boolean))] : []; }
@@ -5645,6 +5697,40 @@ app.get('/api/analysis/cost', (req, res) => { try { const { store_id } = req.que
 app.get('/api/analysis/sales', (req, res) => { try { res.json({ ok: true, rows: db.queryAll('SELECT store_name,date,revenue,actual_revenue,order_count,discount_amount FROM daily_reports ORDER BY date DESC LIMIT 50') }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 经营数据分析（收银系统 + 线上平台双向核对） =====
+app.get('/api/analysis-agents/config', (req, res) => {
+  const cfg = loadConfig();
+  const publicAi = getPublicAiConfig(cfg);
+  res.json({ ok: true, ai_enabled: publicAi.aiEnabled, active_profile_id: publicAi.activeAiProfileId,
+    profiles: publicAi.aiProfiles.map(({ id, name, model }) => ({ id, name, model })),
+    route: analysisAgents.STEPS.map(([key, name]) => ({ key, name })),
+    data_policy: '模型模式只发送当前门店所选日期的聚合经营数据给已配置模型；不发送原始文件或凭证。' });
+});
+app.get('/api/analysis-agents/runs', (req, res) => {
+  const storeId = Number(req.query.store_id);
+  const rows = Number.isInteger(storeId) && storeId > 0
+    ? db.queryAll('SELECT id,store_id,store_name,date_from,date_to,mode,depth,profile_name,status,error_text,created_by_name,created_at,finished_at FROM analysis_agent_runs WHERE store_id=? ORDER BY id DESC LIMIT 50', [storeId])
+    : db.queryAll('SELECT id,store_id,store_name,date_from,date_to,mode,depth,profile_name,status,error_text,created_by_name,created_at,finished_at FROM analysis_agent_runs ORDER BY id DESC LIMIT 50');
+  res.json({ ok: true, runs: rows });
+});
+app.get('/api/analysis-agents/runs/:id', (req, res) => {
+  const run = analysisAgents.getRun(db, Number(req.params.id));
+  if (!run) return res.status(404).json({ error: '分析任务不存在' });
+  res.json({ ok: true, run });
+});
+app.post('/api/analysis-agents/runs', (req, res) => {
+  try {
+    const cfg = loadConfig();
+    const id = analysisAgents.start(db, req.body || {}, req.user, { ...cfg, aiProfiles: getAiProfiles(cfg) });
+    res.status(202).json({ ok: true, id });
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
+app.post('/api/analysis-agents/runs/:id/retry-ai', (req, res) => {
+  try {
+    const cfg = loadConfig();
+    analysisAgents.retryAi(db, Number(req.params.id), String(req.body?.profile_id || cfg.activeAiProfileId || ''), { ...cfg, aiProfiles: getAiProfiles(cfg) });
+    res.status(202).json({ ok: true, id: Number(req.params.id) });
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
 app.get('/api/business-analytics/overview', (req, res) => {
   try {
     res.json({ ok: true, ...businessAnalytics.getOverview(db, req.query) });
@@ -5804,7 +5890,7 @@ app.get('/api/enterprise-settings/pos-daily/preview', (req, res) => {
     const data = posDailyPush.preview(db, String(req.query.business_date || ''));
     const image = require('./lib/pos-daily-image').renderPosDailyImage(data);
     res.json({ ok: true, ready: data.ready, problems: data.problems, business_date: data.business_date,
-      store_count: data.store_count, excluded_stores: data.excluded_stores, totals: data.totals,
+      store_count: data.store_count, totals: data.totals,
       image_data_url: `data:image/png;base64,${image.base64}` });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -5823,9 +5909,9 @@ app.post('/api/enterprise-settings/pos-daily/test-send', async (req, res) => {
 // 项目模板与机器人凭证分开：发送目标只由显式的项目消息路由决定。
 function getPushProfile(code) {
   const profile = db.queryOne('SELECT * FROM push_profiles WHERE code=?', [code]);
-  const route = db.queryOne(`SELECT r.bot_id,r.enabled AS route_enabled,r.revision,b.name AS bot_name,b.webhook_url,b.enabled AS bot_enabled
+  const route = db.queryOne(`SELECT r.bot_id,r.enabled AS route_enabled,r.revision,b.name AS bot_name,b.webhook_url,b.enabled AS bot_enabled,b.audience AS bot_audience
     FROM wecom_message_routes r LEFT JOIN wecom_webhook_bots b ON b.id=r.bot_id WHERE r.message_code=?`, [code]);
-  const ready = Boolean(route?.bot_id && Number(route.route_enabled) === 1 && Number(route.bot_enabled) === 1 && route.webhook_url);
+  const ready = Boolean(route?.bot_id && Number(route.route_enabled) === 1 && Number(route.bot_enabled) === 1 && route.bot_audience === 'management' && route.webhook_url);
   return { ...(profile || { code, name: code, description: '', content_template: '', image_template: '', enabled: 1 }),
     target_webhook: ready ? route.webhook_url : '', target_name: route?.bot_name || '尚未分配机器人',
     target_bot_id: route?.bot_id || null, route_enabled: Boolean(route?.route_enabled), route_revision: Number(route?.revision || 0) };
@@ -6599,6 +6685,14 @@ try {
 } catch (e) {
   console.error('[schedule] 自动同步与日报计划模块挂载失败（其余功能不受影响）：', e.message);
 }
+try {
+  require('./lib/report-sync-plans').mountReportSyncPlans({
+    app, db, permissions: positionPermissions, audit: syncJobAudit,
+    logger: (event, extra) => console.log('[report-sync-plans]', event, extra || ''),
+  });
+} catch (e) {
+  console.error('[report-sync-plans] 每份报表计划模块挂载失败：', e.message);
+}
 
 /**
  * POST /api/internal/syncbot/events —— syncbot 结构化事件上报（**本机回环 + HMAC**）
@@ -6618,6 +6712,19 @@ try {
   mountCoverage({ app, express, db, audit: syncJobAudit });
 } catch (e) {
   console.error('[syncbot-coverage] mount failed:', e.message);
+}
+// 收银系统品项明细专用只读覆盖，不复用营业收入记录数。
+try {
+  const { mountItemSalesCoverage } = require('./lib/syncbot-item-coverage');
+  mountItemSalesCoverage({ app, express, db, audit: syncJobAudit });
+} catch (e) {
+  console.error('[syncbot-item-coverage] mount failed:', e.message);
+}
+try {
+  const { mountBookkeepingCoverage } = require('./lib/syncbot-bookkeeping-coverage');
+  mountBookkeepingCoverage({ app, express, db, audit: syncJobAudit });
+} catch (e) {
+  console.error('[syncbot-bookkeeping-coverage] mount failed:', e.message);
 }
 
 app.post('/api/internal/syncbot/events', express.raw({ type: () => true, limit: '1mb' }), (req, res) => {
@@ -6945,6 +7052,7 @@ app.get('/api/bot/status', (_req, res) => {
   if (process.env.DISABLE_WECOM_BOT !== '1') wecomBot.start().catch(err => console.error('[wecom-bot] 启动失败:', err.message));
   setupConsoleEncoding();
   await db.init();
+  analysisAgents.recoverInterrupted(db);
   db.seed();
   wecomRouting.syncDefaultWebhookBot(db, loadConfig());
   // 历史京东门店经营日报早期仅写入外卖运营看板；启动时回填为平台营业记录，
