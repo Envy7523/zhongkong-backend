@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { preflight, pushPosDaily, sendPosDailyTest } = require('../lib/pos-daily-push');
+const { preflight, pushPosDaily, sendPosDailyTest, clearTestSendLock } = require('../lib/pos-daily-push');
 const { renderPosDailyImage } = require('../lib/pos-daily-image');
 const { validWebhook } = require('../lib/wecom-routing');
 
@@ -87,4 +87,30 @@ assert.throws(() => renderPosDailyImage({ ...checked.data, ready: false }, { mod
   assert.equal(unknown.unknown, true);
   assert.equal(unknownDb.sends[0].status, 'unknown');
   console.log('pos-daily-push: scheduled and one-time test-send guards passed');
+
+  // 防重锁清除：只清指定「业务日期 + 机器人」，非法入参零写入
+  const clearDb = fakeTestDb();
+  clearDb.db.queryOne = (sql) => {
+    if (sql.includes('FROM wecom_webhook_bots')) return { id: 2, name: 'Nameless' };
+    throw new Error(`unexpected queryOne: ${sql}`);
+  };
+  clearDb.db.queryAll = (sql) => {
+    if (sql.includes('FROM pos_daily_test_sends')) return [{ request_id: 'r1', status: 'success' }];
+    if (sql.includes('FROM push_logs')) return [{ id: 13 }];
+    throw new Error(`unexpected queryAll: ${sql}`);
+  };
+  let deletes = 0;
+  clearDb.db.run = (sql) => { if (sql.includes('DELETE')) deletes++; };
+  const cleared = clearTestSendLock(clearDb.db, '2026-09-24', 2);
+  assert.equal(cleared.ok, true);
+  assert.equal(deletes, 2);
+  // 非法入参必须在落库前就被拒绝
+  let badDeletes = 0;
+  const badDb = fakeTestDb().db;
+  badDb.run = (sql) => { if (sql.includes('DELETE')) badDeletes++; };
+  assert.equal(clearTestSendLock(badDb, '2026-9-4', 2).reason, 'business_date_invalid');
+  assert.equal(clearTestSendLock(badDb, '2026-09-24', 0).reason, 'bot_id_invalid');
+  assert.equal(clearTestSendLock({ ...badDb, queryOne: () => null }, '2026-09-24', 9).reason, 'bot_not_found');
+  assert.equal(badDeletes, 0);
+  console.log('pos-daily-push: clear-test-send lock scoped and validation passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
