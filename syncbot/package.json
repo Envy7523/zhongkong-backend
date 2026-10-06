@@ -1,0 +1,19 @@
+{
+  "name": "zhongkong-sync-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "中控项目独立同步机器人（美团管家等平台：报表下载 → 导入 → 校验 → 日报推送）",
+  "main": "src/browser.js",
+  "scripts": {
+    "browser": "node src/browser.js",
+    "selftest": "node src/selftest.js",
+    "status": "node src/status.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "1.63.0",
+    "xlsx": "0.18.5"
+  }
+}

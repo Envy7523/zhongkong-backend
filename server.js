@@ -4012,6 +4012,24 @@ app.get('/api/dashboard/stats', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 首页只读收银机快照；团购包含在店内销售中，不重复加总。
+app.get('/api/dashboard/pos-summary', (req, res) => {
+  try {
+    const latestDate = db.queryOne("SELECT MAX(biz_date) AS date FROM business_revenue_records WHERE source_type='pos' AND channel='store_sales'")?.date || null;
+    if (!latestDate) return res.json({ ok: true, view: 'cashier', source: 'business_revenue_records', rows: [] });
+    const previousDate = db.queryOne("SELECT MAX(biz_date) AS date FROM business_revenue_records WHERE source_type='pos' AND channel='store_sales' AND biz_date<?", [latestDate])?.date || null;
+    const rows = db.queryAll(`SELECT biz_date AS date,store_id,MAX(store_name) AS store_name,
+        ROUND(SUM(COALESCE(gross_amount,0)),2) AS revenue,
+        ROUND(SUM(COALESCE(recorded_amount,0)),2) AS actual_revenue,
+        SUM(COALESCE(order_count,0)) AS order_count
+      FROM business_revenue_records
+      WHERE source_type='pos' AND channel IN ('store_sales','pickup','meituan_delivery','taobao_flash','jd_delivery')
+        AND biz_date IN (?,?)
+      GROUP BY biz_date,store_id ORDER BY biz_date DESC,actual_revenue DESC`, [latestDate, previousDate]);
+    res.json({ ok: true, view: 'cashier', source: 'business_revenue_records', latest_date: latestDate, previous_date: previousDate, rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ===== 推送日志 =====
 app.get('/api/push-logs', (req, res) => { try { const { status, limit } = req.query; let sql = 'SELECT * FROM push_logs WHERE 1=1'; const params = []; if (status) { sql += ' AND status=?'; params.push(status); } sql += ' ORDER BY id DESC LIMIT ?'; params.push(limit || 50); res.json({ ok: true, logs: db.queryAll(sql, params) }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/push-logs', (req, res) => { try { const { push_type, target, content_preview, status, error_msg } = req.body; const id = db.insert('INSERT INTO push_logs (push_type,target,content_preview,status,error_msg) VALUES (?,?,?,?,?)', [push_type||'', target||'', content_preview||'', status||'success', error_msg||'']); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });

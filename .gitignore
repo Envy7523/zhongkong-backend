@@ -60,3 +60,16 @@ data/avatars/
 # 门店 GLB 模型与小程序上传图片：只落磁盘，绝不入库更不入 git。
 # 漏掉这条会让 git add -A 把上百 MB 模型提交进公开仓库。
 data/uploads/
+
+# Local source-audit archives and runtime exports
+/_handover/
+/github-export/
+/frontend/dist.bak-local/
+/ZK-UP.b64
+/data/bookkeeping-deleted-*.json
+/syncbot/node_modules/
+/syncbot/.env*
+/syncbot/state/
+/syncbot/downloads/
+/syncbot/browser-profiles/
+/syncbot/logs/

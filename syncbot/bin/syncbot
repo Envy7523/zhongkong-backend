@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# 中控同步机器人 - 运维 CLI（诊断 + 浏览器服务控制）
+#
+# 权限模型：业务数据目录为 0750(syncbot:syncbot)，普通用户不可读。
+#   因此本 CLI 在检测到可免密 sudo 时会自动以 root 重新执行自己（只读诊断 + systemctl 都需要）。
+#   若调用者没有 sudo（如 syncbot 自身），则以当前身份尽力而为。
+set -uo pipefail
+
+ROOT="${SYNCBOT_ROOT:-/opt/zhongkong-sync-bot}"
+APP="$ROOT/app"
+SVC_USER=syncbot
+NODE="$(command -v node || echo /usr/local/bin/node)"
+
+# 自动提权（避免 sudo 循环：提权后 euid=0，不会再次进入）
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  exec sudo -n "$0" "$@"
+fi
+if [ "$(id -u)" -ne 0 ] && [ ! -r "$ROOT/downloads" ]; then
+  echo "提示：当前身份（$(id -un)）无 sudo 且不可读业务目录，部分诊断会显示不可用。" >&2
+  echo "      请用具备免密 sudo 的账号执行，例如： sudo syncbot $*" >&2
+fi
+
+usage() {
+  cat <<'EOF'
+中控同步机器人 CLI
+
+只读诊断（任意用户可执行）：
+  syncbot status               运行总览（目录/服务/端口/浏览器态/锁/最近任务）
+  syncbot state [YYYY-MM-DD]   查看指定业务日期任务状态（默认最近 7 天）
+  syncbot locks                列出防并发锁
+  syncbot logs [行数]          查看最新日志文件尾部（默认 60 行）
+  syncbot shots [条数]         列出最近截图
+  syncbot files <YYYY-MM-DD>   列出某业务日期的原始报表归档
+  syncbot disk                 目录占用 + 90 天保留策略预览（不删除）
+  syncbot env                  环境自检（node/playwright/chromium/字体/显示）
+
+浏览器与显示服务控制（需 ubuntu + sudo）：
+  syncbot browser-start        启动美团专用浏览器（有界面，Xvfb :99）
+  syncbot browser-stop         停止浏览器
+  syncbot browser-restart      重启浏览器
+  syncbot display-up           启动 Xvfb + 窗口管理器 + x11vnc + noVNC
+  syncbot display-down         停止以上四者
+  syncbot browser-selftest     浏览器自检：启动→中文渲染截图→退出（不访问任何业务页面）
+  syncbot tunnel               打印本地 SSH 隧道命令
+
+阶段2（已批准范围：实现 + 选择器现场采集 + dry-run）：
+  syncbot host health          宿主状态（含人工占用、批准状态）
+  syncbot host stats           宿主计数与审计文件位置
+  syncbot host approvals       查看批准开关（export_submit / download_list / download_file）
+  syncbot human-session start  人工准备经 noVNC 操作浏览器前执行（之后自动化一律被拒）
+  syncbot human-session stop   人工结束并确认不再操作浏览器后执行
+  syncbot baseline capture     采集现有项目五项基线（只读）
+  syncbot baseline compare     与基线对照（只读）
+  syncbot selectors collect --date=YYYY-MM-DD   现场采集选择器（只探测/截图，不点导出）
+  syncbot selectors show       查看选择器注册表与人工核对状态
+  syncbot selectors verify --all [--note=...]   人工核对后置 verified
+  syncbot precheck --date=YYYY-MM-DD            前置自检（不访问美团）
+  syncbot meituan-download --date=YYYY-MM-DD --dry-run   干跑：停在「导出」按钮前
+  syncbot run-report-a --date=YYYY-MM-DD --confirm       人工一次性 A 表数据入口（不发日报）
+  syncbot help
+EOF
+}
+
+need_root() {
+  if [ ! -d "$ROOT" ]; then echo "未找到 $ROOT，请先完成阶段0 安装。" >&2; exit 1; fi
+}
+
+svc() { sudo -n systemctl "$@" 2>&1 || { echo "需要 sudo 权限执行 systemctl $*" >&2; return 1; }; }
+
+cmd="${1:-help}"; shift || true
+
+case "$cmd" in
+  status) need_root; "$NODE" "$APP/src/status.js" "$@" ;;
+  state)  need_root; "$NODE" "$APP/src/status.js" "$@" ;;
+  locks)
+    need_root
+    echo "--- 锁目录 $ROOT/state/locks ---"
+    ls -la "$ROOT/state/locks" 2>/dev/null
+    for f in "$ROOT"/state/locks/*.lock; do
+      [ -e "$f" ] || continue
+      echo "--- $f ---"; cat "$f"
+    done
+    ;;
+  logs)
+    need_root
+    n="${1:-60}"
+    f="$(ls -t "$ROOT"/logs/*.log 2>/dev/null | head -1)"
+    [ -n "$f" ] || { echo "(暂无日志)"; exit 0; }
+    echo "=== $f (tail -n $n) ==="; tail -n "$n" "$f"
+    ;;
+  shots)
+    need_root
+    find "$ROOT/screenshots" -type f -name '*.png' -printf '%TY-%Tm-%Td %TH:%TM  %10s  %p\n' 2>/dev/null | sort -r | head -n "${1:-15}"
+    ;;
+  files)
+    need_root
+    d="${1:-$(date +%F)}"
+    echo "=== $ROOT/downloads/*/$d ==="
+    find "$ROOT/downloads" -mindepth 2 -maxdepth 2 -type d -name "$d" -exec ls -la {} \; 2>/dev/null
+    ;;
+  disk)
+    need_root
+    du -sh "$ROOT"/* 2>/dev/null
+    echo "--- 保留策略预览（90 天，dry-run，不删除）---"
+    "$NODE" -e '
+      const a=require("'"$APP"'/src/archive.js");
+      const plan=a.cleanup({platform:"meituan",days:90,dryRun:true});
+      console.log(plan.length? JSON.stringify(plan,null,2) : "（无超过 90 天的归档目录）");
+    '
+    ;;
+  env)
+    need_root
+    bash "$APP/bin/env-check.sh"
+    ;;
+
+  # ===== 阶段2：宿主控制 =====
+  host)
+    need_root
+    sub="${1:-health}"
+    case "$sub" in
+      health|stats|approvals|human-busy) "$NODE" "$APP/src/phase2/host-cli.js" "$sub" ;;
+      *) echo "用法: syncbot host health|stats|approvals|human-busy" >&2; exit 2 ;;
+    esac
+    ;;
+  human-session)
+    need_root
+    sub="${1:-}"; shift || true
+    case "$sub" in
+      start) "$NODE" "$APP/src/phase2/host-cli.js" human-session-start "$@" ;;
+      stop)  "$NODE" "$APP/src/phase2/host-cli.js" human-session-stop ;;
+      *) echo "用法: syncbot human-session start | syncbot human-session stop（两个独立命令）" >&2; exit 2 ;;
+    esac
+    ;;
+
+  # ===== 阶段2：基线对照（只读）=====
+  baseline)
+    need_root
+    case "${1:-compare}" in
+      capture) "$NODE" "$APP/src/phase2/baseline.js" capture "${@:2}" ;;
+      compare) "$NODE" "$APP/src/phase2/baseline.js" compare "${@:2}" ;;
+      *) echo "用法: syncbot baseline capture|compare" >&2; exit 2 ;;
+    esac
+    ;;
+
+  # ===== 阶段2：选择器注册表 =====
+  selectors)
+    need_root
+    sub="${1:-show}"; shift || true
+    case "$sub" in
+      show)     "$NODE" "$APP/src/phase2/selectors-cli.js" show ;;
+      validate) "$NODE" "$APP/src/phase2/selectors-cli.js" validate "$@" ;;
+      verify)   "$NODE" "$APP/src/phase2/selectors-cli.js" verify "$@" ;;
+      collect)  sudo -n -u "$SVC_USER" -H env HOME=/home/syncbot "$NODE" "$APP/src/phase2/collect-selectors.js" "$@" ;;
+      *) echo "用法: syncbot selectors collect|show|validate|verify" >&2; exit 2 ;;
+    esac
+    ;;
+
+  # ===== 阶段2：前置自检（不访问美团）=====
+  precheck)
+    need_root
+    sudo -n -u "$SVC_USER" -H env HOME=/home/syncbot "$NODE" "$APP/src/phase2/precheck.js" "$@"
+    ;;
+
+  # ===== 阶段2：dry-run / 真实下载（真实下载需批准）=====
+  meituan-download)
+    need_root
+    dry=0; real=0
+    for a in "$@"; do
+      [ "$a" = "--dry-run" ] && dry=1
+      [ "$a" = "--reuse-request" ] && real=1
+    done
+    if [ "$dry" = "1" ]; then
+      sudo -n -u "$SVC_USER" -H env HOME=/home/syncbot "$NODE" "$APP/src/phase2/dryrun.js" "$@"
+    else
+      echo "同步机器人：真实下载/导出申请尚未获批准。" >&2
+      echo "本轮仅批准「实现 + 选择器现场采集 + dry-run」。请等待人工回复「批准真实下载测试」。" >&2
+      echo "当前可用： syncbot meituan-download --date=YYYY-MM-DD --dry-run" >&2
+      exit 3
+    fi
+    ;;
+  run-report-a)
+    need_root
+    # 业务代码与状态目录必须归 syncbot；根用户只负责经由 sudo 安全降权。
+    if [ "$(id -u)" = "0" ]; then
+      exec sudo -n -u "$SVC_USER" -H env HOME=/home/syncbot "$NODE" "$APP/bin/run-report-a.js" "$@"
+    fi
+    if [ "$(id -un)" != "$SVC_USER" ]; then
+      echo "该子命令必须以 syncbot 身份运行。" >&2
+      exit 1
+    fi
+    exec "$NODE" "$APP/bin/run-report-a.js" "$@"
+    ;;
+  browser-start)   need_root; svc start syncbot-xvfb.service; svc start syncbot-wm.service; svc start syncbot-browser.service; sleep 2; svc --no-pager status syncbot-browser.service | head -12 ;;
+  browser-stop)    need_root; svc stop syncbot-browser.service ;;
+  browser-restart) need_root; svc restart syncbot-browser.service ;;
+  display-up)      need_root; for s in syncbot-xvfb syncbot-wm syncbot-vnc syncbot-novnc; do svc start "$s.service"; done; echo; echo "监听检查（应全部为 127.0.0.1）："; ss -tlnp 2>/dev/null | grep -E ':(5901|6080)\b' || echo "  未监听，请查看 journalctl" ;;
+  display-down)    need_root; for s in syncbot-browser syncbot-novnc syncbot-vnc syncbot-wm syncbot-xvfb; do svc stop "$s.service"; done ;;
+  browser-selftest)
+    need_root
+    svc start syncbot-xvfb.service
+    sleep 1
+    sudo -n -u syncbot -H env DISPLAY=:99 XAUTHORITY="$ROOT/state/secrets/x11-xauth" \
+      "$NODE" "$APP/src/browser.js" --platform=meituan --self-test
+    ;;
+  tunnel)
+    cat <<EOF
+在【你本机】执行（Windows PowerShell / macOS / Linux 均可）：
+
+  ssh -i F:\\NewDeom\\server-access\\zhongkong_company -N \\
+      -L 6080:127.0.0.1:6080 ubuntu@134.175.41.247
+
+然后浏览器打开：  http://127.0.0.1:6080/vnc.html?host=127.0.0.1&port=6080
+
+说明：
+  - noVNC 只监听服务器回环地址 127.0.0.1:6080，公网无法直连，必须走 SSH 隧道；
+  - 连接后在 noVNC 弹窗中输入 VNC 口令（口令文件仅 syncbot 可读，见 README「获取 VNC 口令」）；
+  - 如需同时映射 VNC 原生端口：再加 -L 5901:127.0.0.1:5901，用 VNC 客户端连 127.0.0.1:5901。
+EOF
+    ;;
+  provision-importer-login)
+    need_root
+    # 该子命令会创建 0600 secrets，**必须**以 syncbot 身份运行。
+    # 若当前是 root，自动安全降权到 syncbot；若是其它用户则显式拒绝（绝不以 root/ubuntu 建 secrets）。
+    if [ "$(id -u)" = "0" ]; then
+      SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+      exec sudo -n -u syncbot -H "$SELF" provision-importer-login "$@"
+    fi
+    if [ "$(id -un)" != "syncbot" ]; then
+      echo "该子命令必须以 syncbot 身份运行，例如：" >&2
+      echo "  sudo -u syncbot -H $(cd "$(dirname "$0")" && pwd)/$(basename "$0") provision-importer-login" >&2
+      exit 1
+    fi
+    exec "$NODE" "$APP/src/phase3/provision-importer-login.js" "$@"
+    ;;
+  help|-h|--help) usage ;;
+  *) echo "未知子命令：$cmd" >&2; echo; usage; exit 1 ;;
+esac

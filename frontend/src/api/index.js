@@ -88,6 +88,7 @@ export const updatePushProfile = (id, data) => http.put(`/api/push/profiles/${id
 
 // ===== 仪表盘 =====
 export const getDashboardStats = () => http.get('/api/dashboard/stats')
+export const getDashboardPosSummary = () => http.get('/api/dashboard/pos-summary')
 
 // ===== 门店 CRUD =====
 export const getStores = (params) => http.get('/api/db/stores', { params })
