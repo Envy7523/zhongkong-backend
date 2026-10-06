@@ -449,3 +449,5 @@ export const reviewPayrollSheet = (id, data) => http.post(`/api/payroll-sheets/$
 export const getStoreStaff = () => http.get('/api/store-staff')
 export const createStoreStaff = data => http.post('/api/store-staff', data)
 export const updateStoreStaff = (id, data) => http.put(`/api/store-staff/${id}`, data)
+
+export const getPayrollAttendanceSettings = () => http.get('/api/payroll-attendance-settings')

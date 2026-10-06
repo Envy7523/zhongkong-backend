@@ -9,12 +9,12 @@ const storeStaff = require('../lib/store-staff');
 const {isGroupAffiliation} = require('../lib/staff-affiliation');
 let SQL;
 before(async()=> { SQL=await initSqlJs(); });
-async function fixture() {
+async function fixture(monthNow=()=> '2026-09') {
   const raw=new SQL.Database();
   const db={run:(sql,params=[])=>{raw.run(sql,params);return raw.getRowsModified();},queryAll:(sql,params=[])=>{const stmt=raw.prepare(sql);stmt.bind(params);const rows=[];while(stmt.step())rows.push(stmt.getAsObject());stmt.free();return rows;},save:()=>{}};
   db.queryOne=(sql,params)=>db.queryAll(sql,params)[0] || null;
   db.insert=(sql,params)=>{db.run(sql,params);return db.queryOne('SELECT last_insert_rowid() id').id;};
-  raw.exec(`CREATE TABLE stores(id INTEGER PRIMARY KEY,store_name TEXT);INSERT INTO stores VALUES(1,'A店'),(2,'B店');
+  raw.exec(`CREATE TABLE stores(id INTEGER PRIMARY KEY,store_name TEXT,status TEXT);INSERT INTO stores VALUES(1,'A店','营业中'),(2,'B店','营业中');
     CREATE TABLE position_settings(id INTEGER PRIMARY KEY,permissions_json TEXT);
     CREATE TABLE users(id INTEGER PRIMARY KEY,username TEXT,display_name TEXT,store_id INTEGER,position_id INTEGER);
     INSERT INTO users VALUES(1,'manager-a','A店长',1,1),(2,'hr','人事',NULL,2),(3,'reviewer','审核人',NULL,3),(4,'manager-b','B店长',2,1),(5,'unbound','未绑定',NULL,1),(6,'admin','管理员',NULL,4),(7,'preparer','制表人',NULL,5);
@@ -33,7 +33,7 @@ async function fixture() {
   const helpers=new Function('db','XLSX','isGroupAffiliation','dispatchPresentation',source.slice(source.indexOf('const PAYROLL_EDITABLE_NUMBERS'),source.indexOf('payrollWorkflow.mount({'))+';return {readPayrollSheet,payrollTemplateRows,formatPayrollRow,payrollWorkbook};')(db,XLSX,isGroupAffiliation,()=>({support_days:0}));
   workflow.initialize(db);
   const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={id:Number(req.headers['x-fixture-user'] || ({'Bearer qa-hr':2,'Bearer qa-reviewer':3}[req.headers.authorization]) || 1)};next();});app.use(workflow.scopeGuard(db));
-  workflow.mount({app,db,XLSX,...helpers});storeStaff.mount({app,db,validateStaffFields:()=>null});
+  workflow.mount({app,db,XLSX,monthNow,...helpers});storeStaff.mount({app,db,validateStaffFields:()=>null});
   app.get('/api/staff',(req,res)=>res.json({secret:'all staff'}));app.get('/api/db/stores',(req,res)=>res.json({secret:'all stores'}));app.get('/api/auth/me',(req,res)=>res.json({ok:true}));
   const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
   const api=async(path,method='GET',body,user=1)=>{const response=await fetch(`http://127.0.0.1:${server.address().port}${path}`,{method,headers:{'x-fixture-user':String(user),'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,data:response.headers.get('content-type')?.includes('json')?await response.json():Buffer.from(await response.arrayBuffer())};};
@@ -61,3 +61,36 @@ test('店长员工录入归属强制为本店，无法改薪酬与其他店员�
 test('支援员工与历史归属异常工资表不向店长泄漏',()=>check(async({db,api})=>{const sheet=(await prepare(api)).data.sheet;db.insert('INSERT INTO payroll_sheet_items(sheet_id,employee_id,sort_order,data) VALUES(?,?,?,?)',[sheet.id,2,1,JSON.stringify({name:'其他店',is_dispatch_support:true,scheduled_days:0,support_days:2})]);assert.equal((await api(`/api/payroll-sheets/${sheet.id}`)).status,403);assert.equal((await api(`/api/payroll-sheets/${sheet.id}/export?draft=1`)).status,403);assert.equal((await api(`/api/payroll-sheets/${sheet.id}`,'GET',undefined,2)).status,200);}));
 test('账号岗位绑定要求有效门店，管理员可不绑定',()=>check(async({db})=>{assert.throws(()=>workflow.userStoreBinding(db,1,null),/必须绑定/);assert.throws(()=>workflow.userStoreBinding(db,1,999),/有效门店/);assert.equal(workflow.userStoreBinding(db,1,2),2);assert.equal(workflow.userStoreBinding(db,4,null),null);}));
 test('月末入职员工纳入本月工资，不因UTC日期换算漏人',()=>check(async({db,api})=>{db.insert("INSERT INTO employees(store_id,store_name,name,hire_type,entry_date,salary) VALUES(1,'A店','月末新人','全职','2026-09-30',5000)");assert.equal((await prepare(api)).data.sheet.items.length,2);}));
+
+const calendar=(period,work=22)=>Array.from({length:new Date(Date.UTC(Number(period.slice(0,4)),Number(period.slice(5)),0)).getUTCDate()},(_,index)=>({date:`${period}-${String(index+1).padStart(2,'0')}`,type:index<work?'work':index===work?'holiday':'rest',start_time:'09:00',end_time:'18:00',note:index===work?'放假':''}));
+test('历史月锁定含管理员，历史仅天数不虚构日期；未来允许提前编辑',async()=>{
+  const f=await fixture(()=> '2026-10');try{
+    for(const user of [2,6])assert.equal((await f.api('/api/payroll-month-settings/2026-09','PUT',{staff_group:'store',scheduled_days:24,version:1},user)).status,403);
+    const old=(await f.api('/api/payroll-month-settings/2026-09','GET',undefined,2)).data.settings.store;assert.equal(old.scheduled_days,25);assert.deepEqual(old.calendar,[]);assert.equal(old.can_edit,false);
+    const result=await f.api('/api/payroll-month-settings/2026-11','PUT',{staff_group:'store',scheduled_days:22,calendar:calendar('2026-11'),version:0},2);assert.equal(result.status,200);assert.equal(result.data.setting.calendar.length,30);assert.equal(result.data.setting.calendar[22].start_time,'');assert.equal(result.data.setting.can_edit,true);
+    assert.equal((await f.api('/api/payroll-attendance-settings','GET',undefined,2)).data.settings[0].period,'2026-11');assert.equal(f.db.queryOne('SELECT COUNT(*) n FROM payroll_attendance_events').n,1);
+  }finally{await f.close()}
+});
+test('月出勤管理禁止店长和审核人，staff.view不能单独获得维护权限',()=>check(async({db,api})=>{
+  for(const user of [1,3,4,7])assert.equal((await api('/api/payroll-attendance-settings','GET',undefined,user)).status,403);
+  db.run("UPDATE position_settings SET permissions_json='[\"staff.view\"]' WHERE id=2");assert.equal((await api('/api/payroll-month-settings/2026-10','PUT',{staff_group:'store',scheduled_days:22,version:0},2)).status,403);
+}));
+test('日历完整性、工作天数与时间校验失败不留下记录',()=>check(async({api,db})=>{
+  const good=calendar('2026-10');
+  for(const transform of [days=>days.pop(),days=>days[1].date=days[0].date,days=>days[0].date='2026-11-01',days=>days[0].type='unknown',days=>days[0].start_time='25:00',days=>days[0].end_time='08:00']){
+    const days=structuredClone(good);transform(days);assert.equal((await api('/api/payroll-month-settings/2026-10','PUT',{staff_group:'group',scheduled_days:22,version:0,calendar:days},2)).status,400);
+  }
+  assert.equal((await api('/api/payroll-month-settings/2026-10','PUT',{staff_group:'group',scheduled_days:21,version:0,calendar:good},2)).status,400);assert.equal(db.queryOne('SELECT COUNT(*) n FROM payroll_attendance_events').n,0);
+  good[0].start_time='20:00';good[0].end_time='08:00';good[0].next_day=true;assert.equal((await api('/api/payroll-month-settings/2026-10','PUT',{staff_group:'group',scheduled_days:22,version:0,calendar:good},2)).status,200);
+}));
+test('人事与管理员工资表标准工资也只读，薪酬档案快照不变',()=>check(async({api,db})=>{
+  const sheet=(await prepare(api,'A店',2)).data.sheet,before=db.queryOne('SELECT data FROM payroll_sheet_items').data;
+  for(const user of [2,6]){const items=structuredClone(sheet.items);items[0].base_salary=8000;assert.equal((await api(`/api/payroll-sheets/${sheet.id}`,'PUT',{version:sheet.version,items},user)).status,403)}
+  assert.equal(db.queryOne('SELECT data FROM payroll_sheet_items').data,before);
+}));
+test('原人事岗位明确获得出勤权限，其他岗位及账号不变，迁移重复不追加',()=>check(async({db})=>{
+  db.run("ALTER TABLE position_settings ADD COLUMN name TEXT DEFAULT ''");db.run("UPDATE position_settings SET name='人事',permissions_json='[\"staff.view\",\"collab.manage\"]' WHERE id=2");
+  const before=db.queryAll('SELECT * FROM users');workflow.initialize(db);workflow.initialize(db);
+  assert.deepEqual(JSON.parse(db.queryOne('SELECT permissions_json FROM position_settings WHERE id=2').permissions_json),['staff.view','collab.manage','payroll.attendance']);
+  assert.deepEqual(JSON.parse(db.queryOne('SELECT permissions_json FROM position_settings WHERE id=1').permissions_json),['staff.store.edit','payroll.view','payroll.prepare']);assert.deepEqual(db.queryAll('SELECT * FROM users'),before);
+}));

@@ -244,6 +244,8 @@ const routes = [
     name: 'staff-management-salary',
     component: () => import('@/views/staff/SalaryPlaceholder.vue'),
   },
+  { path: '/staff-management/attendance', name: 'staff-management-attendance', component: () => import('@/views/staff/PayrollAttendance.vue') },
+  { path: '/staff-management/review', name: 'staff-management-review', component: () => import('@/views/staff/PayrollReview.vue') },
   {
     path: '/staff-management/dispatch',
     name: 'staff-management-dispatch',
@@ -342,6 +344,8 @@ const ROUTE_PERMISSION_RULES = [
   ['workspace-cost', 'cost.manage'],
   ['staff-management-employees', ['staff.view', 'staff.store.edit']],
   ['staff-management-salary', ['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review']],
+  ['staff-management-attendance', 'payroll.attendance'],
+  ['staff-management-review', 'payroll.review'],
   ['staff-management-', 'staff.view'],
   ['workspace-position-settings', 'positions.manage'],
   ['workspace-user', 'users.manage'],
