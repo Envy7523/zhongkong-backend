@@ -6063,6 +6063,7 @@ app.post('/api/push/group-buy-daily/send', async (req, res) => {
 });
 
 // 美团外卖经营指标（曝光/入店/下单/转化率）：求和字段直接合计，转化率按加权口径重算
+require('./lib/meituan-delivery-sync').mount({ app, express, db, audit: syncJobAudit, businessAnalytics });
 app.get('/api/business-analytics/meituan-operation', (req, res) => {
   try {
     res.json(businessAnalytics.getMeituanOperation(db, req.query));

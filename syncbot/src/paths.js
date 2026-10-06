@@ -22,6 +22,7 @@ const REPORT_TYPES = {
   item_sales_detail: { get authorized() { return process.env.SYNCBOT_REPORT_B_MANUAL_CATCHUP === '1' || process.env.SYNCBOT_REPORT_B_SCHEDULED === '1'; }, name: '品项销售明细', report: 'B', display: 'B_品项销售明细' },
   // C 仅在专用入口明确置位后启用；默认锁定，不影响 A/B。
   pos_bookkeeping_daily: { get authorized() { return process.env.SYNCBOT_REPORT_C_MANUAL_CATCHUP === '1' || process.env.SYNCBOT_REPORT_C_SCHEDULED === '1'; }, name: '门店收支统计', report: 'C', display: 'C_门店收支统计' },
+  meituan_delivery_operating: { authorized: true, name: '美团外卖营业表', report: 'M1', display: 'M1_美团外卖营业表' },
 };
 const DEFAULT_REPORT_TYPE = 'cashier_composite';
 

@@ -37,6 +37,7 @@ http.interceptors.response.use(
 // ===== 认证 =====
 export const login = (username, password) => http.post('/api/auth/login', { username, password })
 export const getMe = () => http.get('/api/auth/me')
+export const getMeituanOperatingSource = (params) => http.get('/api/business-analytics/meituan-operating-source', { params })
 export const updateMyProfile = (data) => http.put('/api/auth/profile', data)
 
 // ===== 配置 =====

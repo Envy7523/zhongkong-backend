@@ -1122,6 +1122,7 @@
       />
     </section>
 
+    <MeituanOperatingSource v-if="isMeituanPage && reportRange?.length === 2" :params="{ ...currentStoreScope(), date_from: reportRange[0], date_to: reportRange[1] }" />
     <section class="content-tabs">
       <button
         v-for="tab in tabs"
@@ -2704,6 +2705,7 @@
 </template>
 
 <script setup>
+import MeituanOperatingSource from '@/components/MeituanOperatingSource.vue'
 import {
   computed,
   nextTick,
