@@ -35,9 +35,23 @@ assert.equal(preview.totals.compositions['现金'], 80);
 assert.equal(preview.data_scope.includes('不是第三方平台结算实收'), true);
 assert.deepEqual(preview.excluded, ['菜品销量', '第三方平台结算实收']);
 
+// 当天完全没有录入门店的门店：不报警、不入排名（业务约定）
 const missing = buildPosDailyPreview(fakeDb({ records: [] }), '2026-09-24');
-assert.equal(missing.ready, false);
-assert.match(missing.problems.join('|'), /缺少店内销售/);
+assert.equal(missing.problems.join('|').includes('缺少店内销售'), false);
+assert.equal(missing.problems.join('|').includes('缺少收入构成'), false);
+assert.equal(missing.store_count, 0);
+assert.deepEqual(missing.rows, []);
+// 阈值类提示仍按门店数判定（与“缺记录”无关）
+assert.match(missing.problems.join('|'), /至少 9 家/);
+
+// 有数据但不齐（只有渠道、没有店内销售/收入构成）仍必须报警
+const partial = buildPosDailyPreview(fakeDb({
+  records: [record('meituan_delivery', 'delivery', 20, 15)],
+}), '2026-09-24');
+assert.equal(partial.ready, false);
+assert.match(partial.problems.join('|'), /缺少店内销售/);
+assert.match(partial.problems.join('|'), /缺少收入构成/);
+assert.equal(partial.store_count, 1);
 
 const duplicate = buildPosDailyPreview(fakeDb({ records: [record('store_sales', 'offline', 100, 80), record('store_sales', 'offline', 100, 80)] }), '2026-09-24');
 assert.equal(duplicate.ready, false);

@@ -17,7 +17,7 @@ c=sqlite3.connect("file:/home/ubuntu/app/data/database.sqlite?mode=ro",uri=True)
 c.row_factory=sqlite3.Row
 date=sys.argv[1]
 out={
-"stores":[dict(x) for x in c.execute("SELECT id,store_name FROM stores WHERE status='正常营业' ORDER BY id")],
+"stores":[dict(x) for x in c.execute("SELECT id,store_name FROM stores ORDER BY id")],
 "records":[dict(x) for x in c.execute("SELECT store_id,store_name,channel,channel_group,gross_amount,recorded_amount,order_count FROM business_revenue_records WHERE source_type='pos' AND biz_date=? ORDER BY store_id,channel",(date,))],
 "compositions":[dict(x) for x in c.execute("SELECT store_id,category,amount FROM business_revenue_compositions WHERE biz_date=? ORDER BY store_id,category",(date,))]
 }
@@ -32,12 +32,10 @@ const db = { queryAll(sql) {
   if (sql.includes('FROM business_revenue_compositions')) return source.compositions;
   throw new Error('unsupported_query');
 } };
-// 仅供本次人工预览：依据 2026-09-25 用户确认。不能静默变为生产固定规则。
-const excludedStores = { 13: '已停业', 17: '放养门店', 19: '已停业' };
-const preview = buildPosDailyPreview(db, businessDate, { excludedStores });
+const preview = buildPosDailyPreview(db, businessDate);
 const image = renderPosDailyImage(preview);
 fs.mkdirSync(path.dirname(target), { recursive: true });
 fs.writeFileSync(target, image.buffer);
 process.stdout.write(JSON.stringify({ target, ready: preview.ready, store_count: preview.store_count,
-  excluded_stores: preview.excluded_stores, problems: preview.problems, totals: preview.totals,
+  problems: preview.problems, totals: preview.totals,
   image: { width: image.width, height: image.height } }, null, 2) + '\n');

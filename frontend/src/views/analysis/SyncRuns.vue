@@ -4,7 +4,7 @@
     <el-card shadow="never" class="overview-card">
       <template #header>
         <div class="card-header">
-          <span class="title">综合营业统计 · 自动导入记录</span>
+          <span class="title">收银系统 · 自动导入记录</span>
           <div class="header-actions">
             <el-tag size="small" type="info" effect="plain">今日：{{ overview.today || '-' }}</el-tag>
             <el-button size="small" :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
@@ -19,7 +19,7 @@
               <el-tag v-if="overview.latest" size="small" :type="statusType(overview.latest.status)">{{ statusLabel(overview.latest.status) }}</el-tag>
               <span v-else class="muted">暂无</span>
             </div>
-            <div class="stat-sub">{{ overview.latest ? overview.latest.business_date + ' · ' + overview.latest.phase : '-' }}</div>
+            <div class="stat-sub">{{ overview.latest ? overview.latest.business_date + ' · ' + stageLabel(overview.latest.phase) : '-' }}</div>
           </div>
         </el-col>
         <el-col :xs="12" :sm="8" :md="4">
@@ -55,6 +55,8 @@
         </el-select>
         <el-select v-model="filters.report_type" placeholder="报表类型" clearable size="small" style="width: 190px" @change="reload">
           <el-option label="综合营业统计" value="cashier_composite" />
+          <el-option label="品项销售明细" value="item_sales_detail" />
+          <el-option label="门店收支统计" value="pos_bookkeeping_daily" />
         </el-select>
         <el-date-picker
           v-model="dateRange" type="daterange" size="small" unlink-panels
@@ -91,22 +93,22 @@
           <template #default="{ row }">{{ row.platform === 'meituan' ? '美团管家' : row.platform }}</template>
         </el-table-column>
         <el-table-column label="报表类型" width="140">
-          <template #default="{ row }">{{ row.report_type === 'cashier_composite' ? '综合营业统计' : row.report_type }}</template>
+          <template #default="{ row }">{{ reportTypeLabel(row.report_type) }}</template>
         </el-table-column>
         <el-table-column prop="business_date" label="业务日期" width="110" />
         <el-table-column prop="task_id" label="task_id" width="130" show-overflow-tooltip />
         <el-table-column label="开始" width="150"><template #default="{ row }">{{ fmtTime(row.started_at || row.first_event_at) }}</template></el-table-column>
         <el-table-column label="结束" width="150"><template #default="{ row }">{{ fmtTime(row.finished_at || row.last_event_at) }}</template></el-table-column>
         <el-table-column label="耗时" width="90"><template #default="{ row }">{{ fmtDuration(row.duration_ms) }}</template></el-table-column>
-        <el-table-column prop="phase" label="当前阶段" width="150" show-overflow-tooltip />
+        <el-table-column label="当前阶段" width="150" show-overflow-tooltip><template #default="{ row }">{{ stageLabel(row.phase) }}</template></el-table-column>
         <el-table-column label="状态" width="150">
           <template #default="{ row }">
             <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
-            <el-tag v-if="row.is_backfill" size="small" type="warning" effect="plain" class="ml4">历史补录</el-tag>
+            <el-tag v-if="row.is_backfill || row.reconstructed || row.not_a_realtime_success" size="small" type="warning" effect="plain" class="ml4">历史补记</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="失败原因" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }"><span class="muted">{{ row.failure_reason || '-' }}</span></template>
+          <template #default="{ row }"><span class="muted">{{ row.status === 'success' ? '-' : reasonLabel(row.failure_reason) }}</span></template>
         </el-table-column>
         <el-table-column label="原始文件名" min-width="200" show-overflow-tooltip>
           <template #default="{ row }"><span class="muted">{{ row.original_filename || '-' }}</span></template>
@@ -121,12 +123,14 @@
         </el-table-column>
         <el-table-column label="允许推送" width="90">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.ready_to_push ? 'success' : 'info'" effect="plain">{{ row.ready_to_push ? '是' : '否' }}</el-tag>
+            <span v-if="row.report_type === 'item_sales_detail' || row.report_type === 'pos_bookkeeping_daily'" class="muted">不适用</span>
+            <el-tag v-else size="small" :type="row.ready_to_push ? 'success' : 'info'" effect="plain">{{ row.ready_to_push ? '是' : '否' }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="推送状态" width="110">
           <template #default="{ row }">
-            <el-tag v-if="row.push_status" size="small" :type="row.push_status === 'success' ? 'success' : 'danger'">{{ row.push_status === 'success' ? '已推送' : '推送失败' }}</el-tag>
+            <span v-if="row.report_type === 'item_sales_detail' || row.report_type === 'pos_bookkeeping_daily'" class="muted">不适用</span>
+            <el-tag v-else-if="row.push_status" size="small" :type="row.push_status === 'success' ? 'success' : 'danger'">{{ row.push_status === 'success' ? '已推送' : '推送失败' }}</el-tag>
             <span v-else class="muted">{{ row.pushed ? '已推送' : '未推送' }}</span>
           </template>
         </el-table-column>
@@ -152,9 +156,9 @@
           <el-descriptions-item label="业务日期">{{ detail.run.business_date }}</el-descriptions-item>
           <el-descriptions-item label="状态">
             <el-tag size="small" :type="statusType(detail.run.status)">{{ statusLabel(detail.run.status) }}</el-tag>
-            <el-tag v-if="detail.run.is_backfill" size="small" type="warning" effect="plain" class="ml4">历史补录</el-tag>
+            <el-tag v-if="detail.run.is_backfill || detail.run.reconstructed || detail.run.not_a_realtime_success" size="small" type="warning" effect="plain" class="ml4">历史补记</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="当前阶段">{{ detail.run.phase || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="当前阶段">{{ stageLabel(detail.run.phase) }}</el-descriptions-item>
           <el-descriptions-item label="开始">{{ fmtTime(detail.run.started_at || detail.run.first_event_at) }}</el-descriptions-item>
           <el-descriptions-item label="结束">{{ fmtTime(detail.run.finished_at || detail.run.last_event_at) }}</el-descriptions-item>
           <el-descriptions-item label="耗时">{{ fmtDuration(detail.run.duration_ms) }}</el-descriptions-item>
@@ -164,17 +168,18 @@
           <el-descriptions-item label="SHA-256 前缀"><code class="sha">{{ detail.run.sha256_prefix || '-' }}</code></el-descriptions-item>
           <el-descriptions-item label="导入批次">{{ detail.run.import_batch_id || '-' }}</el-descriptions-item>
           <el-descriptions-item label="门店(原始/匹配)">{{ detail.run.raw_store_count ?? '-' }} / {{ detail.run.matched_store_count ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="允许推送">{{ detail.run.ready_to_push ? '是' : '否' }}</el-descriptions-item>
+          <el-descriptions-item label="允许推送">{{ ['item_sales_detail', 'pos_bookkeeping_daily'].includes(detail.run.report_type) ? '不适用' : (detail.run.ready_to_push ? '是' : '否') }}</el-descriptions-item>
         </el-descriptions>
 
         <el-alert
           v-if="detail.run.is_backfill || detail.run.not_a_realtime_success"
           class="mt12" type="warning" :closable="false" show-icon
-          title="历史补录记录（非实时成功）"
-          description="该记录由历史归档文件重建：reconstructed=true、not_a_realtime_success=true、ready_to_push=false，不代表一次完整成功的实时同步。"
+          title="历史补记（非实时审计）"
+          description="该记录依据已有机器人状态和中控导入批次补记，不代表当时逐阶段实时上报；是否已导入请看状态与导入批次。"
         />
 
-        <el-alert v-if="detail.run.failure_reason" class="mt12" type="error" :closable="false" show-icon title="失败原因" :description="detail.run.failure_reason" />
+        <el-alert v-if="detail.run.status !== 'success' && detail.run.failure_reason" class="mt12" type="error" :closable="false" show-icon title="当前失败原因" :description="reasonLabel(detail.run.failure_reason)" />
+        <el-alert v-if="detail.run.status === 'success' && detail.events.some(event => event.status === 'failed')" class="mt12" type="info" :closable="false" show-icon title="本次运行曾失败，续接后已成功" description="下方红色节点是保留的历史失败记录，不代表当前仍失败。" />
 
         <h4 class="section">阶段时间线</h4>
         <el-timeline>
@@ -183,17 +188,19 @@
             :timestamp="fmtTime(e.at)" placement="top"
             :type="e.status === 'failed' ? 'danger' : (e.status === 'success' ? 'success' : 'primary')"
           >
-            <div class="tl-stage">{{ e.stage }}</div>
-            <div v-if="hasKeys(e.detail)" class="tl-detail">{{ compactJson(e.detail) }}</div>
+            <div class="tl-stage">{{ stageLabel(e.stage) }}</div>
+            <div v-if="hasKeys(e.detail)" class="tl-detail">
+              <div v-for="(line, index) in detailLines(e.detail)" :key="index" :style="{ paddingLeft: `${line.depth * 12}px` }">{{ line.label }}{{ line.value ? `：${line.value}` : '' }}</div>
+            </div>
           </el-timeline-item>
         </el-timeline>
         <el-empty v-if="!detail.events.length" description="暂无阶段事件" />
 
         <h4 class="section">脱敏证据摘要</h4>
-        <pre class="evidence">{{ compactJson(detail.evidence) }}</pre>
+        <div class="evidence"><div v-for="(line, index) in detailLines(detail.evidence)" :key="index" :style="{ paddingLeft: `${line.depth * 12}px` }">{{ line.label }}{{ line.value ? `：${line.value}` : '' }}</div><span v-if="!hasKeys(detail.evidence)">（无）</span></div>
 
         <h4 class="section">文件校验结果</h4>
-        <pre class="evidence">{{ compactJson(detail.validation) }}</pre>
+        <div class="evidence"><div v-for="(line, index) in detailLines(detail.validation)" :key="index" :style="{ paddingLeft: `${line.depth * 12}px` }">{{ line.label }}{{ line.value ? `：${line.value}` : '' }}</div><span v-if="!hasKeys(detail.validation)">（无）</span></div>
 
         <el-alert
           class="mt12" type="info" :closable="false"
@@ -209,6 +216,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { getSyncRuns, getSyncRunsOverview, getSyncRunDetail } from '@/api'
+import { stageLabel, reasonLabel, detailLines } from '@/utils/syncRunDisplay'
 
 const loading = ref(false)
 const runs = ref([])
@@ -230,6 +238,7 @@ const STATUS_LABEL = { success: '成功', failed: '失败', running: '运行中'
 const STATUS_TYPE = { success: 'success', failed: 'danger', running: 'primary', waiting_human: 'warning' }
 const statusLabel = (s) => STATUS_LABEL[s] || s || '-'
 const statusType = (s) => STATUS_TYPE[s] || 'info'
+const reportTypeLabel = (s) => ({ cashier_composite: '综合营业统计', item_sales_detail: '品项销售明细', pos_bookkeeping_daily: '门店收支统计' }[s] || s || '-')
 
 function fmtTime(v) {
   if (!v) return '-'
@@ -255,11 +264,6 @@ function fmtSize(bytes) {
   return `${(n / 1024 / 1024).toFixed(2)} MB`
 }
 const hasKeys = (o) => !!o && typeof o === 'object' && Object.keys(o).length > 0
-function compactJson(o) {
-  if (!hasKeys(o)) return '（无）'
-  try { return JSON.stringify(o, null, 1) } catch { return '（无法展示）' }
-}
-
 function queryParams() {
   const p = {}
   for (const [k, v] of Object.entries(filters)) if (v !== '' && v !== null && v !== undefined) p[k] = v

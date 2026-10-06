@@ -2,27 +2,22 @@
   <main class="enterprise-settings">
     <aside class="settings-nav" aria-label="企业设置导航">
       <div class="settings-nav__brand">企业设置</div>
-      <button class="settings-nav__item" :class="{ active: activeSection === 'bot' }" type="button" @click="switchSection('bot')">
+      <button class="settings-nav__item active" type="button">
         <span class="settings-nav__icon">◉</span>
         <span>
           <b>机器人设置</b>
-          <small>统一登记机器人并分配项目消息</small>
+          <small>登记和维护企业微信机器人</small>
         </span>
-      </button>
-      <button class="settings-nav__item" :class="{ active: activeSection === 'schedule' }" type="button" @click="switchSection('schedule')">
-        <span class="settings-nav__icon">◷</span>
-        <span><b>自动报表与日报</b><small>设置同步和发送时间</small></span>
       </button>
       <div class="settings-nav__hint">人员权限将待项目测试完成后，再统一配置。</div>
     </aside>
 
     <section class="settings-main">
-      <template v-if="activeSection === 'bot'">
       <header class="settings-hero">
         <div>
           <p class="eyebrow">WECHAT WORK · BOT CONSOLE</p>
           <h1>机器人设置</h1>
-          <p>统一管理企业微信长连接、群机器人与项目消息分配。已保存的 Webhook 密钥不会回显到页面。</p>
+          <p>统一管理企业微信长连接与群机器人。已保存的 Webhook 密钥不会回显到页面。</p>
         </div>
         <div class="hero-actions">
           <el-button :loading="loading" @click="loadSettings">刷新状态</el-button>
@@ -190,23 +185,17 @@
           <el-button type="primary" :loading="creatingProfile" @click="saveProfile">{{ editingProfileId ? '保存修改' : '保存为新配置' }}</el-button>
         </template>
       </el-dialog>
-      </template>
-      <ScheduleSettingsPanel v-else />
     </section>
   </main>
 </template>
 
 <script setup>
-import { computed, nextTick, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { createEnterpriseAiProfile, getBotStatus, getConfig, getToken, previewEnterpriseBotQuestion, reconnectEnterpriseRobot, saveConfig, updateEnterpriseAiProfile } from '@/api'
-import ScheduleSettingsPanel from './ScheduleSettingsPanel.vue'
 import BotRegistryPanel from './BotRegistryPanel.vue'
 
 const route = useRoute()
-const router = useRouter()
-const activeSection = computed(() => route.path.endsWith('/schedule') ? 'schedule' : 'bot')
-function switchSection(section) { router.push(section === 'schedule' ? '/enterprise-settings/schedule' : '/enterprise-settings/robot') }
 
 const loading = ref(false)
 const saving = ref(false)
@@ -358,9 +347,9 @@ async function previewQuestion() {
   }
 }
 
-watch(activeSection, section => { if (section === 'bot') loadSettings() }, { immediate: true })
+onMounted(loadSettings)
 watch(() => route.hash, async hash => {
-  if (hash === '#bot-registry' && activeSection.value === 'bot') {
+  if (hash === '#bot-registry') {
     await nextTick()
     document.getElementById('bot-registry')?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   }

@@ -5,7 +5,7 @@ const PAGE_TITLES = {
   dashboard: '数据概括',
   collab: '协同事项',
   'enterprise-settings': '企业设置',
-  pipeline: '一键推送',
+  pipeline: '日报发送',
   'table-reader': '表格读取',
   'data-query': '数据查询',
   report: '日报推送',
@@ -28,6 +28,7 @@ const PAGE_TITLES = {
 
 const SUB_LABELS = {
   analysis: {
+    agents: 'AI 经营分析',
     'total-brand': '总数据 · 品牌视角', 'total-store': '总数据 · 门店视角', 'total-custom': '总数据 · 门店视角', 'total-monthly-dashboard': '总数据 · 月经营数据看板', 'total-binding': '堂食菜品绑定',
     'group-platform': '团购 · 平台视角', 'group-brand': '团购 · 品牌视角', 'group-store': '团购 · 门店视角', 'group-daily-summary': '团购 · 每日总结', 'group-binding': '团购菜品绑定', 'group-meituan': '团购 · 平台视角', 'group-douyin': '团购 · 平台视角', 'group-free-trial': '团购 · 平台视角',
     'delivery-platform': '外卖 · 平台视角', 'delivery-brand': '外卖 · 品牌视角', 'delivery-store': '外卖 · 门店视角', 'delivery-binding': '外卖菜品绑定',

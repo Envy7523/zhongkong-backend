@@ -109,7 +109,7 @@
           </el-menu-item>
           <el-menu-item v-if="canSeeNav('pipeline')" index="pipeline">
             <el-icon><Upload /></el-icon>
-            <template #title>一键推送</template>
+            <template #title>日报发送</template>
           </el-menu-item>
           <el-menu-item v-if="canSeeNav('ai-assistant')" index="ai-assistant">
             <el-icon><ChatDotRound /></el-icon>
@@ -283,7 +283,7 @@ import { getConfig, updateMyProfile, getNotificationSummary } from '@/api'
 import LoginView from '@/views/LoginView.vue'
 
 import DashboardView from '@/views/DashboardView.vue'
-import PipelineView from '@/views/PipelineView.vue'
+import PushCenterView from '@/views/PushCenterView.vue'
 import DataImportView from '@/views/DataImportView.vue'
 import BusinessDataImport from '@/views/BusinessDataImport.vue'
 import UserManagementView from '@/views/UserManagementView.vue'
@@ -331,7 +331,7 @@ const canSeeNavGroup = group => auth.canAny(NAV_GROUP_PERMISSIONS[group] || [])
 
 const COMPONENT_MAP = {
   dashboard: DashboardView,
-  pipeline: PipelineView,
+  pipeline: PushCenterView,
   'data-import': DataImportView,
   'data-import-pos': BusinessDataImport,
   'data-import-group-buy': BusinessDataImport,
@@ -381,6 +381,7 @@ const POPUP_CONFIG = {
       {
         title: '总数据视角',
         items: [
+          { index: 'analysis-agents', label: 'AI 经营分析' },
           { index: 'analysis-total-brand', label: '品牌视角' },
           { index: 'analysis-total-store', label: '门店视角' },
           { index: 'analysis-total-monthly-dashboard', label: '月经营数据看板' },
@@ -556,7 +557,10 @@ const workspaceRouteTabId = computed(() => {
   }[route.name]
   if (prefix && section) return `${prefix}-${section}`
   return {
-    'workspace-pipeline': 'pipeline',
+    'workspace-pipeline-group-buy': 'pipeline',
+    'workspace-pipeline-pos': 'pipeline',
+    'workspace-pipeline-pos-schedule': 'pipeline',
+    'workspace-pipeline-pos-store': 'pipeline',
     'workspace-ai-assistant': 'ai-assistant',
     'workspace-user-management': 'user-management',
     'workspace-position-settings': 'position-settings',
@@ -591,7 +595,7 @@ const pageTitle = computed(() => {
     const label = { pos: '收银系统数据', 'pos-automation': '收银系统 · 自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
     return `数据导入 · ${label}`
   }
-  if (isEnterpriseSettingsRoute.value) return router.currentRoute.value.meta.enterpriseSection === 'schedule' ? '企业设置 · 自动报表与日报' : '企业设置 · 机器人设置'
+  if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
   if (isStore3dRoute.value) return '筹建门店 · 门店渲染'
   if (isDbViewerRoute.value) return '数据库查看'
   if (isStaffManagementRoute.value) return ({ 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作', 'staff-management-dispatch': '人事专区 · 员工调岗' }[staffRouteTabId.value] || '人事专区 · 员工管理')
@@ -777,7 +781,7 @@ async function leaveSpecialRoute() {
 
 const WORKSPACE_TAB_ROUTES = {
   dashboard: '/dashboard',
-  pipeline: '/pipeline',
+  pipeline: '/pipeline/group-buy-daily',
   'ai-assistant': '/ai-assistant',
   'user-management': '/user-management',
   notifications: '/notifications',
@@ -825,6 +829,7 @@ async function selectPopupItem(index) {
   if (index.startsWith('analysis-')) {
     store.openTabFromId(index)
     const routePath = {
+      'analysis-agents': '/analysis/agents',
       'analysis-total-brand': '/analysis/total/brand',
       'analysis-total-store': '/analysis/total/store',
       'analysis-total-custom': '/analysis/total/custom',
@@ -928,6 +933,7 @@ async function selectTab(id) {
   if (id.startsWith('analysis-')) {
     store.activeTabId = id
     const routePath = {
+      'analysis-agents': '/analysis/agents',
       'analysis-total-brand': '/analysis/total/brand',
       'analysis-total-store': '/analysis/total/store',
       'analysis-total-custom': '/analysis/total/custom',

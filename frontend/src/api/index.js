@@ -50,13 +50,14 @@ export const updateEnterpriseAiProfile = (profileId, data) => http.put(`/api/ent
 // 保存仅影响未来计划，不立即执行或补跑历史日期。
 export const getAutomationSchedule = () => http.get('/api/enterprise-settings/schedule')
 export const saveAutomationSchedule = (data) => http.post('/api/enterprise-settings/schedule', data)
+export const getReportSyncPlans = () => http.get('/api/enterprise-settings/report-sync-plans')
+export const saveReportSyncPlan = (reportType, data) => http.post(`/api/enterprise-settings/report-sync-plans/${encodeURIComponent(reportType)}`, data)
 export const disableAutomationSchedule = () => http.post('/api/enterprise-settings/schedule/disable')
 export const getWecomRouting = () => http.get('/api/enterprise-settings/wecom-routing')
 export const createWecomBot = (data) => http.post('/api/enterprise-settings/wecom-routing/bots', data)
 export const updateWecomBot = (id, data) => http.put(`/api/enterprise-settings/wecom-routing/bots/${id}`, data)
 export const bindWecomRoute = (code, data) => http.put(`/api/enterprise-settings/wecom-routing/routes/${code}`, data)
 export const activateWecomRoute = (code, data) => http.post(`/api/enterprise-settings/wecom-routing/routes/${code}/activation`, data)
-export const savePosDailyExclusions = (data) => http.put('/api/enterprise-settings/wecom-routing/pos-daily/exclusions', data)
 export const previewPosDaily = (businessDate) => http.get('/api/enterprise-settings/pos-daily/preview', { params: { business_date: businessDate } })
 export const sendPosDailyTest = (data) => http.post('/api/enterprise-settings/pos-daily/test-send', data, { timeout: 30000 })
 
@@ -248,6 +249,11 @@ export const getWeeklyCost = () => http.get('/api/cost-accounting/weekly')
 export const getMonthlyCost = () => http.get('/api/cost-accounting/monthly')
 
 // ===== 数据分析 =====
+export const getAnalysisAgentConfig = () => http.get('/api/analysis-agents/config')
+export const getAnalysisAgentRuns = (params) => http.get('/api/analysis-agents/runs', { params })
+export const getAnalysisAgentRun = (id) => http.get(`/api/analysis-agents/runs/${id}`)
+export const startAnalysisAgentRun = (data) => http.post('/api/analysis-agents/runs', data)
+export const retryAnalysisAgentRun = (id, data) => http.post(`/api/analysis-agents/runs/${id}/retry-ai`, data)
 export const getRevenueAnalysis = (params) => http.get('/api/analysis/revenue', { params })
 export const getCostAnalysis = (params) => http.get('/api/analysis/cost', { params })
 export const getSalesAnalysis = () => http.get('/api/analysis/sales')
