@@ -68,7 +68,7 @@ test('历史月锁定含管理员，历史仅天数不虚构日期；未来允�
     for(const user of [2,6])assert.equal((await f.api('/api/payroll-month-settings/2026-09','PUT',{staff_group:'store',scheduled_days:24,version:1},user)).status,403);
     const old=(await f.api('/api/payroll-month-settings/2026-09','GET',undefined,2)).data.settings.store;assert.equal(old.scheduled_days,25);assert.deepEqual(old.calendar,[]);assert.equal(old.can_edit,false);
     const result=await f.api('/api/payroll-month-settings/2026-11','PUT',{staff_group:'store',scheduled_days:22,calendar:calendar('2026-11'),version:0},2);assert.equal(result.status,200);assert.equal(result.data.setting.calendar.length,30);assert.equal(result.data.setting.calendar[22].start_time,'');assert.equal(result.data.setting.can_edit,true);
-    assert.equal((await f.api('/api/payroll-attendance-settings','GET',undefined,2)).data.settings[0].period,'2026-11');assert.equal(f.db.queryOne('SELECT COUNT(*) n FROM payroll_attendance_events').n,1);
+    const history=(await f.api('/api/payroll-attendance-settings','GET',undefined,2)).data.settings;assert.equal(history[0].period,'2026-11');assert.equal(history[0].calendar.length,30);assert.equal(history[0].can_edit,true);assert.equal(f.db.queryOne('SELECT COUNT(*) n FROM payroll_attendance_events').n,1);
   }finally{await f.close()}
 });
 test('月出勤管理禁止店长和审核人，staff.view不能单独获得维护权限',()=>check(async({db,api})=>{
@@ -93,4 +93,9 @@ test('原人事岗位明确获得出勤权限，其他岗位及账号不变，�
   const before=db.queryAll('SELECT * FROM users');workflow.initialize(db);workflow.initialize(db);
   assert.deepEqual(JSON.parse(db.queryOne('SELECT permissions_json FROM position_settings WHERE id=2').permissions_json),['staff.view','collab.manage','payroll.attendance']);
   assert.deepEqual(JSON.parse(db.queryOne('SELECT permissions_json FROM position_settings WHERE id=1').permissions_json),['staff.store.edit','payroll.view','payroll.prepare']);assert.deepEqual(db.queryAll('SELECT * FROM users'),before);
+}));
+test('工资制作可读取应出勤基线，店长与审核人不能从旧接口读取日历明细',()=>check(async({api})=>{
+  assert.equal((await api('/api/payroll-month-settings/2026-10','PUT',{staff_group:'store',scheduled_days:22,version:0,calendar:calendar('2026-10')},2)).status,200);
+  for(const user of [1,3]){const setting=(await api('/api/payroll-month-settings/2026-10','GET',undefined,user)).data.settings.store;assert.equal(setting.scheduled_days,22);assert.deepEqual(setting.calendar,[]);assert.equal(setting.calendar_json,undefined);assert.equal(setting.can_edit,false)}
+  assert.equal((await api('/api/payroll-month-settings/2026-10','GET',undefined,2)).data.settings.store.calendar.length,31);
 }));

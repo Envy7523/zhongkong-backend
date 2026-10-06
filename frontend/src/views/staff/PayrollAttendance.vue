@@ -13,8 +13,8 @@
       <div v-if="editable" class="toolbar batch">
         <el-select v-model="batchType" style="width:150px"><el-option label="全部日期" value="all" /><el-option label="周一至周五" value="weekday" /><el-option label="周六、周日" value="weekend" /></el-select>
         <el-select v-model="batchStatus" style="width:120px"><el-option label="工作" value="work" /><el-option label="休息" value="rest" /><el-option label="放假" value="holiday" /></el-select>
-        <el-time-select v-model="batchStart" start="00:00" end="23:30" step="00:30" placeholder="上班时间（选填）" />
-        <el-time-select v-model="batchEnd" start="00:00" end="23:30" step="00:30" placeholder="下班时间（选填）" />
+        <el-time-select v-model="batchStart" start="00:00" end="23:30" step="00:30" placeholder="上班时间（选填）" style="width:165px" />
+        <el-time-select v-model="batchEnd" start="00:00" end="23:30" step="00:30" placeholder="下班时间（选填）" style="width:165px" />
         <el-checkbox v-model="batchNextDay">次日下班</el-checkbox>
         <el-button @click="applyBatch">应用到所选日期</el-button>
       </div>
