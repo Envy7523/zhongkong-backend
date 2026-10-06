@@ -397,7 +397,7 @@ export const saveStaffSalaryProfile = (id, data) => http.put(`/api/staff/${id}/s
 export const generateStaffPayrollSheet = (data) => http.post('/api/staff/payroll-sheet', data, { responseType: 'blob', timeout: 120000 })
 export const getPayrollMonthSetting = (period) => http.get(`/api/payroll-month-settings/${period}`)
 export const savePayrollMonthSetting = (period, data) => http.put(`/api/payroll-month-settings/${period}`, data)
-export const getPayrollSheets = () => http.get('/api/payroll-sheets')
+export const getPayrollSheets = (view) => http.get('/api/payroll-sheets', { params: { view } })
 export const preparePayrollSheet = (data) => http.post('/api/payroll-sheets/prepare', data)
 export const getPayrollSheet = (id) => http.get(`/api/payroll-sheets/${id}`)
 export const savePayrollSheet = (id, data) => http.put(`/api/payroll-sheets/${id}`, data)
@@ -451,3 +451,6 @@ export const createStoreStaff = data => http.post('/api/store-staff', data)
 export const updateStoreStaff = (id, data) => http.put(`/api/store-staff/${id}`, data)
 
 export const getPayrollAttendanceSettings = () => http.get('/api/payroll-attendance-settings')
+
+export const getPayrollReview = (period) => http.get(`/api/payroll-review/${period}`)
+export const getPayrollReviewSheet = (period, id) => http.get(`/api/payroll-review/${period}/sheets/${id}`)

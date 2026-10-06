@@ -63,6 +63,55 @@ test('账号岗位绑定要求有效门店，管理员可不绑定',()=>check(as
 test('月末入职员工纳入本月工资，不因UTC日期换算漏人',()=>check(async({db,api})=>{db.insert("INSERT INTO employees(store_id,store_name,name,hire_type,entry_date,salary) VALUES(1,'A店','月末新人','全职','2026-09-30',5000)");assert.equal((await prepare(api)).data.sheet.items.length,2);}));
 
 const calendar=(period,work=22)=>Array.from({length:new Date(Date.UTC(Number(period.slice(0,4)),Number(period.slice(5)),0)).getUTCDate()},(_,index)=>({date:`${period}-${String(index+1).padStart(2,'0')}`,type:index<work?'work':index===work?'holiday':'rest',start_time:'09:00',end_time:'18:00',note:index===work?'放假':''}));
+test('审批进度包含未制作及已保存门店，待审队列只收实际提交记录',()=>check(async({api,db})=>{
+  let a=(await prepare(api)).data.sheet;
+  const b=(await prepare(api,'B店',4)).data.sheet;
+  await api(`/api/payroll-sheets/${b.id}`,'PUT',{version:b.version,items:b.items},4);
+  a=(await api(`/api/payroll-sheets/${a.id}/submit`,'POST',{version:a.version})).data.sheet;
+  const report=(await api('/api/payroll-review/2026-09','GET',undefined,3)).data;
+  assert.equal(report.summary.required,3);assert.equal(report.summary.submitted,1);assert.equal(report.summary.unsubmitted,2);
+  assert.deepEqual(report.pending.map(s=>s.id),[a.id]);assert.equal(report.approved.length,0);
+  const missing=report.coverage.find(r=>r.store_name==='B店');assert.equal(missing.status,'未提交');assert.equal(missing.preparation_status,'已保存');assert.equal(missing.sheet_id,null);assert.equal(missing.submitted_at,null);
+  assert.equal(report.coverage.find(r=>r.store_name==='永文总公司').preparation_status,'未制作');
+  assert.deepEqual((await api('/api/payroll-sheets?view=work','GET',undefined,6)).data.sheets.map(s=>s.id),[b.id]);
+  db.run("UPDATE payroll_sheets SET status='待审核' WHERE id=?",[b.id]);
+  assert.deepEqual((await api('/api/payroll-review/2026-09','GET',undefined,3)).data.pending.map(s=>s.id),[a.id]);
+}));
+test('审核人不能打开草稿或预览导出，管理员审批入口也不接收草稿',()=>check(async({api})=>{
+  const sheet=(await prepare(api)).data.sheet;
+  assert.equal((await api('/api/payroll-sheets','GET',undefined,3)).data.sheets.length,0);
+  for(const suffix of ['','/export?draft=1'])assert.equal((await api(`/api/payroll-sheets/${sheet.id}${suffix}`,'GET',undefined,3)).status,404);
+  assert.equal((await api(`/api/payroll-review/2026-09/sheets/${sheet.id}`,'GET',undefined,6)).status,404);
+  for(const user of [1,2,4])assert.equal((await api('/api/payroll-review/2026-09','GET',undefined,user)).status,403);
+  assert.equal((await api('/api/payroll-review/2026-13','GET',undefined,3)).status,400);
+}));
+test('退回退出待审进入待重提，重提恢复队列，通过进入独立已审历史',()=>check(async({api})=>{
+  let sheet=(await prepare(api)).data.sheet;
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}/submit`,'POST',{version:sheet.version})).data.sheet;
+  assert.equal((await api(`/api/payroll-review/2026-08/sheets/${sheet.id}`,'GET',undefined,3)).status,404);
+  const read=(await api(`/api/payroll-review/2026-09/sheets/${sheet.id}`,'GET',undefined,6)).data.sheet;assert.equal(read.can_edit,false);assert.equal(read.can_submit,false);
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{action:'return',note:'请核对出勤',version:sheet.version},3)).data.sheet;
+  let report=(await api('/api/payroll-review/2026-09','GET',undefined,3)).data;
+  assert.equal(report.pending.length,0);assert.equal(report.summary.returned,1);assert.equal(report.summary.submitted,0);assert.equal(report.coverage.find(r=>r.store_name==='A店').status,'退回待重提');
+  assert.equal((await api(`/api/payroll-review/2026-09/sheets/${sheet.id}`,'GET',undefined,6)).status,404);
+  assert.equal((await api('/api/payroll-sheets?view=work')).data.sheets[0].status,'退回');
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}/submit`,'POST',{version:sheet.version})).data.sheet;
+  assert.equal((await api('/api/payroll-review/2026-09','GET',undefined,3)).data.pending.length,1);
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{action:'approve',version:sheet.version},3)).data.sheet;
+  report=(await api('/api/payroll-review/2026-09','GET',undefined,3)).data;
+  assert.equal(report.pending.length,0);assert.deepEqual(report.approved.map(s=>s.id),[sheet.id]);assert.equal(report.summary.approved,1);assert.equal(report.summary.submitted,1);
+  assert.equal((await api('/api/payroll-sheets?view=work')).data.sheets.length,0);
+}));
+test('提交范围按所选月份员工纳入，空店不算漏交，历史离职人员仍纳入',()=>check(async({api,db})=>{
+  db.run("INSERT INTO stores VALUES(3,'空店','正常营业'),(4,'下月开店','正常营业'),(5,'历史店','停业')");
+  db.run("INSERT INTO employees(id,store_id,store_name,name,entry_date,status,leave_date,salary,hire_type) VALUES(4,4,'下月开店','下月员工','2026-10-01','在职','',5000,'全职'),(5,5,'历史店','历史员工','2026-01-01','离职','2026-09-20',5000,'全职')");
+  const report=(await api('/api/payroll-review/2026-09','GET',undefined,3)).data;
+  assert.equal(report.summary.required,4);assert.equal(report.summary.unsubmitted,4);
+  for(const name of ['空店','下月开店']){const row=report.coverage.find(r=>r.store_name===name);assert.equal(row.required,false);assert.equal(row.status,'暂无需制薪员工');}
+  assert.equal(report.coverage.find(r=>r.store_name==='历史店').required,true);
+  const next=(await api('/api/payroll-review/2026-10','GET',undefined,3)).data;
+  assert.equal(next.coverage.find(r=>r.store_name==='下月开店').required,true);assert.equal(next.coverage.some(r=>r.store_name==='历史店'),false);
+}));
 test('历史月锁定含管理员，历史仅天数不虚构日期；未来允许提前编辑',async()=>{
   const f=await fixture(()=> '2026-10');try{
     for(const user of [2,6])assert.equal((await f.api('/api/payroll-month-settings/2026-09','PUT',{staff_group:'store',scheduled_days:24,version:1},user)).status,403);
