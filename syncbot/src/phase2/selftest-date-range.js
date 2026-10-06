@@ -82,7 +82,7 @@ const reader = (c) => async () => ({ values: [c.st.start, c.st.end], inputs: [IN
     const qf = fs.readFileSync(path.join(__dirname, 'report-a-query-flow.js'), 'utf8');
     ck('R7 共享查询流程调用共享日期动作', /require\('\.\/date-range'\)/.test(qf) && /setDateRangeExact\(/.test(qf), '');
     ck('R7b 预检脚本复用共享查询流程', /report-a-query-flow/.test(pre), '');
-    ck('R7c 生产适配器委托共享查询流程（不再自留步骤）', /require\('\.\/report-a-query-flow'\)/.test(ad) && /navigateAndQueryReportA\(/.test(ad), '');
+    ck('R7c 生产适配器默认共享查询流程，并委托注入的 queryFlow', /require\('\.\/report-a-query-flow'\)/.test(ad) && /queryFlow = QF\.navigateAndQueryReportA/.test(ad) && /await queryFlow\(/.test(ad), '');
   }
 
   const ok = out.every((r) => r.ok);

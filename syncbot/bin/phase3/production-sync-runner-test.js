@@ -634,7 +634,7 @@ function makeImportFake(mode) {
           miss.ok === false && miss.reason === 'wait_download_file_timeout', JSON.stringify(miss));
       } finally { try { fs.rmSync(tmp2, { recursive: true, force: true }); } catch (e) {} }
       const legacy = await RUNNER.defaultWaitForDownloadFile({ dir: tmp, timeoutMs: 500, pollMs: 20, startedAt: 0 });
-      ck('p14c 不传新选项时保持旧行为（首个候选直接返回，stable_polls=1）', legacy.ok === true && legacy.stable_polls === 1, JSON.stringify(legacy));
+      ck('p14c 多个候选文件必须拒绝猜选，即使未指定排除项', legacy.ok === false && legacy.reason === 'ambiguous_new_download_files' && legacy.candidate_count === 2, JSON.stringify(legacy));
     } finally { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {} }
 
     const bd = D(14);
