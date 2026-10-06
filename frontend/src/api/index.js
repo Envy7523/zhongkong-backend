@@ -454,3 +454,4 @@ export const getPayrollAttendanceSettings = () => http.get('/api/payroll-attenda
 
 export const getPayrollReview = (period) => http.get(`/api/payroll-review/${period}`)
 export const getPayrollReviewSheet = (period, id) => http.get(`/api/payroll-review/${period}/sheets/${id}`)
+export const getEmployeePayslips = (period, view = 'submitted') => http.get(`/api/employee-payslips/${period}`, { params: { view } })

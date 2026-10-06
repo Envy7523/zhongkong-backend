@@ -320,6 +320,7 @@ import StaffStoreManagement from '@/views/staff/StaffStoreManagement.vue'
 import SalaryPlaceholder from '@/views/staff/SalaryPlaceholder.vue'
 import PayrollAttendance from '@/views/staff/PayrollAttendance.vue'
 import PayrollReview from '@/views/staff/PayrollReview.vue'
+import EmployeePayslips from '@/views/staff/EmployeePayslips.vue'
 import StaffDispatch from '@/views/staff/StaffDispatch.vue'
 import BookkeepingEntry from '@/views/bookkeeping/BookkeepingEntry.vue'
 import BookkeepingCategories from '@/views/bookkeeping/BookkeepingCategories.vue'
@@ -330,6 +331,7 @@ import { NAV_GROUP_PERMISSIONS, NAV_ITEM_PERMISSIONS } from '@/permissions'
 // 权限来自 /api/auth/me（后端每次从岗位表读取，分配岗位后重新登录即生效）。
 const canSeePopupItem = item => {
   if (item.index === 'staff-management-attendance') return auth.can('payroll.attendance')
+  if (item.index === 'staff-management-payslips') return (auth.isAdmin || !auth.permissions.includes('staff.store.edit')) && auth.canAny(['staff.view','payroll.view','payroll.prepare','payroll.attendance','payroll.review'])
   if (item.index === 'staff-management-review') return auth.can('payroll.review')
   if (item.index === 'staff-management-employees') return auth.canAny(['staff.view', 'staff.store.edit'])
   if (item.index === 'staff-management-salary') return auth.canAny(['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'])
@@ -380,6 +382,7 @@ const COMPONENT_MAP = {
   'staff-management-salary': SalaryPlaceholder,
   'staff-management-attendance': PayrollAttendance,
   'staff-management-review': PayrollReview,
+  'staff-management-payslips': EmployeePayslips,
   'staff-management-dispatch': StaffDispatch,
   'bookkeeping-entry': BookkeepingEntry,
   'bookkeeping-categories': BookkeepingCategories,
@@ -490,6 +493,7 @@ const POPUP_CONFIG = {
           { index: 'staff-management-salary', label: '工资表制作' },
           { index: 'staff-management-attendance', label: '月出勤管理' },
           { index: 'staff-management-review', label: '工资审核' },
+          { index: 'staff-management-payslips', label: '员工工资条查询' },
           { index: 'staff-management-dispatch', label: '员工调岗' },
         ],
       },
@@ -600,6 +604,7 @@ const staffRouteTabId = computed(() => ({
   '/staff-management/salary': 'staff-management-salary',
   '/staff-management/attendance': 'staff-management-attendance',
   '/staff-management/review': 'staff-management-review',
+  '/staff-management/payslips': 'staff-management-payslips',
   '/staff-management/dispatch': 'staff-management-dispatch',
 }[router.currentRoute.value.path] || 'staff-management-employees'))
 const pageTitle = computed(() => {
@@ -614,7 +619,7 @@ const pageTitle = computed(() => {
   if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
   if (isStore3dRoute.value) return '筹建门店 · 门店渲染'
   if (isDbViewerRoute.value) return '数据库查看'
-  if (isStaffManagementRoute.value) return ({ 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作', 'staff-management-attendance': '人事专区 · 月出勤管理', 'staff-management-review': '人事专区 · 工资审核', 'staff-management-dispatch': '人事专区 · 员工调岗' }[staffRouteTabId.value] || '人事专区 · 员工管理')
+  if (isStaffManagementRoute.value) return ({ 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作', 'staff-management-attendance': '人事专区 · 月出勤管理', 'staff-management-review': '人事专区 · 工资审核', 'staff-management-payslips': '人事专区 · 员工工资条查询', 'staff-management-dispatch': '人事专区 · 员工调岗' }[staffRouteTabId.value] || '人事专区 · 员工管理')
   if (isWorkspaceRoute.value) return store.activeTab?.title || '工作台'
   return store.activeTab?.title || '数据概括'
 })
@@ -891,7 +896,7 @@ async function selectPopupItem(index) {
   }
   if (index.startsWith('staff-management-')) {
     store.openTabFromId(index)
-    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary', 'staff-management-attendance': '/staff-management/attendance', 'staff-management-review': '/staff-management/review', 'staff-management-dispatch': '/staff-management/dispatch' }[index]
+    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary', 'staff-management-attendance': '/staff-management/attendance', 'staff-management-review': '/staff-management/review', 'staff-management-payslips': '/staff-management/payslips', 'staff-management-dispatch': '/staff-management/dispatch' }[index]
     await router.push(routePath || '/staff-management/employees')
     popupMenu.visible = false
     popupMenu.group = null
@@ -989,7 +994,7 @@ async function selectTab(id) {
   }
   if (id.startsWith('staff-management-')) {
     store.activeTabId = id
-    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary', 'staff-management-attendance': '/staff-management/attendance', 'staff-management-review': '/staff-management/review', 'staff-management-dispatch': '/staff-management/dispatch' }[id]
+    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary', 'staff-management-attendance': '/staff-management/attendance', 'staff-management-review': '/staff-management/review', 'staff-management-payslips': '/staff-management/payslips', 'staff-management-dispatch': '/staff-management/dispatch' }[id]
     await router.push(routePath || '/staff-management/employees')
     return
   }

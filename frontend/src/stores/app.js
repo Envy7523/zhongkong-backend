@@ -38,7 +38,7 @@ const SUB_LABELS = {
   'store-management': { 'info-basic': '门店基本信息', 'info-circle': '门店商圈', 'info-platform': '第三方平台', 'info-config': '门店配置', map: '全国地图', fixed: '固定成本', operating: '运营成本' },
   'menu-management': { overview: '菜品总览', category: '菜品分类', template: '菜品模板', cost: '菜品成本', expiry: '效期管理', accounting: '菜品核算' },
   'cost-accounting': { daily: '日成本核算', weekly: '周成本核算', monthly: '月成本核算' },
-  'staff-management': { manager: '店长管理', clerk: '店员管理', test: '测试数据', employees: '员工管理', store: '门店管理', salary: '工资表制作', attendance: '月出勤管理', review: '工资审核', dispatch: '员工调岗' },
+  'staff-management': { manager: '店长管理', clerk: '店员管理', test: '测试数据', employees: '员工管理', store: '门店管理', salary: '工资表制作', attendance: '月出勤管理', review: '工资审核', payslips: '员工工资条查询', dispatch: '员工调岗' },
   bookkeeping: { entry: '门店记账', categories: '记账分类', records: '门店账本' },
   'store-preparation': { '3d': '门店渲染' },
   'data-import': { pos: '收银系统数据', 'pos-automation': '收银系统 · 自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' },

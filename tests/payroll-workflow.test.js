@@ -20,7 +20,7 @@ async function fixture(monthNow=()=> '2026-09') {
     INSERT INTO users VALUES(1,'manager-a','A店长',1,1),(2,'hr','人事',NULL,2),(3,'reviewer','审核人',NULL,3),(4,'manager-b','B店长',2,1),(5,'unbound','未绑定',NULL,1),(6,'admin','管理员',NULL,4),(7,'preparer','制表人',NULL,5);
     CREATE TABLE employees(id INTEGER PRIMARY KEY,store_id INTEGER,store_name TEXT,status TEXT DEFAULT '在职',salary REAL DEFAULT 0,leave_date TEXT,updated_at TEXT DEFAULT '');
     CREATE TABLE employee_salary_profiles(employee_id INTEGER,base_salary REAL,position_allowance REAL,performance_salary REAL,attendance_bonus REAL,housing_allowance REAL,weekday_overtime_rate REAL,restday_overtime_rate REAL,part_time_hourly_rate REAL);
-    CREATE TABLE employee_store_dispatches(id INTEGER, status TEXT);
+    CREATE TABLE employee_store_dispatches(id INTEGER, status TEXT,employee_id INTEGER,origin_store_id INTEGER,support_store_id INTEGER,origin_store_name TEXT,dispatch_mode TEXT,dispatch_dates_json TEXT,start_date TEXT,end_date TEXT);
     CREATE TABLE employee_lifecycle_events(id INTEGER PRIMARY KEY,employee_id INTEGER,event_type TEXT,event_date TEXT,note TEXT,source TEXT,details_json TEXT);
     CREATE TABLE payroll_sheets(id INTEGER PRIMARY KEY,store_name TEXT NOT NULL,period TEXT,scheduled_days REAL DEFAULT 26,status TEXT DEFAULT '草稿',created_at TEXT,updated_at TEXT,UNIQUE(store_name,period));
     CREATE TABLE payroll_sheet_items(id INTEGER PRIMARY KEY,sheet_id INTEGER,employee_id INTEGER,sort_order INTEGER,data TEXT,updated_at TEXT,UNIQUE(sheet_id,employee_id));
@@ -30,7 +30,9 @@ async function fixture(monthNow=()=> '2026-09') {
   for (const [id,permissions] of [[1,['staff.store.edit','payroll.view','payroll.prepare']],[2,['staff.view','payroll.view','payroll.prepare','payroll.attendance']],[3,['payroll.view','payroll.review']],[4,['*']],[5,['payroll.prepare']]]) db.insert('INSERT INTO position_settings VALUES(?,?)',[id,JSON.stringify(permissions)]);
   db.run("INSERT INTO employees(id,store_id,store_name,name,salary,hire_type) VALUES(1,1,'A店','A员工',6500,'全职'),(2,2,'B店','B员工',6000,'全职'),(3,NULL,'永文总公司','集团员工',8000,'全职')");
   const source=fs.readFileSync(require.resolve('../server.js'),'utf8');
-  const helpers=new Function('db','XLSX','isGroupAffiliation','dispatchPresentation',source.slice(source.indexOf('const PAYROLL_EDITABLE_NUMBERS'),source.indexOf('payrollWorkflow.mount({'))+';return {readPayrollSheet,payrollTemplateRows,formatPayrollRow,payrollWorkbook};')(db,XLSX,isGroupAffiliation,()=>({support_days:0}));
+  const dispatchSource=source.slice(source.indexOf('function localDateString'),source.indexOf('function lifecycleDate'))+source.slice(source.indexOf('function normalizeAttendanceDate'),source.indexOf('function splitIntoChunks'))+source.slice(source.indexOf('function dispatchDates'),source.indexOf('// 跨店支援不变更'));
+  const dispatchPresentation=new Function(dispatchSource+';return dispatchPresentation;')();
+  const helpers=new Function('db','XLSX','isGroupAffiliation','dispatchPresentation',source.slice(source.indexOf('const PAYROLL_EDITABLE_NUMBERS'),source.indexOf('payrollWorkflow.mount({'))+';return {readPayrollSheet,payrollTemplateRows,formatPayrollRow,payrollWorkbook};')(db,XLSX,isGroupAffiliation,dispatchPresentation);
   workflow.initialize(db);
   const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={id:Number(req.headers['x-fixture-user'] || ({'Bearer qa-hr':2,'Bearer qa-reviewer':3}[req.headers.authorization]) || 1)};next();});app.use(workflow.scopeGuard(db));
   workflow.mount({app,db,XLSX,monthNow,...helpers});storeStaff.mount({app,db,validateStaffFields:()=>null});
@@ -63,6 +65,26 @@ test('账号岗位绑定要求有效门店，管理员可不绑定',()=>check(as
 test('月末入职员工纳入本月工资，不因UTC日期换算漏人',()=>check(async({db,api})=>{db.insert("INSERT INTO employees(store_id,store_name,name,hire_type,entry_date,salary) VALUES(1,'A店','月末新人','全职','2026-09-30',5000)");assert.equal((await prepare(api)).data.sheet.items.length,2);}));
 
 const calendar=(period,work=22)=>Array.from({length:new Date(Date.UTC(Number(period.slice(0,4)),Number(period.slice(5)),0)).getUTCDate()},(_,index)=>({date:`${period}-${String(index+1).padStart(2,'0')}`,type:index<work?'work':index===work?'holiday':'rest',start_time:'09:00',end_time:'18:00',note:index===work?'放假':''}));
+test('员工工资合并本店与支援份额，不重复相加标准工资且提示缺失门店',()=>check(async({api,db})=>{
+  db.run("INSERT INTO employee_store_dispatches VALUES(1,'有效',1,1,2,'A店','selected','[\"2026-09-10\",\"2026-09-11\"]','','')");
+  let a=(await prepare(api)).data.sheet;a=(await api(`/api/payroll-sheets/${a.id}/submit`,'POST',{version:a.version})).data.sheet;
+  let result=(await api('/api/employee-payslips/2026-09','GET',undefined,2)).data;
+  assert.equal(result.employees[0].totals.gross_salary,5980);assert.equal(result.employees[0].complete,false);assert.equal(result.employees[0].coverage.find(c=>c.store_name==='B店').status,'未生成员工明细');
+  let b=(await prepare(api,'B店',2)).data.sheet;b=(await api(`/api/payroll-sheets/${b.id}/submit`,'POST',{version:b.version},2)).data.sheet;
+  result=(await api('/api/employee-payslips/2026-09','GET',undefined,3)).data;
+  let employee=result.employees.find(e=>e.employee_id===1);assert.equal(employee.contributions.length,2);assert.equal(employee.totals.gross_salary,6500);assert.equal(employee.totals.net_salary,6500);assert.equal(employee.totals.actual_days,25);assert.equal(employee.complete,true);assert.equal(employee.all_approved,false);assert.deepEqual(employee.contributions.find(c=>c.is_dispatch_support).dispatch_dates,['2026-09-10','2026-09-11']);assert.equal(employee.contributions[0].bank_card_number,undefined);
+  assert.equal((await api('/api/employee-payslips/2026-09?view=approved','GET',undefined,3)).data.employees.length,0);
+  for(const sheet of [a,b])assert.equal((await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{action:'approve',version:sheet.version},3)).status,200);
+  employee=(await api('/api/employee-payslips/2026-09?view=approved','GET',undefined,3)).data.employees.find(e=>e.employee_id===1);assert.equal(employee.all_approved,true);
+}));
+test('员工跨店工资查询拒绝店长、审核人不能看未提交，按员工编号区分同名',()=>check(async({api,db})=>{
+  db.run("UPDATE employees SET name='同名' WHERE id IN (1,2)");await prepare(api);await prepare(api,'B店',4);
+  for(const user of [1,4,5])assert.equal((await api('/api/employee-payslips/2026-09?view=all','GET',undefined,user)).status,403);
+  assert.equal((await api('/api/employee-payslips/2026-09?view=all','GET',undefined,3)).status,403);
+  assert.equal((await api('/api/employee-payslips/2026-09','GET',undefined,3)).data.employees.length,0);
+  const result=(await api('/api/employee-payslips/2026-09?view=all','GET',undefined,2)).data;assert.deepEqual(result.employees.map(e=>e.employee_id).sort(),[1,2]);assert.equal(result.employees.every(e=>!e.all_approved),true);
+  assert.equal((await api('/api/employee-payslips/2026-13','GET',undefined,2)).status,400);assert.equal((await api('/api/employee-payslips/2026-09?view=bad','GET',undefined,2)).status,400);
+}));
 test('审批进度包含未制作及已保存门店，待审队列只收实际提交记录',()=>check(async({api,db})=>{
   let a=(await prepare(api)).data.sheet;
   const b=(await prepare(api,'B店',4)).data.sheet;
