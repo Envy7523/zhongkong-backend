@@ -279,10 +279,10 @@
         </aside>
       </article>
       <article class="metric-card">
-        <div><span>优惠金额</span><small>客户优惠汇总</small></div>
+        <div><span>{{ isMeituanPage ? '补贴及支出' : '优惠金额' }}</span><small>{{ isMeituanPage ? '营业额与营业日报收入之差' : '客户优惠汇总' }}</small></div>
         <strong>{{ money(cardDiscount) }}</strong>
         <div class="metric-foot">
-          优惠金额占比 {{ percent(cardDiscountRatio) }}
+          {{ isMeituanPage ? '补贴及支出' : '优惠金额' }}占比 {{ percent(cardDiscountRatio) }}
         </div>
         <aside v-if="compareMode" class="card-compare">
           <span>环比</span
@@ -368,8 +368,9 @@
       >
     </section>
 
+    <MeituanSettlement v-if="isMeituanPage && meituanOpLoaded" :totals="mtOpTot" />
     <section
-      v-if="isDeliverySettlementView"
+      v-if="isDeliverySettlementView && !isMeituanPage"
       class="delivery-settlement-chain"
       :aria-label="`${scopeChip}数据口径拆解`"
     >
@@ -2706,6 +2707,7 @@
 
 <script setup>
 import MeituanOperatingSource from '@/components/MeituanOperatingSource.vue'
+import MeituanSettlement from '@/components/MeituanSettlement.vue'
 import {
   computed,
   nextTick,
@@ -3857,7 +3859,7 @@ const mtOpFees = computed(() =>
 // 淘宝顶部卡展示运营日报“实际收入”（优惠后、未扣第三方费用）；最终到账只在结算链中展示。
 const cardIncome = computed(() =>
   mtOpView.value
-    ? isTaobaoOperation.value
+    ? isMeituanPage.value || isTaobaoOperation.value
       ? mtOpIncomeRaw.value
       : mtOpActualRaw.value || mtOpIncomeRaw.value
     : Number(scopeIncome.value || 0),
