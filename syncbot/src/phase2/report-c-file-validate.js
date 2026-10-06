@@ -39,7 +39,7 @@ function validateReportCBuffer(buffer, businessDate) {
   if (range.s.c !== 0 || range.e.c !== 3 || range.s.r !== 0 || range.e.r > 10003)
     return { ok: false, errors: ['sheet_range_invalid'] };
   const grid = XLSX.utils.sheet_to_json(workbook.Sheets[RULES.worksheet_name], { header: 1, raw: true, defval: '' });
-  if (grid.length < 5 || grid.length > 10004) return { ok: false, errors: ['row_count_invalid'] };
+  if (grid.length < 4 || grid.length > 10004) return { ok: false, errors: ['row_count_invalid'] };
   if (String(grid[0][0]).trim() !== RULES.report_name) add('title_invalid');
   const filters = String(grid[1][0] || '').trim();
   const match = filters.match(/^门店【全部】；大类【全部】；小类【全部】；日期【(\d{4}[/-]\d{1,2}[/-]\d{1,2})-(\d{4}[/-]\d{1,2}[/-]\d{1,2})】$/);

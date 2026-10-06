@@ -31,7 +31,7 @@ async function main(argv = process.argv.slice(2), { now } = {}) {
   if (parsed.mode === 'scheduled') {
     const PLAN = require('../src/schedule/plan');
     const current = PLAN.resolveNow(now);
-    const scheduledTime = process.env.SYNCBOT_REPORT_SCHEDULE_TIME || '04:40';
+    const scheduledTime = process.env.SYNCBOT_REPORT_SCHEDULE_TIME || '02:00';
     if (parsed.date !== PLAN.previousCompleteDate(current)
       || !PLAN.parseHHmm(scheduledTime).ok || current.time.slice(0, 5) !== scheduledTime)
       return { exitCode: 3, reason: 'report_c_scheduled_date_or_window_invalid' };
@@ -66,7 +66,7 @@ async function main(argv = process.argv.slice(2), { now } = {}) {
     reportCMode: parsed.mode, gates: G.createReportCCoverageGates(zk),
     stageDownload, stageImport });
   const result = await withSharedBrowserLock({ taskId: `${parsed.mode === 'scheduled' ? 'csched' : 'cmanual'}-meituan-pos_bookkeeping_daily-${parsed.date}`,
-    reportType: 'pos_bookkeeping_daily' }, () => wf.runOnce({ confirm: true,
+    reportType: 'pos_bookkeeping_daily', waitMs: parsed.mode === 'scheduled' ? 3 * 60 * 60 * 1000 : 0 }, () => wf.runOnce({ confirm: true,
     resumeExisting: parsed.resumeExisting,
     resumeValidated: parsed.resumeValidated || parsed.resumePreviewRejected,
     resumePreviewRejected: parsed.resumePreviewRejected }));

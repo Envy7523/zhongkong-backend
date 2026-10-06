@@ -12,6 +12,8 @@
 const path = require('path');
 
 const ROOT = process.env.SYNCBOT_ROOT || '/opt/zhongkong-sync-bot';
+const reviewNamespace = process.env.SYNCBOT_BOOKKEEPING_REVIEW_NAMESPACE || '';
+if (reviewNamespace && !/^[A-Za-z0-9._-]{3,80}$/.test(reviewNamespace)) throw new Error('review_namespace_invalid');
 
 // ===== report_type 校验与注册表 =====
 // key -> { authorized }；B 默认锁定，仅独立手工补齐进程显式启用；计划调度仍独立锁定。
@@ -113,18 +115,18 @@ const P = {
   taskStateFile(platform, reportType, businessDate) {
     const rt = assertReportType(reportType);
     const bd = assertBusinessDate(businessDate);
-    return assertInsideRoot(path.join(ROOT, 'state', 'tasks', platform, rt, `${bd}.json`));
+    return assertInsideRoot(path.join(ROOT, 'state', 'tasks', ...(reviewNamespace && rt === 'pos_bookkeeping_daily' ? ['reviews', reviewNamespace] : []), platform, rt, `${bd}.json`));
   },
   /** 任务状态目录：state/tasks/<platform>/<report_type>/ */
   taskStateDir(platform, reportType) {
     const rt = assertReportType(reportType);
-    return assertInsideRoot(path.join(ROOT, 'state', 'tasks', platform, rt));
+    return assertInsideRoot(path.join(ROOT, 'state', 'tasks', ...(reviewNamespace && rt === 'pos_bookkeeping_daily' ? ['reviews', reviewNamespace] : []), platform, rt));
   },
   /** 归档元数据文件：state/archive-meta/<platform>/<report_type>/<YYYY-MM-DD>.json */
   archiveMetaFile(platform, reportType, businessDate) {
     const rt = assertReportType(reportType);
     const bd = assertBusinessDate(businessDate);
-    return assertInsideRoot(path.join(ROOT, 'state', 'archive-meta', platform, rt, `${bd}.json`));
+    return assertInsideRoot(path.join(ROOT, 'state', 'archive-meta', ...(reviewNamespace && rt === 'pos_bookkeeping_daily' ? ['reviews', reviewNamespace] : []), platform, rt, `${bd}.json`));
   },
   /** 截图目录：screenshots/<platform>/<report_type>/<YYYY-MM-DD>/ */
   screenshotDay(platform, reportType, businessDate) {

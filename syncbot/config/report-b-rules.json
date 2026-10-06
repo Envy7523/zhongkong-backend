@@ -1,0 +1,30 @@
+{
+  "report_type": "item_sales_detail",
+  "business_name": "收银系统·品项销售明细",
+  "report_name": "品项销售明细",
+  "status": "development_locked_no_export_or_import",
+  "page_url": "https://pos.meituan.com/web/report/dishSaleDetail#/rms-report/dishSaleDetail",
+  "menu_label": "菜品销售明细",
+  "page_title": "品项销售明细",
+  "worksheet_name": "品项销售明细",
+  "date_label": "营业日期",
+  "date_rule": "起止日期均为同一业务日期；导出文件第2行与每一条明细再次校验",
+  "store_selection": "全部",
+  "sales_modes": [
+    "销售",
+    "退菜"
+  ],
+  "item_type": "菜品(含菜品绑定的做法加料及餐盒)",
+  "dish_type": "单品+套餐明细",
+  "separate_addons": "未选中",
+  "separate_takeaway_boxes": "未选中",
+  "query_button": "查询",
+  "export_button": "导出",
+  "download_list_locator": {
+    "url_assertion": {
+      "full_url": "https://pos.meituan.com/web/fe.rms-portal/rms-report.html#/rms-report/promiseDownload"
+    }
+  },
+  "production_enabled": false,
+  "scheduled": false
+}

@@ -19,6 +19,7 @@ const analysisAgents = require('./lib/analysis-agents');
 const poultryAccounting = require('./lib/poultry-accounting');
 const ledgerBackupImport = require('./lib/bookkeeping-import');
 const posBookkeepingDaily = require('./lib/pos-bookkeeping-daily');
+const bookkeepingReview = require('./lib/bookkeeping-review');
 const wecomBot = require('./lib/wecom-bot');
 const staffImport = require('./lib/staff-import');
 const idCardOcr = require('./lib/idcard-ocr');
@@ -4642,6 +4643,26 @@ app.post('/api/bookkeeping/pos-daily-import/commit', (req, res) => {
     const conflict = /^(daily_import_conflict|existing_manual_entries)/.test(e.message);
     res.status(conflict ? 409 : 400).json({ error: e.message });
   }
+});
+// Explicit versioned source refresh, separate from first-import conflict protection.
+for (const action of ['preview', 'commit']) app.post('/api/bookkeeping/pos-daily-import/review/' + action, (req, res) => {
+  try {
+    const b = req.body || {};
+    const data = String(b.data || '');
+    if (!/^[A-Za-z0-9+/=]+$/.test(data) || data.length > 14 * 1024 * 1024) throw new Error('file_payload_invalid');
+    const parsed = posBookkeepingDaily.parsePosBookkeepingDaily(Buffer.from(data, 'base64'), b.business_date, { allowEmpty: true });
+    if (action === 'preview') {
+      const result = bookkeepingReview.inspect(db, parsed, { adoptLegacy: b.adopt_legacy === true });
+      return res.json({ ok: true, business_date: parsed.business_date, status: result.status,
+        row_count: result.row_count, total_cents: result.total_cents, file_sha256: parsed.file_sha256,
+        expected_state: result.expected_state, content_sha256: result.content_sha256,
+        manual_preserved: result.manual.length, adopted_legacy: result.legacy.length, differences: result.differences });
+    }
+    if (b.confirm !== true || b.expected_sha256 !== parsed.file_sha256) throw new Error('review_confirmation_invalid');
+    const result = bookkeepingReview.commit(db, parsed, req.user, { reviewKey: b.review_key,
+      expectedState: b.expected_state, adoptLegacy: b.adopt_legacy === true, allowEmpty: b.confirm_empty === true });
+    return res.json(result);
+  } catch (e) { res.status(409).json({ ok: false, error: e.message }); }
 });
 // ===== 用户管理 =====
 function parsePositionPermissions(value) {

@@ -87,7 +87,7 @@ async function main(argv = process.argv.slice(2), { now } = {}) {
     gates: G.createReportBCoverageGates(zk),
     stageDownload, stageImport });
   const result = await withSharedBrowserLock({ taskId: `${parsed.mode === 'scheduled' ? 'bsched' : 'bmanual'}-meituan-item_sales_detail-${parsed.date}`,
-    reportType: 'item_sales_detail' }, () => wf.runOnce({ confirm: true, retryPreExport: parsed.retryPreExport,
+    reportType: 'item_sales_detail', waitMs: parsed.mode === 'scheduled' ? 3 * 60 * 60 * 1000 : 0 }, () => wf.runOnce({ confirm: true, retryPreExport: parsed.retryPreExport,
     resumeExisting: parsed.resumeExisting, resumeValidated: parsed.resumeValidated }));
   let audit = null;
   if (result && result.ok === true) {

@@ -1,0 +1,30 @@
+{
+  "report_type": "pos_bookkeeping_daily",
+  "business_name": "收银系统·门店收支统计（记账本）",
+  "report_name": "门店收支统计",
+  "status": "active_independent_daily_sync",
+  "page_url": "https://pos.meituan.com/web/report/dpaas-report-storeRevenueExpenditure#/rms-report/dpaas-report-storeRevenueExpenditure",
+  "menu_path": [
+    "报表中心",
+    "财务报表",
+    "记账本",
+    "门店收支统计"
+  ],
+  "worksheet_name": "门店收支统计",
+  "date_rule": "起止日期必须相同；文件第二行再次验证，不允许多日汇总拆日",
+  "filters": {
+    "门店": "全部",
+    "大类": "全部",
+    "小类": "全部"
+  },
+  "query_button": "查询",
+  "export_button": "导出",
+  "download_list_locator": {
+    "url_assertion": {
+      "full_url": "https://pos.meituan.com/web/fe.rms-portal/rms-report.html#/rms-report/promiseDownload"
+    }
+  },
+  "import_path": "/api/bookkeeping/pos-daily-import/commit",
+  "production_enabled": true,
+  "scheduled": true
+}

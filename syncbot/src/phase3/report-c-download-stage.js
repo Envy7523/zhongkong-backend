@@ -15,7 +15,7 @@ const RD = require('../phase2/real-download');
 const A = require('./production-sync-runner');
 
 function createReportCDownloadStage({ client, flow, approvals, coverageClient,
-  archiveFn, waitForDownloadFile, incomingDir, applicant, mode = 'manual_catchup', audit = () => {} } = {}) {
+  archiveFn, waitForDownloadFile, incomingDir, applicant, mode = 'manual_catchup', review = false, audit = () => {} } = {}) {
   if (!client || typeof client.call !== 'function' || !flow || !approvals
     || typeof approvals.read !== 'function' || typeof approvals.write !== 'function'
     || !coverageClient || typeof coverageClient.bookkeepingCoverage !== 'function'
@@ -76,7 +76,7 @@ function createReportCDownloadStage({ client, flow, approvals, coverageClient,
       let raw;
       try { raw = await coverageClient.bookkeepingCoverage({ business_date: ctx.businessDate }); }
       catch { return fail('bookkeeping_coverage_unavailable'); }
-      const coverage = G.beforeExport(raw, ctx.businessDate);
+      const coverage = G.beforeExport(raw, ctx.businessDate, { review });
       if (!coverage.ok) return fail(coverage.reason);
       if (typeof approvals.bind === 'function') approvals.bind(ctx.taskId);
       const archiveWithRecovery = Object.assign((opts) => archiveFn(opts), {
@@ -89,8 +89,8 @@ function createReportCDownloadStage({ client, flow, approvals, coverageClient,
       });
       const adapters = RA.createProductionAdapters({ client, flow, approvals,
         rules: Q.RULES, selectors: { get: key => null },
-        queryFlow: Q.navigateAndQueryReportC,
-        exportReadiness: R.checkReportCExportReadiness,
+        queryFlow: args => Q.navigateAndQueryReportC({ ...args, allowEmpty: review }),
+        exportReadiness: args => R.checkReportCExportReadiness({ ...args, allowEmpty: review }),
         validateFileFn: (file, opts) => V.validateReportCFile(file, opts.businessDate),
         archiveFn: archiveWithRecovery, waitForDownloadFile, incomingDir, applicant,
         coverageRequired: false, audit });

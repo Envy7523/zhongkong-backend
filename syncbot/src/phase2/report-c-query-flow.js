@@ -25,7 +25,7 @@ async function uniqueButton(client, label) {
     ? buttons[0] : null;
 }
 
-async function navigateAndQueryReportC({ client, businessDate, sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+async function navigateAndQueryReportC({ client, businessDate, allowEmpty = false, sleep = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
   if (!client || !/^\d{4}-\d{2}-\d{2}$/.test(String(businessDate || '')))
     return { ok: false, reason: 'context_invalid' };
   const fail = reason => ({ ok: false, reason, report_type: RULES.report_type, business_date: businessDate });
@@ -81,6 +81,9 @@ async function navigateAndQueryReportC({ client, businessDate, sleep = ms => new
     const total = String(pageText?.text || '').match(/合计\s+--\s+--\s+--\s+([+-]?[\d,]+\.\d{2})/);
     if (Number.isInteger(n) && n > 0 && row && total) {
       count = n; firstRow = row.firstRow; totalText = total[1]; break;
+    }
+    if (allowEmpty && n === 0 && !row && total && Number(total[1].replace(/,/g, '')) === 0) {
+      count = 0; totalText = total[1]; break;
     }
     if (i < 11) await sleep(1500);
   }

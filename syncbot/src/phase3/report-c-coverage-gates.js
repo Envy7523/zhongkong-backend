@@ -18,10 +18,10 @@ function normalizeCoverage(raw, businessDate) {
   return { ok: true, entry_count: body.entry_count, total_cents: body.total_cents, batch };
 }
 
-function beforeExport(raw, businessDate) {
+function beforeExport(raw, businessDate, { review = false } = {}) {
   const coverage = normalizeCoverage(raw, businessDate);
   if (!coverage.ok) return coverage;
-  if (coverage.entry_count !== 0 || coverage.batch !== null)
+  if (!review && (coverage.entry_count !== 0 || coverage.batch !== null))
     return { ok: false, reason: 'bookkeeping_existing_data_manual_review', coverage };
   return { ok: true, coverage };
 }

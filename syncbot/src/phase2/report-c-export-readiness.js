@@ -7,11 +7,11 @@ function amountCents(value) {
   const n = Math.round(Number(text) * 100);
   return Number.isSafeInteger(n) ? n : null;
 }
-async function checkReportCExportReadiness({ client, businessDate, queryResult } = {}) {
+async function checkReportCExportReadiness({ client, businessDate, queryResult, allowEmpty = false } = {}) {
   const fail = reason => ({ ok: false, reason });
   if (!client || queryResult?.ok !== true || queryResult.report_type !== Q.RULES.report_type
     || queryResult.business_date !== businessDate || !Number.isInteger(queryResult.declared_count)
-    || queryResult.declared_count <= 0 || amountCents(queryResult.displayed_total) === null)
+    || queryResult.declared_count < (allowEmpty ? 0 : 1) || amountCents(queryResult.displayed_total) === null)
     return fail('query_evidence_invalid');
   if ((await client.url())?.url !== Q.RULES.page_url) return fail('page_changed');
   const target = businessDate.replace(/-/g, '/');
@@ -26,8 +26,8 @@ async function checkReportCExportReadiness({ client, businessDate, queryResult }
     && t.firstRow.length === 5 && /^\d+$/.test(String(t.firstRow[0] || '')))?.firstRow;
   const text = await client.pageText({ maxChars: 4000 });
   const total = String(text?.text || '').match(/合计\s+--\s+--\s+--\s+([+-]?[\d,]+\.\d{2})/);
-  if (currentCount !== queryResult.declared_count || !first
-    || JSON.stringify(first) !== JSON.stringify(queryResult.first_row)
+  if (currentCount !== queryResult.declared_count || (currentCount > 0 && !first)
+    || JSON.stringify(first || null) !== JSON.stringify(queryResult.first_row || null)
     || !total || amountCents(total[1]) !== amountCents(queryResult.displayed_total))
     return fail('query_result_changed');
   const exportButton = await Q.uniqueButton(client, Q.RULES.export_button);

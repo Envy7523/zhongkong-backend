@@ -34,7 +34,15 @@ function acquire({ taskId, reportType } = {}) {
   } };
 }
 async function withSharedBrowserLock(identity, fn) {
-  const handle = acquire(identity);
+  const deadline = Date.now() + Math.max(0, Math.min(Number(identity.waitMs) || 0, 3 * 60 * 60 * 1000));
+  let handle;
+  for (;;) {
+    try { handle = acquire(identity); break; }
+    catch (e) {
+      if (e.message !== 'shared_browser_busy_manual_review' || Date.now() >= deadline) throw e;
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
   try { return await fn(); }
   finally { handle.release(); }
 }
