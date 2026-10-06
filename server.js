@@ -5906,6 +5906,17 @@ app.post('/api/enterprise-settings/pos-daily/test-send', async (req, res) => {
     return res.status(result.duplicate ? 409 : 400).json({ error: result.reason, ...result });
   } catch (error) { return res.status(500).json({ error: `测试发送未完成：${String(error.message || error).slice(0, 120)}` }); }
 });
+// 清除某「业务日期 + 机器人」的人工测试防重锁（演示/复测用）。
+// 只动 pos_daily_test_sends 与对应 pos_daily_test 日志，正式日报历史不受影响；
+// 权限由 lib/permissions.js 的 ['/api/enterprise-settings', 'enterprise-settings.manage'] 兜住。
+app.post('/api/enterprise-settings/pos-daily/clear-test-send', (req, res) => {
+  if (req.body?.confirm_clear !== true) return res.status(400).json({ error: '请显式确认要清除防重锁' });
+  try {
+    const result = posDailyPush.clearTestSendLock(db, String(req.body?.business_date || ''), req.body?.bot_id);
+    if (!result.ok) return res.status(400).json({ error: result.reason, ...result });
+    return res.json(result);
+  } catch (error) { return res.status(500).json({ error: `清除防重锁失败：${String(error.message || error).slice(0, 120)}` }); }
+});
 // 项目模板与机器人凭证分开：发送目标只由显式的项目消息路由决定。
 function getPushProfile(code) {
   const profile = db.queryOne('SELECT * FROM push_profiles WHERE code=?', [code]);
