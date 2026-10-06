@@ -50,6 +50,21 @@ test('空值保留在展示源，不伪造为原表的零；百分号转换正�
     assert.equal(db.queryOne('SELECT visit_rate FROM meituan_delivery_operation_records').visit_rate,0.0788);
   } finally { db.close(); }
 });
+test('同日其他账号门店保留，本次原表按门店范围核验且来源批次不可混淆', async () => {
+  const db = await database();
+  try {
+    analytics.importMeituanDeliveryWorkbook(db, {...payload({门店id:'87654321',门店名称:'另一账号门店'}),report_kind:'operating'}, {display_name:'人工导入'});
+    const before = db.queryOne("SELECT * FROM meituan_delivery_operation_records WHERE meituan_store_id='87654321'");
+    const first = sync.importSource(db,analytics,payload());
+    assert.equal(first.verification.row_count,1);
+    assert.deepEqual(db.queryOne("SELECT * FROM meituan_delivery_operation_records WHERE meituan_store_id='87654321'"),before);
+    const shown = sync.rawRecords(db,{date_from:'2026-10-05',date_to:'2026-10-05'});
+    assert.equal(shown.total,2); assert.equal(shown.last_run.verified_row_count,1);
+    assert.equal(sync.importSource(db,analytics,payload()).batch_id,first.batch_id);
+    db.run("UPDATE meituan_delivery_operation_records SET batch_id=? WHERE meituan_store_id='12345678'",[before.batch_id]);
+    assert.throws(()=>sync.importSource(db,analytics,payload()),/prior_import_unknown/);
+  } finally {db.close();}
+});
 test('未绑定门店或被替换的源文件必须在入库之前拒绝', async () => {
   const db = await database();
   try {

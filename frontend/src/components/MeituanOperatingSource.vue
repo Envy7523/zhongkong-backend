@@ -2,12 +2,13 @@
   <section class="operating-source" v-loading="loading">
     <header><div><h3>美团外卖营业表明细</h3><p>显示平台原表的全部 15 个字段。金额和订单空值显示为 —；单店单日转化率保留平台原值。</p></div><el-button @click="load">刷新明细</el-button></header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" />
-    <p v-if="lastRun" class="run-status">机器人业务日：{{ lastRun.business_date }} · {{ lastRun.status === 'completed' ? '已完成导入和逐字段核验' : '导入尚未核验通过' }} · 批次 {{ lastRun.batch_id || '—' }}</p>
+    <p v-if="lastRun" class="run-status">机器人业务日：{{ lastRun.business_date }} · {{ lastRun.status === 'completed' ? '已完成导入和逐字段核验' : '导入尚未核验通过' }} · 核验 {{ lastRun.verified_row_count }} 条 · 批次 {{ lastRun.batch_id || '—' }}。下表同时保留其他人工导入批次。</p>
     <el-table :data="rows" border empty-text="当前范围尚未导入美团外卖营业表" max-height="520">
       <el-table-column v-for="field in fields" :key="field" :label="field" :prop="field" :fixed="field === '日期' || field === '门店名称' ? 'left' : false" :min-width="field === '门店名称' ? 230 : 118" :align="numericFields.includes(field) ? 'right' : 'left'" header-align="center">
         <template #default="{ row }">{{ format(row[field], field) }}</template>
       </el-table-column>
       <el-table-column label="门店归属" min-width="120"><template #default="{ row }"><el-tag :type="row.match_status === 'matched' ? 'success' : 'danger'">{{ row.match_status === 'matched' ? '已关联' : '未关联' }}</el-tag></template></el-table-column>
+      <el-table-column label="导入批次" prop="batch_id" min-width="100" />
     </el-table>
     <footer><span>共 {{ total }} 条店日记录</span><el-pagination v-model:current-page="page" :page-size="100" :total="total" layout="prev, pager, next" @current-change="load" /></footer>
   </section>
