@@ -10,7 +10,7 @@ export const PERMISSION_KEYS = [
   'store-preparation.manage',
   'menu.manage',
   'cost.manage',
-  'staff.view',
+  'staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review',
   'collab.manage',
   'bookkeeping.manage',
   'data-import.manage',
@@ -28,7 +28,7 @@ export const PERMISSION_KEYS = [
 // 左侧导航分组 → 需要的权限码（组内任一命中即显示该组）
 export const NAV_GROUP_PERMISSIONS = {
   dashboard: ['dashboard.view'],
-  'core-business': ['analysis.view', 'store.manage', 'store-preparation.manage', 'menu.manage', 'cost.manage', 'staff.view'],
+  'core-business': ['analysis.view', 'store.manage', 'store-preparation.manage', 'menu.manage', 'cost.manage', 'staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'],
   'operation-tools': ['collab.manage', 'bookkeeping.manage', 'data-import.manage', 'pipeline.manage', 'ai-assistant.view', 'notifications.view'],
   system: ['db-viewer.view', 'enterprise-settings.manage', 'users.manage', 'positions.manage', 'settings.manage', 'notifications.rules'],
 }
@@ -41,7 +41,7 @@ export const NAV_ITEM_PERMISSIONS = {
   'store-preparation-group': 'store-preparation.manage',
   'menu-management-group': 'menu.manage',
   'cost-accounting-group': 'cost.manage',
-  'staff-management-group': 'staff.view',
+  'staff-management-group': ['staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'],
   'collab-list': 'collab.manage',
   'bookkeeping-entry': 'bookkeeping.manage',
   'data-import-group': 'data-import.manage',
@@ -61,6 +61,7 @@ export function permits(permissions, code) {
   const list = Array.isArray(permissions) ? permissions : []
   if (list.includes('*')) return true
   if (!code) return true
+  if (Array.isArray(code)) return code.some(item => list.includes(item))
   return list.includes(code)
 }
 

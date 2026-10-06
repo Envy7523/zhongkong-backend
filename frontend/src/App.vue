@@ -167,7 +167,7 @@
           >
             <div class="popup-section-title">{{ section.title }}</div>
             <div
-              v-for="item in section.items"
+              v-for="item in section.items.filter(canSeePopupItem)"
               :key="item.index"
               class="popup-item"
               :class="{ active: store.activeTabId === item.index }"
@@ -315,7 +315,7 @@ import MonthlyCost from '@/views/cost/MonthlyCost.vue'
 import StaffManager from '@/views/staff/StaffManager.vue'
 import StaffClerk from '@/views/staff/StaffClerk.vue'
 import StaffTest from '@/views/staff/StaffTest.vue'
-import StaffEmployees from '@/views/staff/StaffEmployees.vue'
+import StaffEmployees from '@/views/staff/StaffEmployeeAccess.vue'
 import StaffStoreManagement from '@/views/staff/StaffStoreManagement.vue'
 import SalaryPlaceholder from '@/views/staff/SalaryPlaceholder.vue'
 import StaffDispatch from '@/views/staff/StaffDispatch.vue'
@@ -326,6 +326,12 @@ import { NAV_GROUP_PERMISSIONS, NAV_ITEM_PERMISSIONS } from '@/permissions'
 
 // 左侧导航按岗位权限过滤：分组标题与菜单项都由这里判断，
 // 权限来自 /api/auth/me（后端每次从岗位表读取，分配岗位后重新登录即生效）。
+const canSeePopupItem = item => {
+  if (item.index === 'staff-management-employees') return auth.canAny(['staff.view', 'staff.store.edit'])
+  if (item.index === 'staff-management-salary') return auth.canAny(['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'])
+  if (item.index.startsWith('staff-management-')) return auth.can('staff.view')
+  return true
+}
 const canSeeNav = index => auth.can(NAV_ITEM_PERMISSIONS[index])
 const canSeeNavGroup = group => auth.canAny(NAV_GROUP_PERMISSIONS[group] || [])
 
@@ -622,7 +628,7 @@ const userInitial = computed(() => {
 const notificationPending = ref(0)
 let notificationTimer = null
 async function refreshNotifications() {
-  if (!auth.user) { notificationPending.value = 0; return }
+  if (!auth.user || !auth.can('notifications.view')) { notificationPending.value = 0; return }
   try { notificationPending.value = Number((await getNotificationSummary()).pending || 0) } catch { /* 未登录或网络异常时静默 */ }
 }
 function openNotifications() { router.push('/notifications') }
@@ -1057,7 +1063,8 @@ onMounted(async () => {
     return
   }
   try {
-    await getConfig()
+    if (!auth.isAdmin && auth.can('staff.store.edit')) await auth.init()
+    else await getConfig()
     store.setServerStatus(true)
   } catch {
     store.setServerStatus(false)

@@ -20,6 +20,8 @@ const poultryAccounting = require('./lib/poultry-accounting');
 const ledgerBackupImport = require('./lib/bookkeeping-import');
 const posBookkeepingDaily = require('./lib/pos-bookkeeping-daily');
 const bookkeepingReview = require('./lib/bookkeeping-review');
+const payrollWorkflow = require('./lib/payroll-workflow');
+const storeStaff = require('./lib/store-staff');
 const wecomBot = require('./lib/wecom-bot');
 const staffImport = require('./lib/staff-import');
 const idCardOcr = require('./lib/idcard-ocr');
@@ -104,6 +106,8 @@ app.use((req, res, next) => {
     return res.status(401).json({ error: '登录已过期，请重新登录' });
   }
 });
+
+app.use(payrollWorkflow.scopeGuard(db));
 
 // 岗位权限强制校验（只对 /api/* 且映射到权限码的接口生效，其余请求零开销）
 const positionGuard = positionPermissions.createGuard({
@@ -2407,19 +2411,6 @@ app.put('/api/staff/:id/salary-profile', (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-function payrollMonthSetting(period, fallback = 26) {
-  const saved = db.queryOne('SELECT scheduled_days FROM payroll_month_settings WHERE period=?', [period]);
-  return Math.max(1, Math.min(31, payrollNumber(saved?.scheduled_days) || payrollNumber(fallback) || 26));
-}
-function upsertPayrollMonthSetting(period, scheduledDays, user) {
-  const days = Math.max(1, Math.min(31, payrollNumber(scheduledDays) || 26));
-  db.run(`INSERT INTO payroll_month_settings (period,scheduled_days,updated_by,updated_at) VALUES (?,?,?,datetime('now','localtime'))
-    ON CONFLICT(period) DO UPDATE SET scheduled_days=excluded.scheduled_days,updated_by=excluded.updated_by,updated_at=datetime('now','localtime')`, [period, days, staffAuditSource(user)]);
-  // 同月已有的各门店工资表同步更新分母；工资构成和月度手工项不被改动。
-  db.run("UPDATE payroll_sheets SET scheduled_days=?,updated_at=datetime('now','localtime') WHERE period=?", [days, period]);
-  return days;
-}
-
 const PAYROLL_EDITABLE_NUMBERS = ['scheduled_days', 'payroll_base_days', 'dispatch_out_days', 'personal_leave', 'sick_leave', 'join_leave', 'support_days', 'annual_leave', 'weekday_overtime_hours', 'restday_overtime_hours', 'part_time_hours', 'base_salary', 'position_allowance', 'performance_salary', 'attendance_bonus', 'housing_allowance', 'part_time_hourly_rate', 'weekday_overtime_rate', 'restday_overtime_rate', 'reward', 'penalty', 'late_early_deduction', 'other_deduction', 'social_insurance', 'income_tax', 'utilities_fee', 'uniform_deposit'];
 function payrollNumber(value) { return Math.max(0, Number(value) || 0); }
 function formatPayrollRow(input = {}, scheduledDays = 26) {
@@ -2441,20 +2432,21 @@ function formatPayrollRow(input = {}, scheduledDays = 26) {
   return row;
 }
 function readPayrollSheet(sheet) {
-  const items = db.queryAll('SELECT id,employee_id,sort_order,data FROM payroll_sheet_items WHERE sheet_id=? ORDER BY sort_order,id', [sheet.id]).map(item => ({ id: item.id, employee_id: item.employee_id, ...formatPayrollRow({ ...JSON.parse(item.data || '{}'), payroll_base_days: sheet.scheduled_days }, sheet.scheduled_days) }));
+  const items = db.queryAll('SELECT id,employee_id,sort_order,data FROM payroll_sheet_items WHERE sheet_id=? ORDER BY sort_order,id', [sheet.id]).map(item => {
+    const data = JSON.parse(item.data || '{}');
+    return { ...formatPayrollRow({ ...data, scheduled_days: data.is_dispatch_support ? 0 : sheet.scheduled_days, payroll_base_days: sheet.scheduled_days }, sheet.scheduled_days), id: item.id, employee_id: item.employee_id, sort_order: item.sort_order };
+  });
   return { ...sheet, items };
 }
 function payrollTemplateRows(storeName, period, scheduledDays) {
   const [year, month] = period.split('-').map(Number);
   const startDate = `${period}-01`;
-  const endDate = new Date(year, month, 0).toISOString().slice(0, 10);
+  const endDate = `${period}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`;
   const store = db.queryOne('SELECT id,store_name FROM stores WHERE store_name=?', [storeName]);
   const allEmployees = db.queryAll(`SELECT e.*, p.base_salary,p.position_allowance,p.performance_salary,p.attendance_bonus,p.housing_allowance,p.weekday_overtime_rate,p.restday_overtime_rate,p.part_time_hourly_rate
     FROM employees e LEFT JOIN employee_salary_profiles p ON p.employee_id=e.id
     WHERE (COALESCE(e.entry_date,'')='' OR e.entry_date<=?) AND (e.status!='离职' OR COALESCE(e.leave_date,'')='' OR e.leave_date>=?) ORDER BY e.position,e.name`, [endDate, startDate]);
-  const normalized = normalizeStoreName(storeName);
-  const homeEmployees = allEmployees.filter(employee => Number(employee.store_id) === Number(store?.id) || storeSimilarity(normalized, normalizeStoreName(employee.store_name)) <= 1);
-  if (store) homeEmployees.filter(employee => Number(employee.store_id) !== Number(store.id) || employee.store_name !== storeName).forEach(employee => db.run("UPDATE employees SET store_id=?,store_name=?,updated_at=datetime('now','localtime') WHERE id=?", [store.id, storeName, employee.id]));
+  const homeEmployees = allEmployees.filter(employee => store ? Number(employee.store_id) === Number(store.id) : isGroupAffiliation(storeName) && employee.store_name === storeName);
   const dispatches = db.queryAll("SELECT * FROM employee_store_dispatches WHERE status='有效'").map(row => dispatchPresentation(row, period)).filter(row => row.support_days);
   const dispatchOut = new Map(), dispatchIn = new Map();
   dispatches.forEach(row => {
@@ -2485,7 +2477,7 @@ function payrollTemplateRows(storeName, period, scheduledDays) {
 }
 function payrollWorkbook(sheet) {
   const headers = ['序号','姓名','职务','入职日期','用工类型','应出勤','事假','病假','入/离职缺勤','派出天数','跨店支援','年假','实际出勤','工作日加班','休息日加班','基本工资','岗位补贴','绩效工资','全勤奖','房补','标准工资','兼职小时','统一时薪','兼职工资','奖励','罚款','迟到早退','其他扣款','应发工资','社保','个税','水电','工衣押金','实发工资','银行卡号','开户行','身份证号','手机号'];
-  const rows = [[`${sheet.store_name} ${sheet.period} 工资表`], headers];
+  const rows = [[`${sheet.store_name} ${sheet.period} 工资表 · ${sheet.export_label || sheet.status}`], headers];
   sheet.items.forEach((row, index) => rows.push([index + 1,row.name,row.position,row.entry_date,row.hire_type,row.scheduled_days,row.personal_leave,row.sick_leave,row.join_leave,row.dispatch_out_days,row.support_days,row.annual_leave,row.actual_days,row.weekday_overtime_hours,row.restday_overtime_hours,row.base_salary,row.position_allowance,row.performance_salary,row.attendance_bonus,row.housing_allowance,row.standard_salary,row.part_time_hours,row.part_time_hourly_rate,row.part_time_salary,row.reward,row.penalty,row.late_early_deduction,row.other_deduction,row.gross_salary,row.social_insurance,row.income_tax,row.utilities_fee,row.uniform_deposit,row.net_salary,row.bank_card_number,row.bank_name,row.id_card_number,row.phone]));
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!merges'] = [{ s:{ r:0,c:0 }, e:{ r:0,c:headers.length - 1 } }]; ws['!cols'] = headers.map((header, index) => ({ wch: index === 1 || index >= 33 ? 18 : 12 })); ws['!autofilter'] = { ref: `A2:AK${Math.max(2, rows.length)}` };
@@ -2494,56 +2486,8 @@ function payrollWorkbook(sheet) {
   const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, ws, '工资表'); workbook.Workbook = { CalcPr:{fullCalcOnLoad:true,forceFullCalc:true,calcMode:'auto'} }; return workbook;
 }
 
-app.get('/api/payroll-month-settings/:period', (req, res) => {
-  try {
-    const period = String(req.params.period || '').trim();
-    if (!/^\d{4}-\d{2}$/.test(period)) return res.status(400).json({ error:'请选择正确月份' });
-    const row = db.queryOne('SELECT * FROM payroll_month_settings WHERE period=?', [period]);
-    res.json({ ok:true, setting: { period, scheduled_days: payrollMonthSetting(period), updated_at: row?.updated_at || '', updated_by: row?.updated_by || '' } });
-  } catch (e) { res.status(500).json({ error:e.message }); }
-});
-app.put('/api/payroll-month-settings/:period', (req, res) => {
-  try {
-    const period = String(req.params.period || '').trim();
-    if (!/^\d{4}-\d{2}$/.test(period)) return res.status(400).json({ error:'请选择正确月份' });
-    const scheduledDays = upsertPayrollMonthSetting(period, req.body?.scheduled_days, req.user); db.save();
-    res.json({ ok:true, setting: { period, scheduled_days: scheduledDays } });
-  } catch (e) { res.status(400).json({ error:e.message }); }
-});
-app.get('/api/payroll-sheets', (req, res) => { try { res.json({ ok:true, sheets: db.queryAll(`SELECT s.*,COUNT(i.id) AS employee_count FROM payroll_sheets s LEFT JOIN payroll_sheet_items i ON i.sheet_id=s.id GROUP BY s.id ORDER BY s.period DESC,s.updated_at DESC`) }); } catch (e) { res.status(500).json({ error:e.message }); } });
-app.post('/api/payroll-sheets/prepare', (req, res) => {
-  try {
-    const storeName = String(req.body?.store_name || '').trim(), period = String(req.body?.period || '').trim();
-    if (!storeName || !/^\d{4}-\d{2}$/.test(period)) return res.status(400).json({ error:'请选择门店和工资月份' });
-    const scheduledDays = payrollMonthSetting(period, req.body?.scheduled_days);
-    let sheet = db.queryOne('SELECT * FROM payroll_sheets WHERE store_name=? AND period=?', [storeName, period]);
-    if (!sheet) {
-      const id = db.insert("INSERT INTO payroll_sheets (store_name,period,scheduled_days,status) VALUES (?,?,?,'草稿')", [storeName,period,scheduledDays]);
-      sheet = db.queryOne('SELECT * FROM payroll_sheets WHERE id=?', [id]);
-    } else if (Number(sheet.scheduled_days) !== Number(scheduledDays)) {
-      db.run("UPDATE payroll_sheets SET scheduled_days=?,updated_at=datetime('now','localtime') WHERE id=?", [scheduledDays, sheet.id]);
-      sheet = db.queryOne('SELECT * FROM payroll_sheets WHERE id=?', [sheet.id]);
-    }
-    // 已生成过的空白草稿也要能补入后来纠正了门店归属的员工；已有行保持其当月手工填写内容不变。
-    const templateRows = payrollTemplateRows(storeName, period, sheet.scheduled_days);
-    const existingEmployeeIds = new Set(db.queryAll('SELECT employee_id FROM payroll_sheet_items WHERE sheet_id=? AND employee_id IS NOT NULL', [sheet.id]).map(row => Number(row.employee_id)));
-    const nextSortOrder = Number(db.queryOne('SELECT COALESCE(MAX(sort_order),-1)+1 AS next_sort_order FROM payroll_sheet_items WHERE sheet_id=?', [sheet.id])?.next_sort_order) || 0;
-    templateRows.filter(item => !existingEmployeeIds.has(Number(item.employee_id))).forEach((item, index) => db.insert("INSERT INTO payroll_sheet_items (sheet_id,employee_id,sort_order,data) VALUES (?,?,?,?)", [sheet.id,item.employee_id,nextSortOrder + index,JSON.stringify(item)]));
-    db.save();
-    res.json({ ok:true, sheet:readPayrollSheet(sheet) });
-  } catch (e) { res.status(500).json({ error:e.message }); }
-});
-app.get('/api/payroll-sheets/:id', (req, res) => { try { const sheet=db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[req.params.id]); if(!sheet) return res.status(404).json({error:'工资表不存在'}); res.json({ok:true,sheet:readPayrollSheet(sheet)}); } catch(e){res.status(500).json({error:e.message});} });
-app.put('/api/payroll-sheets/:id', (req, res) => {
-  try {
-    const sheet=db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[req.params.id]); if(!sheet) return res.status(404).json({error:'工资表不存在'});
-    const scheduledDays=payrollMonthSetting(sheet.period, sheet.scheduled_days); const items=Array.isArray(req.body?.items)?req.body.items:[];
-    db.run("UPDATE payroll_sheets SET scheduled_days=?,status='已保存',updated_at=datetime('now','localtime') WHERE id=?",[scheduledDays,sheet.id]);
-    items.forEach((item,index)=>{ const data=formatPayrollRow(item,scheduledDays); const employeeId=Number(item.employee_id)||null; if(item.id) db.run("UPDATE payroll_sheet_items SET sort_order=?,data=?,updated_at=datetime('now','localtime') WHERE id=? AND sheet_id=?",[index,JSON.stringify(data),item.id,sheet.id]); else db.insert("INSERT INTO payroll_sheet_items (sheet_id,employee_id,sort_order,data) VALUES (?,?,?,?)",[sheet.id,employeeId,index,JSON.stringify(data)]); });
-    db.save(); res.json({ok:true,sheet:readPayrollSheet(db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[sheet.id]))});
-  } catch(e){res.status(400).json({error:e.message});}
-});
-app.get('/api/payroll-sheets/:id/export', (req,res) => { try { const sheet=db.queryOne('SELECT * FROM payroll_sheets WHERE id=?',[req.params.id]); if(!sheet)return res.status(404).json({error:'工资表不存在'}); const buffer=XLSX.write(payrollWorkbook(readPayrollSheet(sheet)),{bookType:'xlsx',type:'buffer',cellStyles:true}); const name=`${sheet.store_name}-${sheet.period}工资表.xlsx`.replace(/[\\/:*?"<>|]/g,'_'); res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(name)}`);res.send(buffer); }catch(e){res.status(500).json({error:e.message});} });
+payrollWorkflow.mount({ app, db, readPayrollSheet, payrollTemplateRows, formatPayrollRow, payrollWorkbook, XLSX });
+storeStaff.mount({ app, db, validateStaffFields });
 
 // 工资表制作：仅根据员工档案和 C 级薪酬构成生成新的月度工作表，不会改动第三方工资文件或员工薪酬档案。
 app.post('/api/staff/payroll-sheet', (req, res) => {
@@ -4761,8 +4705,8 @@ function hasValidImageSignature(buffer, type) {
 
 app.get('/api/users', (req, res) => {
   try {
-    const users = db.queryAll(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.position_id,u.created_at,p.name AS position_name,p.permissions_json
-      FROM users u LEFT JOIN position_settings p ON p.id=u.position_id ORDER BY u.id`)
+    const users = db.queryAll(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.position_id,u.store_id,s.store_name,u.created_at,p.name AS position_name,p.permissions_json
+      FROM users u LEFT JOIN position_settings p ON p.id=u.position_id LEFT JOIN stores s ON s.id=u.store_id ORDER BY u.id`)
       .map(user => ({ ...user, role: user.position_name || '未分配岗位', position_permissions: parsePositionPermissions(user.permissions_json), permissions_json: undefined }));
     res.json({ ok: true, users });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -4775,13 +4719,14 @@ app.post('/api/users', (req, res) => {
     const displayName = String(req.body.display_name || '').trim();
     const phone = String(req.body.phone || '').trim();
     const position = getAssignedPosition(req.body.position_id, true);
+    const storeId = payrollWorkflow.userStoreBinding(db, position.id, req.body.store_id);
     if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
     if (username.length > 50) return res.status(400).json({ error: '用户名不能超过 50 个字符' });
     if (phone.length > 30) return res.status(400).json({ error: '手机号格式不正确' });
     const hash = crypto.createHash('md5').update(password).digest('hex');
     const id = db.insert(
-      'INSERT INTO users (username,password_hash,role,display_name,phone,position_id) VALUES (?,?,?,?,?,?)',
-      [username, hash, position.name, displayName || username, phone, position.id]
+      'INSERT INTO users (username,password_hash,role,display_name,phone,position_id,store_id) VALUES (?,?,?,?,?,?,?)',
+      [username, hash, position.name, displayName || username, phone, position.id, storeId]
     );
     db.save();
     res.json({ ok: true, id });
@@ -4793,6 +4738,9 @@ app.post('/api/users', (req, res) => {
 
 app.put('/api/users/:id', (req, res) => {
   try {
+    const current = db.queryOne('SELECT position_id,store_id FROM users WHERE id=?', [req.params.id]);
+    if (!current) return res.status(404).json({ error: '账号不存在' });
+    const storeId = payrollWorkflow.userStoreBinding(db, req.body.position_id ?? current.position_id, req.body.store_id === undefined ? current.store_id : req.body.store_id);
     const allowed = ['username', 'display_name', 'phone'];
     const sets = [];
     const params = [];
@@ -4809,6 +4757,7 @@ app.put('/api/users/:id', (req, res) => {
       sets.push('position_id=?', 'role=?');
       params.push(position.id, position.name);
     }
+    if (req.body.store_id !== undefined) { sets.push('store_id=?'); params.push(storeId); }
     if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' });
     params.push(req.params.id);
     db.run(`UPDATE users SET ${sets.join(',')} WHERE id=?`, params);
@@ -7103,6 +7052,7 @@ app.get('/api/bot/status', (_req, res) => {
   if (process.env.DISABLE_WECOM_BOT !== '1') wecomBot.start().catch(err => console.error('[wecom-bot] 启动失败:', err.message));
   setupConsoleEncoding();
   await db.init();
+  payrollWorkflow.initialize(db);
   analysisAgents.recoverInterrupted(db);
   db.seed();
   wecomRouting.syncDefaultWebhookBot(db, loadConfig());
@@ -7115,6 +7065,9 @@ app.get('/api/bot/status', (_req, res) => {
     const defaults = [
       ['系统管理员', '拥有全部系统权限，可维护岗位与人员。', ['*']],
       ['运营专员', '查看经营数据、处理平台数据和协同事项。', ['dashboard.view', 'analysis.view', 'data-import.manage', 'collab.manage']],
+      ['店长（员工与工资）', '只可录入本店员工、制作本店工资表；必须绑定门店。', ['staff.store.edit', 'payroll.view', 'payroll.prepare']],
+      ['人事（出勤与薪酬）', '维护员工档案、集团与门店应出勤、制作工资表。', ['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance']],
+      ['工资审核', '查看工资表并审核他人提交的工资表。', ['payroll.view', 'payroll.review']],
       ['门店店长', '处理门店和菜品日常资料。', ['dashboard.view', 'store.manage', 'menu.manage', 'staff.view']],
       ['财务人员', '处理成本、记账和经营数据。', ['dashboard.view', 'analysis.view', 'cost.manage', 'bookkeeping.manage']],
     ];

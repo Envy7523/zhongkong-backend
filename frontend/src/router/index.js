@@ -237,7 +237,7 @@ const routes = [
   {
     path: '/staff-management/employees',
     name: 'staff-management-employees',
-    component: () => import('@/views/staff/StaffEmployees.vue'),
+    component: () => import('@/views/staff/StaffEmployeeAccess.vue'),
   },
   {
     path: '/staff-management/salary',
@@ -340,6 +340,8 @@ const ROUTE_PERMISSION_RULES = [
   ['menu-management-', 'menu.manage'],
   ['workspace-menu', 'menu.manage'],
   ['workspace-cost', 'cost.manage'],
+  ['staff-management-employees', ['staff.view', 'staff.store.edit']],
+  ['staff-management-salary', ['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review']],
   ['staff-management-', 'staff.view'],
   ['workspace-position-settings', 'positions.manage'],
   ['workspace-user', 'users.manage'],
@@ -372,7 +374,8 @@ router.beforeEach((to, from, next) => {
   // 权限以服务端岗位表为准，每次导航都取最新，避免旧缓存让已改权限的账号继续放行。
   getMe().then(res => {
     const permissions = res?.user?.position_permissions || []
-    const allowed = permissions.includes('*') || permissions.includes(required)
+    if (to.path === '/dashboard' && !permissions.includes('*') && permissions.includes('staff.store.edit')) return next('/staff-management/employees')
+    const allowed = permissions.includes('*') || (Array.isArray(required) ? required.some(code => permissions.includes(code)) : permissions.includes(required))
     if (allowed) return next()
     if (to.path === '/dashboard') return next() // 无任何权限时仍允许落到首页，避免死循环
     ElMessage.warning('当前岗位没有该模块权限，已跳回首页')

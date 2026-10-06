@@ -135,6 +135,7 @@
           </el-select>
           <div class="position-form-hint">岗位即该成员的系统角色与权限来源，在“系统管理 → 岗位设置”统一维护。</div>
         </el-form-item>
+        <el-form-item label="绑定门店" :required="requiresStore"><el-select v-model="profileForm.store_id" filterable clearable placeholder="选择账号所属门店" style="width:100%"><el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" /></el-select><div class="position-form-hint">使用“店长（员工与工资）”岗位时必填；店长只能访问绑定门店。</div></el-form-item>
         <div class="form-grid form-grid-single">
           <el-form-item label="手机号">
             <el-input v-model="profileForm.phone" maxlength="30" placeholder="请输入手机号" />
@@ -209,6 +210,7 @@ import {
   deleteUser,
   deleteUserAvatar,
   getUsers,
+  getStores,
   getPositions,
   updateUser,
   updateUserPassword,
@@ -220,6 +222,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 const auth = useAuthStore()
 const users = ref([])
 const positions = ref([])
+const stores = ref([])
+const requiresStore = computed(() => {const permissions=positions.value.find(position=>position.id===profileForm.position_id)?.permissions || [];return permissions.includes('staff.store.edit') && !permissions.includes('*')})
 const keyword = ref('')
 const loading = ref(false)
 const saving = ref(false)
@@ -237,6 +241,7 @@ const emptyProfile = () => ({
   display_name: '',
   phone: '',
   position_id: null,
+  store_id: null,
   password: '',
   confirmPassword: '',
 })
@@ -253,7 +258,9 @@ const filteredUsers = computed(() => {
 })
 const adminCount = computed(() => users.value.filter(user => user.position_permissions?.includes('*')).length)
 
-onMounted(() => Promise.all([loadUsers(), loadPositions()]))
+onMounted(() => Promise.all([loadUsers(), loadPositions(), loadStores()]))
+
+async function loadStores(){try{stores.value=(await getStores({page:1,page_size:500})).stores || []}catch(error){ElMessage.error('门店加载失败：'+error.message)}}
 
 async function loadPositions() {
   try {
@@ -304,6 +311,7 @@ function openEditDialog(user) {
     display_name: user.display_name || '',
     phone: user.phone || '',
     position_id: user.position_id ?? null,
+    store_id: user.store_id ?? null,
   })
   profileDialogVisible.value = true
 }
@@ -333,6 +341,7 @@ async function saveProfile() {
     ElMessage.warning('请为成员选择岗位')
     return
   }
+  if (requiresStore.value && !profileForm.store_id) {ElMessage.warning('店长账号必须选择绑定门店');return}
   if (profileMode.value === 'create') {
     if (profileForm.password.length < 6) {
       ElMessage.warning('初始密码至少需要 6 位')
@@ -351,6 +360,7 @@ async function saveProfile() {
       display_name: displayName,
       phone,
       position_id: profileForm.position_id,
+      store_id: profileForm.store_id,
     }
     if (profileMode.value === 'create') {
       await createUser({ ...payload, password: profileForm.password })
