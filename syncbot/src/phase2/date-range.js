@@ -15,6 +15,34 @@ function sameBoth(values, target) {
   return Array.isArray(values) && values.filter((v) => v === target).length >= 2;
 }
 
+// 先在已打开的面板内切换月份，再连续选择起止；不重开输入框。
+async function revealDate(client, iso) {
+  for (let step = 0; step <= 24; step += 1) {
+    const pk = await client.picker({ maxCells: 80 }, { timeoutMs: 60000 });
+    const cells = (pk && pk.best && pk.best.cells) || [];
+    const cell = cells.find((c) => c.date === iso && !/disabled/.test(c.cls || '') && c.aria_disabled !== 'true');
+    if (cell) return { ok: true };
+    const sample = cells.find((c) => c.selector && c.selector.includes(' > div.saas-picker-body'));
+    if (!sample || step === 24) return { ok: false, reason: `日历未找到 ${iso}` };
+    const panel = sample.selector.split(' > div.saas-picker-body')[0];
+    const region = await client.region(panel, { maxDepth: 4 }, { timeoutMs: 30000 });
+    const header = region && (region.children || []).find((n) => (n.attrs || {}).class === 'saas-picker-header');
+    const view = header && (header.children || []).find((n) => (n.attrs || {}).class === 'saas-picker-header-view');
+    const labels = view && (view.children || []).map((n) => n.text).join(' ');
+    const match = labels && labels.match(/(\d{4})年\s*(\d{1,2})月/);
+    if (!match) return { ok: false, reason: '无法验证日历当前月份' };
+    const current = Number(match[1]) * 12 + Number(match[2]);
+    const wanted = Number(iso.slice(0, 4)) * 12 + Number(iso.slice(5, 7));
+    if (current === wanted) return { ok: false, reason: `目标日期不可选择：${iso}` };
+    const cls = current > wanted ? 'saas-picker-header-prev-btn' : 'saas-picker-header-next-btn';
+    const button = (header.children || []).find((n) => n.tag === 'button' && (n.attrs || {}).class === cls);
+    if (!button) return { ok: false, reason: '未找到已验证的月份切换按钮' };
+    const control = await client.inspect(`${panel} > div.saas-picker-header > button.${cls}`, {}, { timeoutMs: 30000 });
+    if (!control || !control.visible || !control.enabled || !control.rect) return { ok: false, reason: '月份切换按钮不可用' };
+    await client.mouse({ action: 'click', x: control.rect.x + Math.round(control.rect.w / 2), y: control.rect.y + Math.round(control.rect.h / 2), settleMs: 500 }, { timeoutMs: 30000 });
+  }
+}
+
 /**
  * @param {object} p
  *   client       —— 需提供 mouse/click/picker/press
@@ -35,6 +63,9 @@ async function setDateRangeExact({ client, readDates, startSelector, targetInput
   const clicks = [];
   let reopenedAt = null;
   for (let i = 0; i < maxCellClicks; i += 1) {
+    // 开始日选定后，控件可能自动转到旧结束日所在月份；仍在同一面板内切回来。
+    const revealed = await revealDate(client, iso);
+    if (!revealed.ok) return { ...revealed, values_after: (await readDates()).values, clicks, reopened_at: reopenedAt };
     const pk = await client.picker({ maxCells: 80 }, { timeoutMs: 60000 });
     const cells = (pk && pk.best && pk.best.cells) || [];
     const cell = cells.find((c) => c.date === iso);
@@ -76,4 +107,4 @@ async function captureScreenshot({ flow, ctx, nn, step, sink }) {
   }
 }
 
-module.exports = { setDateRangeExact, captureScreenshot, sameBoth };
+module.exports = { setDateRangeExact, captureScreenshot, sameBoth, revealDate };
