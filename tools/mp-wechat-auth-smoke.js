@@ -48,6 +48,7 @@ const express = require('express');
     const call = async (url, token = approved.token) => fetch(base + url, { headers: { Authorization: `Bearer ${token}` } });
     assert.equal((await call('/revenue?store_id=10')).status, 403);
     assert.equal((await call('/collab/issues')).status, 403);
+    assert.equal((await call('/bookkeeping/options')).status, 403);
     assert.deepEqual((await (await call('/stores')).json()).stores.map(s => s.id), [9]);
     db.run('UPDATE users SET store_id=10 WHERE id=1');
     assert.deepEqual((await (await call('/stores')).json()).stores.map(s => s.id), [10]);

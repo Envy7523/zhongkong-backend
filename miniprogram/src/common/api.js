@@ -27,6 +27,8 @@ export const api = {
   applyWechat: (data) => request({ url: '/api/mp/auth/wechat/apply', method: 'POST', data, auth: false }),
 
   me: () => request({ url: '/api/mp/me' }),
+  bookkeepingOptions: () => request({ url: '/api/mp/bookkeeping/options' }),
+  bookkeepingList: params => request({ url: '/api/mp/bookkeeping/entries' + qs(params) }),
 
   // ---------- 协同事项 ----------
   issueList: (params) => request({ url: '/api/mp/collab/issues' + qs(params) }),

@@ -170,7 +170,7 @@ async function wechatLogin() {
     }
     saveSession(res.token, res.user)
     bindingTicket.value = ''
-    uni.reLaunch({ url: '/pages/collab/list' })
+    uni.reLaunch({ url: '/pages/home/index' })
   } catch (e) {
     uni.showModal({ title: '微信登录失败', content: e.message || e.errMsg || '请稍后重试', showCancel: false })
   } finally { loading.value = false }
@@ -204,7 +204,7 @@ async function doLogin() {
     saveSession(res.token, res.user)
     serverIssue.value = ''
     uni.showToast({ title: '登录成功', icon: 'success' })
-    setTimeout(() => uni.reLaunch({ url: '/pages/collab/list' }), 300)
+    setTimeout(() => uni.reLaunch({ url: '/pages/home/index' }), 300)
   } catch (e) {
     // 连接类错误（而不是账号密码错误）时，直接摆到横幅上，避免用户以为是密码问题
     if (/连不上|服务端未响应|云通道|域名|超时|timeout/i.test(e.message || '')) {
@@ -226,7 +226,7 @@ function wxworkLogin() {
       try {
         const r = await api.loginWxwork(res.code)
         saveSession(r.token, r.user)
-        uni.reLaunch({ url: '/pages/collab/list' })
+        uni.reLaunch({ url: '/pages/home/index' })
       } catch (e) { /* 已提示 */ }
     },
     fail: () => uni.showToast({ title: '企业微信免登失败，请用账号密码登录', icon: 'none' }),

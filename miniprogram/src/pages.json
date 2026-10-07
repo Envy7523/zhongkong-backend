@@ -1,6 +1,13 @@
 {
   "pages": [
     {
+      "path": "pages/home/index",
+      "style": {
+        "navigationBarTitleText": "工作台",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
       "path": "pages/collab/list",
       "style": {
         "navigationBarTitleText": "协同事项",
@@ -34,6 +41,13 @@
         "navigationBarTitleText": "登录",
         "navigationStyle": "custom"
       }
+    },
+    {
+      "path": "pages/bookkeeping/index",
+      "style": {
+        "navigationBarTitleText": "记账本",
+        "enablePullDownRefresh": true
+      }
     }
   ],
   "globalStyle": {
@@ -41,5 +55,37 @@
     "navigationBarTitleText": "鹅太公中控",
     "navigationBarBackgroundColor": "#FFFFFF",
     "backgroundColor": "#F5F6F8"
+  },
+  "tabBar": {
+    "color": "#66726b",
+    "selectedColor": "#d94f2b",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/home/index",
+        "text": "工作台",
+        "iconPath": "static/nav/home.png",
+        "selectedIconPath": "static/nav/home-on.png"
+      },
+      {
+        "pagePath": "pages/collab/list",
+        "text": "协同",
+        "iconPath": "static/nav/collab.png",
+        "selectedIconPath": "static/nav/collab-on.png"
+      },
+      {
+        "pagePath": "pages/revenue/index",
+        "text": "门店数据",
+        "iconPath": "static/nav/revenue.png",
+        "selectedIconPath": "static/nav/revenue-on.png"
+      },
+      {
+        "pagePath": "pages/bookkeeping/index",
+        "text": "记账本",
+        "iconPath": "static/nav/ledger.png",
+        "selectedIconPath": "static/nav/ledger-on.png"
+      }
+    ]
   }
 }

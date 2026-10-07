@@ -4,18 +4,6 @@
       <text class="mp-muted">{{ currentUser?.display_name || currentUser?.username || '当前账号' }}</text>
       <button class="logout-btn" @tap="logout">退出登录</button>
     </view>
-    <!-- 营业数据入口 -->
-    <view v-if="canAnalysis" class="entry" @tap="goRevenue">
-      <view class="entry-left">
-        <text class="entry-icon">📊</text>
-        <view>
-          <view class="entry-title">门店营业数据</view>
-          <view class="entry-sub">选择门店与日期，查看营业额与渠道构成</view>
-        </view>
-      </view>
-      <text class="entry-arrow">›</text>
-    </view>
-
     <view v-if="canCollab">
     <!-- 顶部统计 -->
     <view class="stats">
@@ -253,7 +241,7 @@ function goCreate() {
 }
 
 function goRevenue() {
-  uni.navigateTo({ url: '/pages/revenue/index' })
+  uni.switchTab({ url: '/pages/revenue/index' })
 }
 </script>
 
