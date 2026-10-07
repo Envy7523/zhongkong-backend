@@ -2419,6 +2419,8 @@ function formatPayrollRow(input = {}, scheduledDays = 26) {
   row.scheduled_days = payrollNumber(row.scheduled_days);
   row.payroll_base_days = payrollNumber(row.payroll_base_days) || payrollNumber(scheduledDays) || 26;
   row.actual_days = Math.max(0, row.scheduled_days - row.personal_leave - row.sick_leave - row.join_leave - row.dispatch_out_days + row.support_days + row.annual_leave);
+  const adjusted = (key,value) => Object.hasOwn(row.salary_overrides || {},key) ? payrollNumber(row.salary_overrides[key]) : value;
+  row.actual_days = adjusted('actual_days',row.actual_days);
   row.standard_salary = row.hire_type === '兼职' ? row.part_time_hourly_rate : row.base_salary + row.position_allowance + row.performance_salary + row.attendance_bonus + row.housing_allowance;
   const ratio = row.hire_type === '兼职' ? 0 : row.actual_days / row.payroll_base_days;
   row.actual_base_salary = row.base_salary * ratio;
@@ -2427,7 +2429,10 @@ function formatPayrollRow(input = {}, scheduledDays = 26) {
   row.actual_attendance_bonus = row.attendance_bonus * ratio;
   row.actual_housing_allowance = row.housing_allowance * ratio;
   row.part_time_salary = row.part_time_hours * row.part_time_hourly_rate;
-  row.gross_salary = row.actual_base_salary + row.actual_position_allowance + row.actual_performance_salary + row.actual_attendance_bonus + row.actual_housing_allowance + row.weekday_overtime_hours * row.weekday_overtime_rate + row.restday_overtime_hours * row.restday_overtime_rate + row.part_time_salary + row.reward - row.penalty - row.late_early_deduction - row.other_deduction;
+  for (const key of ['actual_base_salary','actual_position_allowance','actual_performance_salary','actual_attendance_bonus','actual_housing_allowance','part_time_salary']) row[key]=adjusted(key,row[key]);
+  row.weekday_overtime_pay=adjusted('weekday_overtime_pay',row.weekday_overtime_hours * row.weekday_overtime_rate);
+  row.restday_overtime_pay=adjusted('restday_overtime_pay',row.restday_overtime_hours * row.restday_overtime_rate);
+  row.gross_salary = row.actual_base_salary + row.actual_position_allowance + row.actual_performance_salary + row.actual_attendance_bonus + row.actual_housing_allowance + row.weekday_overtime_pay + row.restday_overtime_pay + row.part_time_salary + row.reward - row.penalty - row.late_early_deduction - row.other_deduction;
   row.net_salary = row.gross_salary - row.social_insurance - row.income_tax - row.utilities_fee - row.uniform_deposit;
   return row;
 }
@@ -2479,8 +2484,13 @@ function payrollWorkbook(sheet) {
   const headers = ['序号','姓名','职务','入职日期','用工类型','应出勤','事假','病假','入/离职缺勤','派出天数','跨店支援','年假','实际出勤','工作日加班','休息日加班','基本工资','岗位补贴','绩效工资','全勤奖','房补','标准工资','兼职小时','统一时薪','兼职工资','奖励','罚款','迟到早退','其他扣款','应发工资','社保','个税','水电','工衣押金','实发工资','银行卡号','开户行','身份证号','手机号'];
   const rows = [[`${sheet.store_name} ${sheet.period} 工资表 · ${sheet.export_label || sheet.status}`], headers];
   sheet.items.forEach((row, index) => rows.push([index + 1,row.name,row.position,row.entry_date,row.hire_type,row.scheduled_days,row.personal_leave,row.sick_leave,row.join_leave,row.dispatch_out_days,row.support_days,row.annual_leave,row.actual_days,row.weekday_overtime_hours,row.restday_overtime_hours,row.base_salary,row.position_allowance,row.performance_salary,row.attendance_bonus,row.housing_allowance,row.standard_salary,row.part_time_hours,row.part_time_hourly_rate,row.part_time_salary,row.reward,row.penalty,row.late_early_deduction,row.other_deduction,row.gross_salary,row.social_insurance,row.income_tax,row.utilities_fee,row.uniform_deposit,row.net_salary,row.bank_card_number,row.bank_name,row.id_card_number,row.phone]));
+  // 实际工资允许手工调整，导出同时保留标准薪酬和实际承担金额。
+  const actualHeaders=['实际基本工资','实际岗位补贴','实际绩效工资','实际全勤奖','实际房补','工作日加班工资','休息日加班工资'];
+  const actualFields=['actual_base_salary','actual_position_allowance','actual_performance_salary','actual_attendance_bonus','actual_housing_allowance','weekday_overtime_pay','restday_overtime_pay'];
+  headers.push(...actualHeaders);
+  for(let index=0;index<sheet.items.length;index++) rows[index+2].push(...actualFields.map(key=>sheet.items[index][key]));
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!merges'] = [{ s:{ r:0,c:0 }, e:{ r:0,c:headers.length - 1 } }]; ws['!cols'] = headers.map((header, index) => ({ wch: index === 1 || index >= 33 ? 18 : 12 })); ws['!autofilter'] = { ref: `A2:AK${Math.max(2, rows.length)}` };
+  ws['!merges'] = [{ s:{ r:0,c:0 }, e:{ r:0,c:headers.length - 1 } }]; ws['!cols'] = headers.map((header, index) => ({ wch: index === 1 || index >= 33 ? 18 : 12 })); ws['!autofilter'] = { ref: `A2:${XLSX.utils.encode_col(headers.length-1)}${Math.max(2, rows.length)}` };
   ws.A1.s = { font: { bold:true, sz:16, color:{ rgb:'25476F' } }, alignment:{ horizontal:'center' } };
   for (let col = 0; col < headers.length; col++) { const cell = ws[XLSX.utils.encode_cell({r:1,c:col})]; cell.s = { fill:{fgColor:{rgb:'315D93'}},font:{color:{rgb:'FFFFFF'},bold:true},alignment:{horizontal:'center',vertical:'center',wrapText:true} }; }
   const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, ws, '工资表'); workbook.Workbook = { CalcPr:{fullCalcOnLoad:true,forceFullCalc:true,calcMode:'auto'} }; return workbook;

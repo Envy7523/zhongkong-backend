@@ -75,15 +75,57 @@ test('被支援店店长制作、保存、提交合法支援工资，原店工�
   b=(await api(`/api/payroll-sheets/${b.id}/submit`,'POST',{version:b.version},4)).data.sheet;assert.equal(b.status,'待审核');assert.equal((await api(`/api/payroll-sheets/${b.id}/review`,'POST',{version:b.version,action:'approve'},4)).status,403);
   assert.equal((await api(`/api/payroll-sheets/${b.id}/review`,'POST',{version:b.version,action:'approve'},3)).status,200);
 }));
-test('店长不能伪造支援日期、天数、工资归属、标准工资及支援计薪出勤',()=>check(async({db,api})=>{
+test('店长不能伪造支援日期、工资归属、月度基线或标准工资',()=>check(async({db,api})=>{
   db.run("INSERT INTO employee_store_dispatches VALUES(1,'有效',1,1,2,'A店','continuous','','2026-09-10','2026-09-11')");
   const b=(await prepare(api,'B店',4)).data.sheet,before=db.queryAll('SELECT * FROM payroll_sheet_items WHERE sheet_id=?',[b.id]);
-  for(const [key,value] of [['support_days',9],['dispatch_dates',['2026-09-12']],['is_dispatch_support',false],['dispatch_origin_store_name','C店'],['scheduled_days',25],['base_salary',1],['annual_leave',1],['personal_leave',1]]){
+  for(const [key,value] of [['dispatch_dates',['2026-09-12']],['is_dispatch_support',false],['dispatch_origin_store_name','C店'],['scheduled_days',25],['base_salary',1]]){
     const items=structuredClone(b.items);items.find(r=>r.employee_id===1)[key]=value;assert.equal((await api(`/api/payroll-sheets/${b.id}`,'PUT',{version:b.version,items},4)).status,403);
     assert.deepEqual(db.queryAll('SELECT * FROM payroll_sheet_items WHERE sheet_id=?',[b.id]),before);
   }
   db.run("UPDATE employee_store_dispatches SET status='已取消' WHERE id=1");assert.equal((await api(`/api/payroll-sheets/${b.id}`,'GET',undefined,4)).status,403);assert.equal((await api(`/api/payroll-sheets/${b.id}/submit`,'POST',{version:b.version},4)).status,403);
 }));
+test('店长可编辑支援出勤和实际工资，标准薪酬与原店工资保持不变',()=>check(async({db,api})=>{
+  db.run("INSERT INTO employee_store_dispatches VALUES(1,'有效',1,1,2,'A店','continuous','','2026-09-10','2026-09-11')");
+  const a=(await prepare(api)).data.sheet;const original=db.queryAll('SELECT * FROM payroll_sheet_items WHERE sheet_id=?',[a.id]);
+  let b=(await prepare(api,'B店',4)).data.sheet;
+  const row=b.items.find(r=>r.employee_id===1);row.support_days=3;row.dispatch_out_days=1;row.personal_leave=0.5;row.annual_leave=1;row.weekday_overtime_hours=4;row.reward=50;
+  row.salary_overrides={actual_days:2.5,actual_base_salary:700,actual_position_allowance:20,actual_performance_salary:30,actual_attendance_bonus:40,actual_housing_allowance:50,weekday_overtime_pay:60,restday_overtime_pay:70,part_time_salary:80};
+  let result=await api(`/api/payroll-sheets/${b.id}`,'PUT',{version:b.version,items:b.items},4);assert.equal(result.status,200);b=result.data.sheet;
+  const edited=b.items.find(r=>r.employee_id===1);assert.equal(edited.actual_days,2.5);assert.equal(edited.gross_salary,1100);assert.equal(edited.base_salary,6500);
+  assert.equal((await api(`/api/payroll-sheets/${b.id}`,'GET',undefined,4)).status,200);
+  const exported=await api(`/api/payroll-sheets/${b.id}/export?draft=1`,'GET',undefined,4);assert.equal(exported.status,200);
+  const table=XLSX.utils.sheet_to_json(XLSX.read(exported.data,{type:'buffer'}).Sheets['工资表'],{header:1});const exportedRow=table.slice(2).find(r=>r[1]==='A员工');
+  assert.equal(exportedRow[table[1].indexOf('实际基本工资')],700);assert.equal(exportedRow[table[1].indexOf('工作日加班工资')],60);assert.equal(exportedRow[table[1].indexOf('应发工资')],1100);
+  const payslip=(await api('/api/employee-payslips/2026-09?view=all','GET',undefined,2)).data.employees.find(e=>e.employee_id===1);assert.equal(payslip.contributions.find(c=>c.store_id===2).weekday_overtime_pay,60);
+  assert.deepEqual(db.queryAll('SELECT * FROM payroll_sheet_items WHERE sheet_id=?',[a.id]),original);
+  assert.equal((await api(`/api/payroll-sheets/${b.id}/submit`,'POST',{version:b.version},4)).status,200);
+}));
+
+test('店长和普通制表人员不可修改代扣，高权限填写后店长可原样保存',()=>check(async({db,api})=>{
+  let sheet=(await prepare(api)).data.sheet;assert.equal(sheet.can_edit_deductions,false);
+  for(const key of ['social_insurance','income_tax','utilities_fee','uniform_deposit']) {
+    const items=structuredClone(sheet.items);items[0][key]=99;
+    assert.equal((await api(`/api/payroll-sheets/${sheet.id}`,'PUT',{version:sheet.version,items})).status,403);
+    assert.equal((await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items:items.map(r=>({id:r.id,employee_id:r.employee_id,[key]:99}))})).status,403);
+  }
+  assert.equal((await api(`/api/payroll-sheets/${sheet.id}`,'GET',undefined,7)).data.sheet.can_edit_deductions,false);
+  const result=await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items:sheet.items.map(r=>({id:r.id,employee_id:r.employee_id,social_insurance:100,income_tax:20,utilities_fee:30,uniform_deposit:40}))},2);assert.equal(result.status,200);
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}`)).data.sheet;sheet.items[0].reward=50;
+  const saved=await api(`/api/payroll-sheets/${sheet.id}`,'PUT',{version:sheet.version,items:sheet.items});assert.equal(saved.status,200);assert.equal(saved.data.sheet.items[0].net_salary,6360);
+  assert.equal(db.queryOne('SELECT COUNT(*) n FROM payroll_sheet_events WHERE action=?',['填写代扣代缴']).n,1);
+}));
+
+test('上级可在待审核弹窗填写代扣，版本冲突及已审核禁止修改',()=>check(async({api})=>{
+  let sheet=(await prepare(api)).data.sheet;sheet=(await api(`/api/payroll-sheets/${sheet.id}/submit`,'POST',{version:sheet.version})).data.sheet;
+  const detail=(await api(`/api/payroll-review/2026-09/sheets/${sheet.id}`,'GET',undefined,3)).data.sheet;assert.equal(detail.can_edit,false);assert.equal(detail.can_edit_deductions,true);
+  const items=sheet.items.map(r=>({id:r.id,employee_id:r.employee_id,income_tax:80}));
+  assert.equal((await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items:items.map(r=>({...r,reward:1}))},3)).status,403);
+  const saved=await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items},3);assert.equal(saved.status,200);assert.equal(saved.data.sheet.status,'待审核');assert.equal(saved.data.sheet.items[0].net_salary,6420);
+  assert.equal((await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items},3)).status,409);
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{version:saved.data.sheet.version,action:'approve'},3)).data.sheet;assert.equal(sheet.can_edit_deductions,false);
+  assert.equal((await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items},3)).status,403);
+}));
+
 test('账号岗位绑定要求有效门店，管理员可不绑定',()=>check(async({db})=>{assert.throws(()=>workflow.userStoreBinding(db,1,null),/必须绑定/);assert.throws(()=>workflow.userStoreBinding(db,1,999),/有效门店/);assert.equal(workflow.userStoreBinding(db,1,2),2);assert.equal(workflow.userStoreBinding(db,4,null),null);}));
 test('月末入职员工纳入本月工资，不因UTC日期换算漏人',()=>check(async({db,api})=>{db.insert("INSERT INTO employees(store_id,store_name,name,hire_type,entry_date,salary) VALUES(1,'A店','月末新人','全职','2026-09-30',5000)");assert.equal((await prepare(api)).data.sheet.items.length,2);}));
 

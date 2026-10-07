@@ -401,6 +401,7 @@ export const getPayrollSheets = (view) => http.get('/api/payroll-sheets', { para
 export const preparePayrollSheet = (data) => http.post('/api/payroll-sheets/prepare', data)
 export const getPayrollSheet = (id) => http.get(`/api/payroll-sheets/${id}`)
 export const savePayrollSheet = (id, data) => http.put(`/api/payroll-sheets/${id}`, data)
+export const savePayrollDeductions = (id, data) => http.put(`/api/payroll-sheets/${id}/deductions`, data)
 export const exportPayrollSheet = (id, draft = false) => http.get(`/api/payroll-sheets/${id}/export`, { params: { draft: draft ? '1' : undefined }, responseType: 'blob', timeout: 120000 })
 export const getDingTalkAttendanceStatus = () => http.get('/api/staff/dingtalk/status')
 export const syncDingTalkAttendance = (data) => http.post('/api/staff/dingtalk/sync', data)
