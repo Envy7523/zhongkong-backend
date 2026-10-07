@@ -130,10 +130,10 @@
           </el-form-item>
         </div>
         <el-form-item label="岗位" required>
-          <el-select v-model="profileForm.position_id" placeholder="请选择岗位" style="width:100%;">
+          <el-select v-model="profileForm.position_ids" multiple collapse-tags collapse-tags-tooltip placeholder="可选择多个岗位" style="width:100%;">
             <el-option v-for="position in positions" :key="position.id" :label="`${position.name} · ${position.permissions?.includes('*') ? '全部权限' : `${position.permissions?.length || 0} 项权限`}`" :value="position.id" />
           </el-select>
-          <div class="position-form-hint">岗位即该成员的系统角色与权限来源，在“系统管理 → 岗位设置”统一维护。</div>
+          <div class="position-form-hint">岗位即该成员的系统角色与权限来源，可多选，权限合并；在“系统管理 → 岗位设置”统一维护。</div>
         </el-form-item>
         <el-form-item label="绑定门店" :required="requiresStore"><el-select v-model="profileForm.store_id" filterable clearable placeholder="选择账号所属门店" style="width:100%"><el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" /></el-select><div class="position-form-hint">使用“店长（员工与工资）”岗位时必填；店长只能访问绑定门店。</div></el-form-item>
         <div class="form-grid form-grid-single">
@@ -223,7 +223,7 @@ const auth = useAuthStore()
 const users = ref([])
 const positions = ref([])
 const stores = ref([])
-const requiresStore = computed(() => {const permissions=positions.value.find(position=>position.id===profileForm.position_id)?.permissions || [];return permissions.includes('staff.store.edit') && !permissions.includes('*')})
+const requiresStore = computed(() => {const permissions=positions.value.filter(position=>profileForm.position_ids.includes(position.id)).flatMap(position=>position.permissions || []);return permissions.includes('staff.store.edit') && !permissions.includes('*')})
 const keyword = ref('')
 const loading = ref(false)
 const saving = ref(false)
@@ -240,7 +240,7 @@ const emptyProfile = () => ({
   username: '',
   display_name: '',
   phone: '',
-  position_id: null,
+  position_ids: [],
   store_id: null,
   password: '',
   confirmPassword: '',
@@ -310,7 +310,7 @@ function openEditDialog(user) {
     username: user.username,
     display_name: user.display_name || '',
     phone: user.phone || '',
-    position_id: user.position_id ?? null,
+    position_ids: user.position_ids || (user.position_id?[user.position_id]:[]),
     store_id: user.store_id ?? null,
   })
   profileDialogVisible.value = true
@@ -337,7 +337,7 @@ async function saveProfile() {
     ElMessage.warning('请输入正确的手机号')
     return
   }
-  if (!profileForm.position_id) {
+  if (!profileForm.position_ids.length) {
     ElMessage.warning('请为成员选择岗位')
     return
   }
@@ -359,7 +359,7 @@ async function saveProfile() {
       username,
       display_name: displayName,
       phone,
-      position_id: profileForm.position_id,
+      position_ids: profileForm.position_ids,
       store_id: profileForm.store_id,
     }
     if (profileMode.value === 'create') {

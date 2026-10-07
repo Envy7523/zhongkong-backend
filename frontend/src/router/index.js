@@ -382,8 +382,8 @@ router.beforeEach((to, from, next) => {
   // 权限以服务端岗位表为准，每次导航都取最新，避免旧缓存让已改权限的账号继续放行。
   getMe().then(res => {
     const permissions = res?.user?.position_permissions || []
-    if (to.path === '/dashboard' && !permissions.includes('*') && permissions.includes('staff.store.edit')) return next('/staff-management/employees')
-    if (to.name === 'staff-management-payslips' && !permissions.includes('*') && permissions.includes('staff.store.edit')) { ElMessage.warning('跨店工资查询仅开放给人事及上级'); return next('/staff-management/salary') }
+    if (to.path === '/dashboard' && !permissions.some(p=>['*','staff.view','payroll.attendance','payroll.review'].includes(p)) && permissions.includes('staff.store.edit')) return next('/staff-management/employees')
+    if (to.name === 'staff-management-payslips' && !permissions.some(p=>['*','staff.view','payroll.attendance','payroll.review'].includes(p)) && permissions.includes('staff.store.edit')) { ElMessage.warning('跨店工资查询仅开放给人事及上级'); return next('/staff-management/salary') }
     const allowed = permissions.includes('*') || (Array.isArray(required) ? required.some(code => permissions.includes(code)) : permissions.includes(required))
     if (allowed) return next()
     if (to.path === '/dashboard') return next() // 无任何权限时仍允许落到首页，避免死循环

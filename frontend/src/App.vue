@@ -333,7 +333,7 @@ import { NAV_GROUP_PERMISSIONS, NAV_ITEM_PERMISSIONS } from '@/permissions'
 const canSeePopupItem = item => {
   if (item.index === 'staff-management-roster') return auth.canAny(['staff.store.edit','payroll.attendance'])
   if (item.index === 'staff-management-attendance') return auth.can('payroll.attendance')
-  if (item.index === 'staff-management-payslips') return (auth.isAdmin || !auth.permissions.includes('staff.store.edit')) && auth.canAny(['staff.view','payroll.view','payroll.prepare','payroll.attendance','payroll.review'])
+  if (item.index === 'staff-management-payslips') return (auth.isAdmin || auth.canAny(['staff.view','payroll.attendance','payroll.review']) || !auth.permissions.includes('staff.store.edit')) && auth.canAny(['staff.view','payroll.view','payroll.prepare','payroll.attendance','payroll.review'])
   if (item.index === 'staff-management-review') return auth.can('payroll.review')
   if (item.index === 'staff-management-employees') return auth.canAny(['staff.view', 'staff.store.edit'])
   if (item.index === 'staff-management-salary') return auth.canAny(['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'])

@@ -32,7 +32,7 @@ async function fixture(monthNow=()=> '2026-09') {
   const source=fs.readFileSync(require.resolve('../server.js'),'utf8');
   const dispatchSource=source.slice(source.indexOf('function localDateString'),source.indexOf('function lifecycleDate'))+source.slice(source.indexOf('function normalizeAttendanceDate'),source.indexOf('function splitIntoChunks'))+source.slice(source.indexOf('function dispatchDates'),source.indexOf('// 跨店支援不变更'));
   const dispatchPresentation=new Function(dispatchSource+';return dispatchPresentation;')();
-  const helpers=new Function('db','XLSX','isGroupAffiliation','dispatchPresentation',source.slice(source.indexOf('const PAYROLL_EDITABLE_NUMBERS'),source.indexOf('payrollWorkflow.mount({'))+';return {readPayrollSheet,payrollTemplateRows,formatPayrollRow,payrollWorkbook};')(db,XLSX,isGroupAffiliation,dispatchPresentation);
+  const helpers=new Function('db','XLSX','isGroupAffiliation','dispatchPresentation','staffSupervisor',source.slice(source.indexOf('const PAYROLL_EDITABLE_NUMBERS'),source.indexOf('payrollWorkflow.mount({'))+';return {readPayrollSheet,payrollTemplateRows,formatPayrollRow,payrollWorkbook};')(db,XLSX,isGroupAffiliation,dispatchPresentation,require('../lib/staff-supervisor'));
   workflow.initialize(db);
   const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={id:Number(req.headers['x-fixture-user'] || ({'Bearer qa-hr':2,'Bearer qa-reviewer':3}[req.headers.authorization]) || 1)};next();});app.use(workflow.scopeGuard(db));
   workflow.mount({app,db,XLSX,monthNow,...helpers});storeStaff.mount({app,db,validateStaffFields:()=>null});
@@ -241,4 +241,28 @@ test('门店只维护天数，不接受统一排休日历；办公室可登记�
   db.run("INSERT INTO payroll_attendance_settings(period,staff_group,scheduled_days,version,calendar_json) VALUES('2026-10','store',22,1,?)",[JSON.stringify(calendar('2026-10'))]);
   const result=await api('/api/payroll-month-settings/2026-10','PUT',{staff_group:'store',scheduled_days:25,version:1,calendar:[]},2);assert.equal(result.status,200);assert.deepEqual(result.data.setting.calendar,[]);assert.equal(result.data.setting.scheduled_days,25);
   const rest=calendar('2026-10').map(day=>({...day,type:'rest'}));const office=await api('/api/payroll-month-settings/2026-10','PUT',{staff_group:'group',scheduled_days:0,version:0,calendar:rest},2);assert.equal(office.status,200);assert.equal(office.data.setting.scheduled_days,0);
+}));
+
+
+test('多岗位权限并集合并，撤销即时生效；店长与人事组合使用集团范围',()=>check(async({db})=>{
+ db.run('ALTER TABLE position_settings ADD COLUMN name TEXT');
+ const roles=require('../lib/user-positions');roles.initialize(db);
+ roles.assign(db,1,[{id:1},{id:2}]);
+ let actor=workflow.actorFor(db,{user:{id:1}});assert(actor.canPrepare && actor.canAttendance && !actor.ownOnly && !actor.canReview);
+ db.run("UPDATE position_settings SET permissions_json='[]' WHERE id=2");
+ actor=workflow.actorFor(db,{user:{id:1}});assert(actor.ownOnly && !actor.canAttendance);
+ roles.assign(db,1,[{id:2}]);assert.equal(workflow.actorFor(db,{user:{id:1}}).canPrepare,false);
+}));
+
+test('集团督导工资归集团，兼任门店仅展示零工资；伪造金额和取消标记均拒绝',()=>check(async({db,api,helpers})=>{
+ const supervisor=require('../lib/staff-supervisor');supervisor.initialize(db);supervisor.save(db,3,1);
+ const groupRows=helpers.payrollTemplateRows('永文总公司','2026-09',26);assert.equal(groupRows.length,1);assert(groupRows[0].gross_salary>0);
+ const storeRows=helpers.payrollTemplateRows('A店','2026-09',25),zero=storeRows.find(r=>r.employee_id===3);assert(zero.supervisor_display_only);assert.equal(zero.gross_salary,0);assert.equal(zero.net_salary,0);
+ const sheet=(await prepare(api)).data.sheet;assert(sheet);assert.equal(sheet.items.find(r=>r.employee_id===3).gross_salary,0);
+ assert.equal((await api('/api/payroll-sheets/'+sheet.id)).status,200);
+ for(const change of [r=>r.reward=100,r=>r.salary_overrides={actual_base_salary:100},r=>r.supervisor_display_only=false]){
+  const items=structuredClone(sheet.items);change(items.find(r=>r.employee_id===3));assert.equal((await api('/api/payroll-sheets/'+sheet.id,'PUT',{version:sheet.version,items})).status,403);
+ }
+ assert.equal((await api('/api/payroll-sheets/'+sheet.id,'PUT',{version:sheet.version,items:sheet.items})).status,200);
+ assert.equal(helpers.formatPayrollRow({...zero,reward:999,salary_overrides:{actual_base_salary:100}}).gross_salary,0);
 }));

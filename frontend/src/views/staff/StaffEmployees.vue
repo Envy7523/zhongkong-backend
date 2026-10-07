@@ -145,7 +145,7 @@
           </el-form></section>
         </el-tab-pane>
         <el-tab-pane name="C"><template #label><span class="level-label level-c"><b>3</b><span>人员调整<small>集团内任用与状态调整</small></span></span></template>
-          <section class="profile-section personnel-section"><el-alert title="调整归属、岗位、职级、离职、健康证或工资时需要说明原因；岗位、转正和离职变更需上传对应材料。" type="info" :closable="false" show-icon style="margin-bottom:16px" /><div class="change-attachment"><div><b>调整材料</b><small>岗位、转正时间、离职时间各自独立留档；变更对应字段时必须上传其材料。</small></div></div><el-form label-position="top"><el-row :gutter="16"><el-col :span="8"><el-form-item label="归属门店 / 集团" required><StoreRegionSelect v-model="editAffiliation" :stores="stores" show-group :clearable="false" placeholder="选择后台门店或集团" /></el-form-item></el-col><el-col :span="16"><el-form-item label="岗位（最多 5 个，选一个为主岗位）">
+          <section class="profile-section personnel-section"><el-alert title="调整归属、岗位、职级、离职、健康证或工资时需要说明原因；岗位、转正和离职变更需上传对应材料。" type="info" :closable="false" show-icon style="margin-bottom:16px" /><div class="change-attachment"><div><b>调整材料</b><small>岗位、转正时间、离职时间各自独立留档；变更对应字段时必须上传其材料。</small></div></div><el-form label-position="top"><el-row :gutter="16"><el-col :span="8"><el-form-item label="归属门店 / 集团" required><StoreRegionSelect v-model="editAffiliation" :stores="stores" show-group :clearable="false" placeholder="选择后台门店或集团" /></el-form-item></el-col><el-col v-if="isGroupEmployee && (editPositions.find(item=>item.is_primary)?.position || '').includes('督导')" :span="16"><el-form-item label="督导兼任门店（集团发薪，按此门店排班）"><StoreRegionSelect v-model="supervisorAffiliation" :stores="stores" clearable placeholder="选择兼任店长的门店" /></el-form-item></el-col><el-col :span="16"><el-form-item label="岗位（最多 5 个，选一个为主岗位）">
               <div class="multi-position">
               <div v-for="(row, index) in editPositions" :key="index" class="multi-position__row">
               <el-input v-if="isGroupEmployee" v-model="row.position" placeholder="填写集团岗位" />
@@ -261,6 +261,9 @@ const emptyForm = () => ({
 })
 const editForm = reactive(emptyForm())
 const editAffiliation = computed({ get: () => affiliationValue(editForm.store_name), set: value => { editForm.store_name = affiliationName(value) } })
+const supervisorStoreId = ref(null)
+const originalSupervisorStoreId = ref(null)
+const supervisorAffiliation = computed({get:()=>supervisorStoreId.value,set:value=>{supervisorStoreId.value=value?Number(value):null}})
 const isGroupEmployee = computed(() => GROUP_NAMES.includes(editForm.store_name))
 const derivedEmploymentStatus = computed(() => /^\d{4}-\d{2}-\d{2}$/.test(String(editForm.leave_date || '')) ? '离职' : '在职')
 const derivedOnboardingStatus = computed(() => {
@@ -378,6 +381,7 @@ function resetIdCardVerify() {
 }
 
 function openCreate() {
+  supervisorStoreId.value=null
   editingId.value = null
   Object.assign(editForm, emptyForm())
   Object.assign(salaryProfile, emptySalaryProfile())
@@ -391,6 +395,8 @@ function openCreate() {
 }
 
 async function openEdit(row) {
+  supervisorStoreId.value = row.supervisor_store_id || null
+  originalSupervisorStoreId.value = supervisorStoreId.value
   editingId.value = row.id
   resetIdCardVerify()
   // 多岗位：优先用列表返回的 positions；老数据没有时退回单岗位字段
@@ -614,7 +620,7 @@ async function saveEdit() {
   const missingAttachment = ['position', 'probation_date', 'leave_date'].filter(field => String(originalSensitiveValues.value[field] || '') !== String(editForm[field] || '') && !changeAttachments[field].url)
   if (attachmentRequired && missingAttachment.length) { ElMessage.warning(`请分别上传${missingAttachment.map(field => ({ position: '岗位', probation_date: '转正时间', leave_date: '离职时间' }[field])).join('、')}对应的材料`); return }
   let changeReason = ''
-  if (changedSensitive.length) {
+  if (changedSensitive.length || editingId.value && supervisorStoreId.value!==originalSupervisorStoreId.value) {
     try {
       const result = await ElMessageBox.prompt(`已调整：${changedSensitive.map(field => sensitiveLabels[field]).join('、')}。请填写调整原因，保存后将记入员工生命线。`, '填写调整原因', {
         inputType: 'textarea', inputPlaceholder: '请说明调整原因', inputValidator: value => String(value || '').trim() ? true : '调整原因不能为空',
@@ -632,6 +638,7 @@ async function saveEdit() {
       dingtalk_user_id: editForm.dingtalk_user_id || '',
       gender: editForm.gender || '',
       store_name: editForm.store_name || '',
+      supervisor_store_id: supervisorStoreId.value,
       change_reason: changeReason,
       change_attachments: changeAttachments,
 

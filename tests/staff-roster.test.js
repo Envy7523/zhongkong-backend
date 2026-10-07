@@ -111,3 +111,13 @@ test('周排班返回真实打卡摘要，启用之前月份和今天缺卡也�
  const old=await read(api,1,'2026-09-21'),summary=old.employees[0].days[1].attendance;assert.equal(summary.start_time,'2026-09-22 22:00');assert.equal(summary.end_time,'2026-09-23 06:00');assert.equal(summary.hours,8);
  const week=await read(api,1,'2026-10-05');assert.equal(week.employees.length,1);const today=week.employees[0].days[2].attendance;assert.equal(today.start_time,'2026-10-07 08:00');assert.equal(today.end_time,null);assert.equal(today.hours,null);assert.equal(today.incomplete,true);assert.equal(week.employees[0].days[3].attendance.punch_count,0);
 }));
+
+
+test('集团督导按兼任门店排班，不进入办公室；月额度使用门店设置',()=>check(async({api,db})=>{
+ const supervisor=require('../lib/staff-supervisor');supervisor.initialize(db);supervisor.save(db,3,1);
+ const week=await read(api);assert(week.employees.some(p=>p.employee_id===3));
+ assert(!(await read(api,2,'2026-10-12','office')).employees.some(p=>p.employee_id===3));
+ const balance=(await api('/api/staff-roster/employees/3/balance')).data;assert.equal(balance.account.months[0].normal_days,25);
+ assert.equal((await api('/api/staff-roster/employees/3/balance','GET',undefined,4)).status,404);
+ assert.equal(db.queryOne('SELECT store_name FROM employees WHERE id=3').store_name,'永文总公司');
+}));

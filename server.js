@@ -38,6 +38,8 @@ const posDailyPush = require('./lib/pos-daily-push');
 const wecomRouting = require('./lib/wecom-routing');
 const jwt = require('jsonwebtoken');
 
+const userPositions = require('./lib/user-positions');
+const staffSupervisor = require('./lib/staff-supervisor');
 const JWT_SECRET = 'etaigong-zhongkong-jwt-secret-2024';
 const JWT_EXPIRES = '24h';
 
@@ -114,8 +116,8 @@ app.use(payrollWorkflow.scopeGuard(db));
 // 岗位权限强制校验（只对 /api/* 且映射到权限码的接口生效，其余请求零开销）
 const positionGuard = positionPermissions.createGuard({
   // 每次都从库里取岗位权限，保证分配岗位或改权限后无需重新登录即可生效。
-  getUserById: id => db.queryOne(`SELECT u.id,u.username,u.position_id,p.permissions_json
-    FROM users u LEFT JOIN position_settings p ON p.id=u.position_id WHERE u.id=?`, [id]),
+  getUserById: id => userPositions.enrich(db,db.queryOne(`SELECT u.id,u.username,u.position_id,p.permissions_json
+    FROM users u LEFT JOIN position_settings p ON p.id=u.position_id WHERE u.id=?`, [id])),
   hasFullAccess: user => positionPermissions.normalizePermissions(user?.permissions_json).includes('*'),
 });
 app.use((req, res, next) => {
@@ -1724,7 +1726,7 @@ app.get('/api/staff', (req, res) => {
         bucket.push({ position: row.position, is_primary: Number(row.is_primary) === 1 });
         grouped.set(Number(row.employee_id), bucket);
       });
-      list.forEach(employee => { employee.positions = grouped.get(Number(employee.id)) || []; });
+      list.forEach(employee => { employee.positions = grouped.get(Number(employee.id)) || []; employee.supervisor_store_id=staffSupervisor.assignment(db,employee.id)?.store_id || null; });
     } else {
       list.forEach(employee => { employee.positions = []; });
     }
@@ -1744,7 +1746,7 @@ app.get('/api/staff/store-managers', (req, res) => {
       ORDER BY s.id`);
     // 门店员工的店长层级存放在岗位字段（如实习店长、二级店长、一级店长），仅这些在职员工可被绑定。
     const candidates = db.queryAll(`SELECT id, name, phone, position, job_level, store_name FROM employees
-      WHERE status='在职' AND TRIM(COALESCE(position,'')) LIKE '%店长%'
+      WHERE status='在职' AND (TRIM(COALESCE(position,'')) LIKE '%店长%' OR EXISTS(SELECT 1 FROM employee_positions ep WHERE ep.employee_id=employees.id AND ep.position LIKE '%店长%'))
       ORDER BY position COLLATE NOCASE, name COLLATE NOCASE, id`);
     res.json({ ok: true, stores, candidates });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1760,7 +1762,7 @@ app.put('/api/staff/store-managers/:storeId', (req, res) => {
       db.save();
       return res.json({ ok: true, manager: null });
     }
-    const employee = db.queryOne("SELECT id,name,phone,position,job_level FROM employees WHERE id=? AND status='在职' AND TRIM(COALESCE(position,'')) LIKE '%店长%'", [managerId]);
+    const employee = db.queryOne("SELECT id,name,phone,position,job_level FROM employees WHERE id=? AND status='在职' AND (TRIM(COALESCE(position,'')) LIKE '%店长%' OR EXISTS(SELECT 1 FROM employee_positions ep WHERE ep.employee_id=employees.id AND ep.position LIKE '%店长%'))", [managerId]);
     if (!employee) return res.status(400).json({ error: '店长只能从岗位为实习店长、一级店长、二级店长等店长层级的在职员工中选择' });
     db.run(`INSERT INTO store_manager_assignments (store_id,employee_id,updated_at) VALUES (?,?,datetime('now','localtime'))
       ON CONFLICT(store_id) DO UPDATE SET employee_id=excluded.employee_id,updated_at=excluded.updated_at`, [storeId, managerId]);
@@ -1798,6 +1800,7 @@ app.post('/api/staff', (req, res) => {
     const cleanStoreName = affiliation.store_name;
     const storeId = affiliation.store_id;
     const isGroupEmployee = isGroupAffiliation(cleanStoreName);
+    const supervisorStore=req.body.supervisor_store_id?staffSupervisor.validate(db,{store_name:cleanStoreName,position},req.body.supervisor_store_id,normalizePositionList(req.body.positions,position)):null;
     const calculatedAge = ageFromIdCard(id_card_number) || 0;
     const id = db.insert(
       `INSERT INTO employees (name,phone,gender,age,store_name,manager_name,onboarding_status,status,entry_date,position,job_level,role,hire_type,salary,probation_date,leave_date,id_card_number,id_card_front_url,id_card_back_url,bank_name,bank_branch,bank_account_name,bank_card_number,bank_card_front_url,bank_card_back_url,emergency_contact,emergency_phone,health_certificate_url,health_certificate_expiry,native_place,household_registration,contact_address,labor_relation,contract_start_date,contract_end_date,social_security_number,household_type,education_school,education_level,graduation_date,major,remark,store_id,smartsheet_record_id)
@@ -1808,6 +1811,7 @@ app.post('/api/staff', (req, res) => {
         String(id_card_number || '').trim(), String(id_card_front_url || '').trim(), String(id_card_back_url || '').trim(), String(bank_name || '').trim(), String(bank_branch || '').trim(), String(bank_account_name || '').trim(), String(bank_card_number || '').trim(), String(bank_card_front_url || '').trim(), String(bank_card_back_url || '').trim(), String(emergency_contact || '').trim(), String(emergency_phone || '').trim(), String(health_certificate_url || '').trim(), String(health_certificate_expiry || '').trim(), String(native_place || '').trim(), String(household_registration || '').trim(), String(contact_address || '').trim(), isGroupEmployee ? String(labor_relation || '').trim() : '', String(contract_start_date || '').trim(), String(contract_end_date || '').trim(), String(social_security_number || '').trim(), String(household_type || '').trim(), isGroupEmployee ? String(education_school || '').trim() : '', isGroupEmployee ? String(education_level || '').trim() : '', isGroupEmployee ? String(graduation_date || '').trim() : '', isGroupEmployee ? String(major || '').trim() : '', String(remark || '').trim(), storeId, '']
     );
     db.run('UPDATE employees SET photo_url=?,dingtalk_user_id=? WHERE id=?', [String(photo_url || '').trim(), String(dingtalk_user_id || '').trim(), id]);
+    if(supervisorStore!==null)staffSupervisor.save(db,id,supervisorStore);
     addEmployeeLifecycleEvent(id, '入职', entry_date, '', `${cleanName}${position ? ` · ${position}` : ''}`, '建立员工档案');
     db.save();
     const created = db.queryOne('SELECT * FROM employees WHERE id=?', [id]);
@@ -1981,6 +1985,10 @@ async function syncStaffToSmartsheet(employee, cfg) {
 app.put('/api/staff/:id', async (req, res) => {
   try {
     const before = db.queryOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
+    let supervisorStore;
+    if(req.body.supervisor_store_id!==undefined && Number(req.body.supervisor_store_id || 0)!==Number(staffSupervisor.assignment(db,before.id)?.store_id || 0) && !String(req.body.change_reason || '').trim())throw Error('请填写兼任门店调整原因');
+    if(req.body.supervisor_store_id!==undefined){supervisorStore=staffSupervisor.validate(db,{...before,...req.body},req.body.supervisor_store_id,normalizePositionList(req.body.positions || employeePositions(before.id),req.body.position || before.position));}
+    else if(staffSupervisor.assignment(db,before.id)){staffSupervisor.validate(db,{...before,...req.body},staffSupervisor.assignment(db,before.id).store_id,normalizePositionList(req.body.positions || employeePositions(before.id),req.body.position || before.position));}
     if (!before) return res.status(404).json({ error: '员工不存在' });
     if (req.body.store_name !== undefined) {
       const affiliation = require('./lib/staff-affiliation').resolveAffiliation(req.body.store_name, db.queryAll('SELECT id,store_name FROM stores'));
@@ -2031,6 +2039,7 @@ app.put('/api/staff/:id', async (req, res) => {
     params.push(req.params.id);
 
     db.run(`UPDATE employees SET ${sets.join(',')} WHERE id=?`, params);
+    if(supervisorStore!==undefined){const oldAssignment=staffSupervisor.assignment(db,Number(req.params.id));staffSupervisor.save(db,Number(req.params.id),supervisorStore);if(Number(oldAssignment?.store_id || 0)!==Number(supervisorStore || 0))addEmployeeLifecycleEvent(Number(req.params.id),'督导兼任门店调整',localDateString(),oldAssignment?.store_name || '',supervisorStore?db.queryOne('SELECT store_name FROM stores WHERE id=?',[supervisorStore]).store_name:'',String(req.body.change_reason || ''),staffAuditSource(req.user));}
     db.save();
 
     const updated = db.queryOne('SELECT * FROM employees WHERE id=?', [req.params.id]);
@@ -2436,12 +2445,13 @@ function formatPayrollRow(input = {}, scheduledDays = 26) {
   row.restday_overtime_pay=adjusted('restday_overtime_pay',row.restday_overtime_hours * row.restday_overtime_rate);
   row.gross_salary = row.actual_base_salary + row.actual_position_allowance + row.actual_performance_salary + row.actual_attendance_bonus + row.actual_housing_allowance + row.weekday_overtime_pay + row.restday_overtime_pay + row.part_time_salary + row.reward - row.penalty - row.late_early_deduction - row.other_deduction;
   row.net_salary = row.gross_salary - row.social_insurance - row.income_tax - row.utilities_fee - row.uniform_deposit;
+  if(row.supervisor_display_only){for(const field of [...PAYROLL_EDITABLE_NUMBERS,'standard_salary','actual_days','actual_base_salary','actual_position_allowance','actual_performance_salary','actual_attendance_bonus','actual_housing_allowance','part_time_salary','weekday_overtime_pay','restday_overtime_pay','gross_salary','net_salary'])row[field]=0;row.salary_overrides={};}
   return row;
 }
 function readPayrollSheet(sheet) {
   const items = db.queryAll('SELECT id,employee_id,sort_order,data FROM payroll_sheet_items WHERE sheet_id=? ORDER BY sort_order,id', [sheet.id]).map(item => {
     const data = JSON.parse(item.data || '{}');
-    return { ...formatPayrollRow({ ...data, scheduled_days: data.is_dispatch_support ? 0 : sheet.scheduled_days, payroll_base_days: sheet.scheduled_days }, sheet.scheduled_days), id: item.id, employee_id: item.employee_id, sort_order: item.sort_order };
+    return { ...formatPayrollRow({ ...data, scheduled_days: data.is_dispatch_support ? 0 : data.supervisor_group_payroll?data.scheduled_days:sheet.scheduled_days, payroll_base_days:data.supervisor_group_payroll?data.payroll_base_days:sheet.scheduled_days }, sheet.scheduled_days), id: item.id, employee_id: item.employee_id, sort_order: item.sort_order };
   });
   return { ...sheet, items };
 }
@@ -2471,7 +2481,8 @@ function payrollTemplateRows(storeName, period, scheduledDays) {
     base_salary: Number(employee.base_salary) || (employee.hire_type === '兼职' ? 0 : Number(employee.salary) || 0), position_allowance: employee.position_allowance, performance_salary: employee.performance_salary, attendance_bonus: employee.attendance_bonus, housing_allowance: employee.housing_allowance, weekday_overtime_rate: employee.weekday_overtime_rate, restday_overtime_rate: employee.restday_overtime_rate, part_time_hourly_rate: Number(employee.part_time_hourly_rate) || (employee.hire_type === '兼职' ? Number(employee.salary) || 0 : 0),
     ...overrides,
   }, scheduledDays);
-  const rows = homeEmployees.map((employee, index) => makeRow(employee, index, { dispatch_out_days: dispatchOut.get(Number(employee.id)) || 0 }));
+  const rows = homeEmployees.map((employee, index) => {const a=staffSupervisor.assignment(db,employee.id);const days=a?db.queryOne("SELECT scheduled_days FROM payroll_attendance_settings WHERE period=? AND staff_group='store'",[period])?.scheduled_days:null;return makeRow(employee,index,{dispatch_out_days:dispatchOut.get(Number(employee.id)) || 0,...(a && days?{supervisor_group_payroll:true,payroll_group_name:employee.store_name,scheduled_days:days,payroll_base_days:days}:{})});});
+  if(store)for(const employee of allEmployees){const a=staffSupervisor.assignment(db,employee.id);if(a && Number(a.store_id)===Number(store.id) && isGroupAffiliation(employee.store_name))rows.push(makeRow(employee,rows.length,{supervisor_display_only:true,payroll_group_name:employee.store_name}));}
   const existing = new Set(rows.map(row => Number(row.employee_id)));
   [...dispatchIn.values()].forEach((dispatch, index) => {
     // 被支援门店只承担其实际支援日期的工资份额；原门店行已扣除同样天数。
@@ -4167,7 +4178,8 @@ function getAuthUserById(id) {
   const user = db.queryOne(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.store_id,s.store_name,u.position_id,p.name AS position_name,p.permissions_json
     FROM users u LEFT JOIN stores s ON u.store_id=s.id LEFT JOIN position_settings p ON p.id=u.position_id WHERE u.id=?`, [id]);
   // 岗位是账号唯一的角色来源；保留 role 列只为了兼容历史数据和旧模块。
-  return user ? { ...user, role: user.position_name || '未分配岗位', position_permissions: parsePositionPermissions(user.permissions_json), permissions_json: undefined } : null;
+  const enriched=userPositions.enrich(db,user);
+  return enriched ? {...enriched,permissions_json:undefined} : null;
 }
 function issueAuthToken(user) {
   return jwt.sign({
@@ -4649,7 +4661,6 @@ function positionResponse(row) {
   return { ...row, permissions: parsePositionPermissions(row.permissions_json), member_count: Number(row.member_count || 0) };
 }
 function hasFullPositionAccess(user) {
-  if (Array.isArray(user?.position_permissions) && user.position_permissions.includes('*')) return true;
   const fresh = user?.id ? getAuthUserById(user.id) : null;
   return Boolean(fresh?.position_permissions?.includes('*'));
 }
@@ -4670,7 +4681,7 @@ function getAssignedPosition(positionId, required = false) {
 }
 app.get('/api/positions', (req, res) => {
   try {
-    const positions = db.queryAll(`SELECT p.*, COUNT(u.id) AS member_count FROM position_settings p LEFT JOIN users u ON u.position_id=p.id GROUP BY p.id ORDER BY p.is_system DESC,p.id`)
+    const positions = db.queryAll(`SELECT p.*, COUNT(u.id) AS member_count FROM position_settings p LEFT JOIN user_positions up ON up.position_id=p.id LEFT JOIN users u ON u.id=up.user_id GROUP BY p.id ORDER BY p.is_system DESC,p.id`)
       .map(positionResponse);
     // 权限目录随岗位列表一起下发，岗位设置界面直接用后端这一份，
     // 避免前端再维护一份硬编码分组导致「新增入口但勾不到权限」。
@@ -4703,7 +4714,8 @@ app.delete('/api/positions/:id', (req, res) => {
     const id = Number(req.params.id); const current = db.queryOne('SELECT * FROM position_settings WHERE id=?', [id]);
     if (!current) return res.status(404).json({ error: '岗位不存在' });
     if (current.is_system) return res.status(400).json({ error: '系统预置岗位不能删除，可编辑权限' });
-    db.run("UPDATE users SET position_id=NULL,role='未分配岗位' WHERE position_id=?", [id]);
+    db.run('DELETE FROM user_positions WHERE position_id=?',[id]);
+    db.run("UPDATE users SET position_id=(SELECT MIN(position_id) FROM user_positions WHERE user_id=users.id),role=COALESCE((SELECT name FROM position_settings WHERE id=(SELECT MIN(position_id) FROM user_positions WHERE user_id=users.id)),'未分配岗位') WHERE position_id=?", [id]);
     db.run('DELETE FROM position_settings WHERE id=?', [id]); db.save(); res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4731,7 +4743,7 @@ app.get('/api/users', (req, res) => {
   try {
     const users = db.queryAll(`SELECT u.id,u.username,u.role,u.display_name,u.phone,u.avatar_url,u.position_id,u.store_id,s.store_name,u.created_at,p.name AS position_name,p.permissions_json
       FROM users u LEFT JOIN position_settings p ON p.id=u.position_id LEFT JOIN stores s ON s.id=u.store_id ORDER BY u.id`)
-      .map(user => ({ ...user, role: user.position_name || '未分配岗位', position_permissions: parsePositionPermissions(user.permissions_json), permissions_json: undefined }));
+      .map(user => ({...userPositions.enrich(db,user),permissions_json:undefined}));
     res.json({ ok: true, users });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4742,8 +4754,11 @@ app.post('/api/users', (req, res) => {
     const password = String(req.body.password || '');
     const displayName = String(req.body.display_name || '').trim();
     const phone = String(req.body.phone || '').trim();
-    const position = getAssignedPosition(req.body.position_id, true);
+    const roles=userPositions.selected(db,req.body.position_ids || [req.body.position_id]);
+    const position=roles[0];
+    const permissions=[...new Set(roles.flatMap(p=>parsePositionPermissions(p.permissions_json)))];
     const storeId = payrollWorkflow.userStoreBinding(db, position.id, req.body.store_id);
+    if(userPositions.ownOnly(permissions) && !storeId)throw Error('店长账号必须绑定有效门店');
     if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
     if (username.length > 50) return res.status(400).json({ error: '用户名不能超过 50 个字符' });
     if (phone.length > 30) return res.status(400).json({ error: '手机号格式不正确' });
@@ -4752,6 +4767,7 @@ app.post('/api/users', (req, res) => {
       'INSERT INTO users (username,password_hash,role,display_name,phone,position_id,store_id) VALUES (?,?,?,?,?,?,?)',
       [username, hash, position.name, displayName || username, phone, position.id, storeId]
     );
+    userPositions.assign(db,id,roles);
     db.save();
     res.json({ ok: true, id });
   } catch (e) {
@@ -4764,7 +4780,10 @@ app.put('/api/users/:id', (req, res) => {
   try {
     const current = db.queryOne('SELECT position_id,store_id FROM users WHERE id=?', [req.params.id]);
     if (!current) return res.status(404).json({ error: '账号不存在' });
-    const storeId = payrollWorkflow.userStoreBinding(db, req.body.position_id ?? current.position_id, req.body.store_id === undefined ? current.store_id : req.body.store_id);
+    const roles=userPositions.selected(db,req.body.position_ids || (req.body.position_id!==undefined?[req.body.position_id]:userPositions.enrich(db,{...current,id:Number(req.params.id)}).position_ids));
+    const permissions=[...new Set(roles.flatMap(p=>parsePositionPermissions(p.permissions_json)))];
+    const storeId = payrollWorkflow.userStoreBinding(db, roles[0].id, req.body.store_id === undefined ? current.store_id : req.body.store_id);
+    if(userPositions.ownOnly(permissions) && !storeId)throw Error('店长账号必须绑定有效门店');
     const allowed = ['username', 'display_name', 'phone'];
     const sets = [];
     const params = [];
@@ -4776,8 +4795,8 @@ app.put('/api/users/:id', (req, res) => {
       sets.push(`${field}=?`);
       params.push(value);
     }
-    if (req.body.position_id !== undefined) {
-      const position = getAssignedPosition(req.body.position_id, true);
+    if (req.body.position_id !== undefined || req.body.position_ids !== undefined) {
+      const position = roles[0];
       sets.push('position_id=?', 'role=?');
       params.push(position.id, position.name);
     }
@@ -4785,6 +4804,7 @@ app.put('/api/users/:id', (req, res) => {
     if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' });
     params.push(req.params.id);
     db.run(`UPDATE users SET ${sets.join(',')} WHERE id=?`, params);
+    userPositions.assign(db,Number(req.params.id),roles);
     db.save();
     res.json({ ok: true });
   } catch (e) {
@@ -7094,6 +7114,7 @@ app.get('/api/bot/status', (_req, res) => {
       ['运营专员', '查看经营数据、处理平台数据和协同事项。', ['dashboard.view', 'analysis.view', 'data-import.manage', 'collab.manage']],
       ['店长（员工与工资）', '只可录入本店员工、制作本店工资表；必须绑定门店。', ['staff.store.edit', 'payroll.view', 'payroll.prepare']],
       ['人事（出勤与薪酬）', '维护员工档案、集团与门店应出勤、制作工资表。', ['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance']],
+      ['门店督导（兼任店长）', '集团发薪、兼任门店排班；可制作绑定门店工资表。', ['staff.store.edit','payroll.view','payroll.prepare']],
       ['工资审核', '查看工资表并审核他人提交的工资表。', ['payroll.view', 'payroll.review']],
       ['门店店长', '处理门店和菜品日常资料。', ['dashboard.view', 'store.manage', 'menu.manage', 'staff.view']],
       ['财务人员', '处理成本、记账和经营数据。', ['dashboard.view', 'analysis.view', 'cost.manage', 'bookkeeping.manage']],
