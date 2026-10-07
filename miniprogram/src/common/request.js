@@ -3,8 +3,27 @@
  *
  * 个人测试期最容易卡住的就是"域名校验"，所以这里把相关错误转成人话提示。
  */
-import { DEFAULT_BASE_URL, STORAGE_KEYS } from './config'
+import { DEFAULT_BASE_URL, STORAGE_KEYS, ANY_SERVICE } from './config'
 import { setSession, clearSession } from './store'
+
+export function usesCloudChannel() {
+  // #ifdef MP-WEIXIN
+  return true
+  // #endif
+  // #ifndef MP-WEIXIN
+  return false
+  // #endif
+}
+
+let cloudInitialized = false
+export function initializeCloud() {
+  if (!usesCloudChannel() || cloudInitialized) return
+  if (typeof wx === 'undefined' || !wx.cloud || !wx.cloud.callContainer) {
+    throw new Error('当前微信版本不支持云通道，请更新微信后重试')
+  }
+  wx.cloud.init({ env: ANY_SERVICE.env })
+  cloudInitialized = true
+}
 
 // ==================== 会话与服务器地址 ====================
 
@@ -58,6 +77,9 @@ function toLogin() {
 function networkHint(err) {
   const base = getBaseUrl()
   const raw = (err && (err.errMsg || err.message)) || '网络异常'
+  if (usesCloudChannel()) {
+    return `云通道连接失败：${raw}。请检查云环境的小程序授权、服务状态和套餐权限`
+  }
   if (/url not in domain list|not in domain/i.test(raw)) {
     return '域名未在白名单：开发者工具 → 详情 → 本地设置 → 勾选「不校验合法域名」；手机端请打开右上角「调试」'
   }
@@ -82,7 +104,7 @@ export function request(options = {}) {
   if (auth && token) header.Authorization = `Bearer ${token}`
 
   return new Promise((resolve, reject) => {
-    uni.request({
+    const requestOptions = {
       url: getBaseUrl() + url,
       method,
       data,
@@ -98,9 +120,8 @@ export function request(options = {}) {
             if (!silent) uni.showToast({ title: msg, icon: 'none' })
             reject(new Error(msg))
           } else {
-            // 免鉴权接口也返回 401 → 服务端根本没有 /api/mp 路由
-            // 最常见原因：连到了旧版本后端，或者地址填错了
-            const msg = `服务端未响应小程序接口（${getBaseUrl()}）：请确认后端是含 /api/mp 的新版本，且服务器地址填写正确`
+            // 登录接口也会用 401 表示凭据无效，优先展示后端的实际错误。
+            const msg = (body && body.error) || '身份验证失败，请检查登录信息'
             if (!silent) uni.showToast({ title: msg, icon: 'none', duration: 4000 })
             reject(new Error(msg))
           }
@@ -119,7 +140,26 @@ export function request(options = {}) {
         if (!silent) uni.showToast({ title: msg, icon: 'none', duration: 3000 })
         reject(new Error(msg))
       },
-    })
+    }
+    if (usesCloudChannel()) {
+      Promise.resolve().then(() => {
+        initializeCloud()
+        return wx.cloud.callContainer({
+          config: { env: ANY_SERVICE.env },
+          path: url,
+          method,
+          data,
+          timeout,
+          header: {
+            ...header,
+            'X-WX-SERVICE': 'tcbanyservice',
+            'X-AnyService-Name': ANY_SERVICE.service,
+          },
+        })
+      }).then(requestOptions.success, requestOptions.fail)
+    } else {
+      uni.request(requestOptions)
+    }
   })
 }
 

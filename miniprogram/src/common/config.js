@@ -12,6 +12,12 @@
  */
 export const DEFAULT_BASE_URL = 'http://localhost:3456'
 
+// 微信小程序走云通道；H5 仍使用服务器地址。
+export const ANY_SERVICE = {
+  env: 'cloud1-d9g460jol64a5af84',
+  service: 'etaigongapi',
+}
+
 export const STORAGE_KEYS = {
   token: 'mp_token',
   user: 'mp_user',

@@ -1,9 +1,10 @@
 <script>
-import { getToken, getUser } from './common/request'
+import { getToken, getUser, initializeCloud } from './common/request'
 import { store } from './common/store'
 
 export default {
   onLaunch() {
+    try { initializeCloud() } catch (error) { console.error(error.message) }
     // 启动时把本地会话灌进内存态，页面里就能直接读 store
     const token = getToken()
     const user = getUser()

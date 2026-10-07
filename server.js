@@ -4760,6 +4760,16 @@ app.get('/api/users', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 继承 /api/users 的 users.manage 权限，每次请求从库里重新校验岗位。
+app.get('/api/users/wechat-bindings', (req, res) => {
+  try { res.json({ ok: true, requests: require('./lib/mp/auth').wechatBinding.list() }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.post('/api/users/wechat-bindings/:id/review', (req, res) => {
+  try { res.json(require('./lib/mp/auth').wechatBinding.review(req.params.id, req.body || {}, req.user.id)); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 app.post('/api/users', (req, res) => {
   try {
     const username = String(req.body.username || '').trim();

@@ -1,7 +1,11 @@
 <template>
   <view class="list-page">
+    <view class="session-bar">
+      <text class="mp-muted">{{ currentUser?.display_name || currentUser?.username || '当前账号' }}</text>
+      <button class="logout-btn" @tap="logout">退出登录</button>
+    </view>
     <!-- 营业数据入口 -->
-    <view class="entry" @tap="goRevenue">
+    <view v-if="canAnalysis" class="entry" @tap="goRevenue">
       <view class="entry-left">
         <text class="entry-icon">📊</text>
         <view>
@@ -12,6 +16,7 @@
       <text class="entry-arrow">›</text>
     </view>
 
+    <view v-if="canCollab">
     <!-- 顶部统计 -->
     <view class="stats">
       <view class="stat" @tap="pickStatus('')">
@@ -101,6 +106,8 @@
 
     <!-- 发起事项 -->
     <view class="fab" @tap="goCreate">＋</view>
+    </view>
+    <view v-if="!canCollab" class="mp-empty">当前账号未开通协同事项权限。需要更多功能请联系管理员。</view>
   </view>
 </template>
 
@@ -108,7 +115,7 @@
 import { ref, reactive, computed } from 'vue'
 import { onLoad, onShow, onPullDownRefresh, onReachBottom } from '@dcloudio/uni-app'
 import api from '../../common/api'
-import { getToken } from '../../common/request'
+import { getToken, clearAllSession, getUser, saveSession } from '../../common/request'
 import { statusStyle } from '../../common/config'
 
 const tabs = [
@@ -119,6 +126,14 @@ const tabs = [
   { label: '未完成', value: '未完成' },
 ]
 
+function logout() {
+  clearAllSession()
+  uni.reLaunch({ url: '/pages/login/login' })
+}
+
+const currentUser = ref(getUser())
+const canCollab = computed(() => (currentUser.value?.position_permissions || []).some(p => p === '*' || p === 'collab.manage'))
+const canAnalysis = computed(() => (currentUser.value?.position_permissions || []).some(p => p === '*' || p === 'analysis.view'))
 const rows = ref([])
 const stats = reactive({ total: 0, pending: 0, doing: 0, done: 0, undone: 0 })
 const status = ref('')
@@ -130,12 +145,17 @@ const total = ref(0)
 const loading = ref(false)
 const finished = computed(() => rows.value.length >= total.value)
 
-onLoad(() => {
+onLoad(async () => {
   if (!getToken()) {
     uni.reLaunch({ url: '/pages/login/login' })
     return
   }
-  reload()
+  try {
+    const res = await api.me()
+    currentUser.value = res.user
+    saveSession(getToken(), res.user)
+    if (canCollab.value) reload()
+  } catch {}
 })
 
 onShow(() => {
@@ -170,6 +190,7 @@ async function fetchPage(p) {
 }
 
 async function reload() {
+  if (!canCollab.value) return
   loading.value = true
   page.value = 1
   try {
@@ -183,6 +204,7 @@ async function reload() {
 }
 
 async function refresh() {
+  if (!canCollab.value) return
   try {
     rows.value = await fetchPage(1)
     page.value = 1
@@ -240,6 +262,27 @@ function goRevenue() {
   min-height: 100vh;
   padding-bottom: 180rpx;
 }
+
+.session-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20rpx;
+  padding: 20rpx 24rpx 0;
+  font-size: 22rpx;
+}
+.session-bar > text { flex: 1; }
+.logout-btn {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 24rpx;
+  line-height: 76rpx;
+  font-size: 26rpx;
+  color: var(--brand);
+  background: #fff;
+  border-radius: 14rpx;
+}
+.logout-btn::after { border: none; }
 
 .entry {
   display: flex;

@@ -102,6 +102,25 @@
       </footer>
     </section>
 
+    <section class="people-card" style="padding:24px;margin-top:24px">
+      <header class="people-toolbar"><div><h3>微信登录绑定审核</h3><span>核实申请编号与本人身份后，选择后台人员；绑定沿用该人员权限。</span></div><el-button :loading="bindingsLoading" @click="loadBindings">刷新申请</el-button></header>
+      <el-table :data="wechatBindings" v-loading="bindingsLoading" empty-text="暂无微信绑定申请">
+        <el-table-column prop="name" label="申请姓名" min-width="110" />
+        <el-table-column prop="contact" label="联系方式" min-width="130" />
+        <el-table-column prop="verification" label="申请编号" min-width="150" />
+        <el-table-column label="状态" width="100"><template #default="{row}">{{ bindingStatus[row.status] || row.status }}</template></el-table-column>
+        <el-table-column label="后台人员" min-width="220"><template #default="{row}">
+          <el-select v-if="row.status === 'pending'" v-model="bindingTargets[row.id]" filterable placeholder="核实后选择人员" :disabled="reviewingId !== null">
+            <el-option v-for="user in users" :key="user.id" :value="user.id" :label="`${user.display_name || user.username}（${user.username}）`" />
+          </el-select><span v-else>{{ row.display_name || row.username || '—' }}</span>
+        </template></el-table-column>
+        <el-table-column label="操作" width="180"><template #default="{row}">
+          <template v-if="row.status === 'pending'"><el-button link type="primary" :disabled="!bindingTargets[row.id] || reviewingId !== null" @click="reviewBinding(row, 'approve')">批准</el-button><el-button link type="danger" :disabled="reviewingId !== null" @click="reviewBinding(row, 'reject')">拒绝</el-button></template>
+          <el-button v-if="row.status === 'approved'" link type="danger" :disabled="reviewingId !== null" @click="reviewBinding(row, 'revoke')">解除绑定</el-button>
+        </template></el-table-column>
+      </el-table>
+    </section>
+
     <el-dialog
       v-model="profileDialogVisible"
       :title="profileMode === 'create' ? '添加成员' : '编辑成员'"
@@ -235,6 +254,8 @@ import {
   deleteUser,
   deleteUserAvatar,
   getUsers,
+  getWechatBindings,
+  reviewWechatBinding,
   getStores,
   getPositions,
   updateUser,
@@ -246,6 +267,30 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const auth = useAuthStore()
 const users = ref([])
+const wechatBindings = ref([])
+const bindingsLoading = ref(false)
+const bindingTargets = reactive({})
+const reviewingId = ref(null)
+const bindingStatus = { pending: '待审核', approved: '已绑定', rejected: '已拒绝', revoked: '已解除' }
+async function loadBindings() {
+  bindingsLoading.value = true
+  try { wechatBindings.value = (await getWechatBindings()).requests || [] }
+  catch (e) { ElMessage.error('绑定申请加载失败：' + e.message) }
+  finally { bindingsLoading.value = false }
+}
+async function reviewBinding(row, action) {
+  const user = users.value.find(u => u.id === bindingTargets[row.id])
+  const message = action === 'approve' ? `确认已核实申请编号 ${row.verification}，将此微信绑定到 ${user?.display_name || user?.username}（${user?.username}）？` : action === 'reject' ? '确认拒绝此申请？' : '确认解除微信绑定？已登录的微信会话也会失效。'
+  try { await ElMessageBox.confirm(message, '微信绑定审核', { type: 'warning' }) }
+  catch { return }
+  reviewingId.value = row.id
+  try {
+    await reviewWechatBinding(row.id, { action, user_id: bindingTargets[row.id] })
+    ElMessage.success('已处理')
+    await loadBindings()
+  } catch (e) { ElMessage.error(e.message) }
+  finally { reviewingId.value = null }
+}
 const positions = ref([])
 const stores = ref([])
 const requiresStore = computed(() => {const permissions=positions.value.filter(position=>profileForm.position_ids.includes(position.id)).flatMap(position=>position.permissions || []);return permissions.includes('staff.store.edit') && !permissions.includes('*')})
@@ -309,7 +354,7 @@ const filteredUsers = computed(() => {
 })
 const adminCount = computed(() => users.value.filter(user => user.position_permissions?.includes('*')).length)
 
-onMounted(() => Promise.all([loadUsers(), loadPositions(), loadStores()]))
+onMounted(() => Promise.all([loadUsers(), loadPositions(), loadStores(), loadBindings()]))
 
 async function loadStores(){try{stores.value=(await getStores({page:1,page_size:500})).stores || []}catch(error){ElMessage.error('门店加载失败：'+error.message)}}
 

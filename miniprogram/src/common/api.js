@@ -22,8 +22,9 @@ export const api = {
     request({ url: '/api/mp/auth/login/wxwork', method: 'POST', data: { code }, auth: false }),
 
   /** 普通微信授权 + 邀请码（需后端配好 mp.appid/mp.secret） */
-  loginOpenid: (code, invite) =>
-    request({ url: '/api/mp/auth/login/openid', method: 'POST', data: { code, invite }, auth: false }),
+  loginOpenid: (code) =>
+    request({ url: '/api/mp/auth/login/openid', method: 'POST', data: { code }, auth: false }),
+  applyWechat: (data) => request({ url: '/api/mp/auth/wechat/apply', method: 'POST', data, auth: false }),
 
   me: () => request({ url: '/api/mp/me' }),
 

@@ -7,6 +7,22 @@
     </view>
 
     <view class="form-card">
+      <view v-if="hasWechat" class="wechat-section">
+        <button class="mp-btn mp-btn--primary" :disabled="loading" @tap="wechatLogin">{{ loading ? '处理中…' : '微信登录' }}</button>
+        <view class="alt-hint">首次使用需管理员审核，绑定后无需账号密码。</view>
+        <view v-if="binding" class="binding-info">
+          <text>{{ binding.status === 'pending' ? '申请已提交，等待管理员审核' : binding.status === 'rejected' ? '申请未通过，可核实信息后重新提交' : '原绑定已解除，可重新申请' }}</text>
+          <text>申请编号：{{ binding.verification }}</text>
+          <text>请将编号告知管理员核实身份。审核通过后点击微信登录。</text>
+        </view>
+        <view v-if="bindingTicket && binding?.status !== 'pending'">
+          <view class="field"><text class="label">真实姓名</text><input v-model="bindingForm.name" class="input" maxlength="30" placeholder="填写姓名供管理员核实" :disabled="loading" /></view>
+          <view class="field"><text class="label">联系方式（选填）</text><input v-model="bindingForm.contact" class="input" maxlength="60" placeholder="手机号或其他联系方式" :disabled="loading" /></view>
+          <button class="mp-btn mp-btn--primary" :disabled="loading" @tap="applyBinding">提交绑定申请</button>
+        </view>
+        <view class="alt-login" @tap="showPassword = !showPassword">{{ showPassword ? '收起账号密码登录' : '管理员 / 账号密码登录' }}</view>
+      </view>
+      <view v-if="!hasWechat || showPassword">
       <view class="field">
         <text class="label">账号</text>
         <input
@@ -35,6 +51,7 @@
       <view class="mp-btn" :class="canSubmit ? 'mp-btn--primary' : 'mp-btn--primary mp-btn--disabled'" @tap="doLogin">
         {{ loading ? '登录中…' : '登 录' }}
       </view>
+      </view>
 
       <!-- 服务器不通时的明确提示，避免用户误以为是账号问题 -->
       <view v-if="serverIssue" class="server-issue">
@@ -46,13 +63,20 @@
       <view v-if="hasWxwork" class="alt-login" @tap="wxworkLogin">
         <text>企业微信免登（当前环境已启用）</text>
       </view>
-      <view v-else class="alt-hint">
-        企业微信免登需企业主体小程序，当前为个人测试期，先用账号密码登录
+      <view v-else-if="!hasWechat" class="alt-hint">
+        微信登录尚未启用，请暂用账号密码登录。
       </view>
     </view>
 
     <!-- 服务器地址设置：真机调试改这里，免重新编译 -->
-    <view class="form-card server-card">
+    <view v-if="cloudChannel" class="form-card server-card">
+      <view class="server-title">云端连接</view>
+      <view class="server-tip">已使用云通道连接中控后台，无需填写服务器地址。</view>
+      <view class="server-actions">
+        <view class="mini-btn" @tap="testConn">测试连接</view>
+      </view>
+    </view>
+    <view v-else class="form-card server-card">
       <view class="mp-between" @tap="showServer = !showServer">
         <text class="server-title">服务器地址</text>
         <text class="server-value mp-ellipsis">{{ baseUrl }}</text>
@@ -78,7 +102,7 @@
     </view>
 
     <!-- 演示账号：正式上线前删除（含 common/config.js 的 DEMO_ACCOUNTS） -->
-    <view class="demo-card">
+    <view v-if="!hasWechat" class="demo-card">
       <text class="demo-title">演示账号</text>
       <view v-for="acc in demoAccounts" :key="acc.username" class="demo-row" @tap="fillDemo(acc)">
         <text class="demo-acc">{{ acc.username }} / {{ acc.password }}</text>
@@ -93,11 +117,17 @@ import { ref, computed } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import api from '../../common/api'
 import { DEMO_ACCOUNTS } from '../../common/config'
-import { getBaseUrl, setBaseUrl, saveSession, request } from '../../common/request'
+import { getBaseUrl, setBaseUrl, saveSession, request, usesCloudChannel } from '../../common/request'
 
 const form = ref({ username: '', password: '' })
+const cloudChannel = usesCloudChannel()
 const loading = ref(false)
 const providers = ref([])
+const showPassword = ref(false)
+const bindingTicket = ref('')
+const binding = ref(null)
+const bindingForm = ref({ name: '', contact: '' })
+const hasWechat = computed(() => cloudChannel && providers.value.some(p => p.key === 'openid' && p.enabled))
 const serverIssue = ref('')
 const showServer = ref(false)
 const baseUrl = ref(getBaseUrl())
@@ -127,12 +157,48 @@ function fillDemo(acc) {
   form.value.password = acc.password
 }
 
+async function wechatLogin() {
+  if (loading.value) return
+  loading.value = true
+  try {
+    const result = await new Promise((resolve, reject) => uni.login({ provider: 'weixin', success: resolve, fail: reject }))
+    const res = await api.loginOpenid(result.code)
+    if (res.bindingRequired) {
+      bindingTicket.value = res.ticket
+      binding.value = res.binding
+      return
+    }
+    saveSession(res.token, res.user)
+    bindingTicket.value = ''
+    uni.reLaunch({ url: '/pages/collab/list' })
+  } catch (e) {
+    uni.showModal({ title: '微信登录失败', content: e.message || e.errMsg || '请稍后重试', showCancel: false })
+  } finally { loading.value = false }
+}
+
+async function applyBinding() {
+  if (loading.value) return
+  if (!bindingForm.value.name.trim()) {
+    uni.showToast({ title: '请填写真实姓名', icon: 'none' })
+    return
+  }
+  loading.value = true
+  try {
+    const res = await api.applyWechat({ ticket: bindingTicket.value, ...bindingForm.value })
+    binding.value = res.binding
+    uni.showModal({ title: '申请已提交', content: `申请编号：${res.binding.verification}。请联系管理员审核。`, showCancel: false })
+  } catch (e) {
+    uni.showModal({ title: '提交失败', content: e.message, showCancel: false })
+  } finally { loading.value = false }
+}
+
 async function doLogin() {
   if (!canSubmit.value) {
     if (!loading.value) uni.showToast({ title: '请输入账号和密码', icon: 'none' })
     return
   }
   loading.value = true
+  serverIssue.value = ''
   try {
     const res = await api.loginPassword(form.value.username.trim(), form.value.password)
     saveSession(res.token, res.user)
@@ -141,7 +207,7 @@ async function doLogin() {
     setTimeout(() => uni.reLaunch({ url: '/pages/collab/list' }), 300)
   } catch (e) {
     // 连接类错误（而不是账号密码错误）时，直接摆到横幅上，避免用户以为是密码问题
-    if (/连不上|服务端未响应|域名|超时|timeout/i.test(e.message || '')) {
+    if (/连不上|服务端未响应|云通道|域名|超时|timeout/i.test(e.message || '')) {
       serverIssue.value = e.message
     }
   } finally {
@@ -181,7 +247,7 @@ function resetServer() {
 }
 
 async function testConn() {
-  saveServer()
+  if (!cloudChannel) saveServer()
   uni.showLoading({ title: '连接中' })
   try {
     const res = await request({ url: '/api/mp/health', auth: false, silent: true })
@@ -244,6 +310,8 @@ async function testConn() {
 .field {
   margin-bottom: 32rpx;
 }
+.binding-info { margin: 24rpx 0; padding: 24rpx; background: #f7f8fa; border-radius: 14rpx; display: flex; flex-direction: column; gap: 14rpx; font-size: 26rpx; line-height: 1.6; }
+.wechat-section { margin-bottom: 32rpx; }
 .label {
   display: block;
   font-size: 24rpx;

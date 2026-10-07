@@ -37,6 +37,8 @@ http.interceptors.response.use(
 // ===== 认证 =====
 export const login = (username, password) => http.post('/api/auth/login', { username, password })
 export const getMe = () => http.get('/api/auth/me')
+export const getWechatBindings = () => http.get('/api/users/wechat-bindings')
+export const reviewWechatBinding = (id, data) => http.post(`/api/users/wechat-bindings/${id}/review`, data)
 export const getMeituanOperatingSource = (params) => http.get('/api/business-analytics/meituan-operating-source', { params })
 export const updateMyProfile = (data) => http.put('/api/auth/profile', data)
 
