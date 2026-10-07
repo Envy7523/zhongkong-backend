@@ -60,8 +60,8 @@ export const NAV_ITEM_PERMISSIONS = {
 export function permits(permissions, code) {
   const list = Array.isArray(permissions) ? permissions : []
   if (list.includes('*')) return true
-  if (!code) return true
-  if (Array.isArray(code)) return code.some(item => list.includes(item))
+  if (!code || code === 'notifications.view') return true
+  if (Array.isArray(code)) return code.some(item => permits(list, item))
   return list.includes(code)
 }
 

@@ -428,6 +428,7 @@ export const withdrawNotification = (id) => http.delete(`/api/notifications/crea
 // 首次弹窗：返回还没弹过的通知，并标记为已弹（每条只弹一次）
 export const getNotificationPopup = () => http.get('/api/notifications/popup')
 export const updateNotification = (id, data) => http.put(`/api/notifications/${id}`, data)
+export const getNotificationRecipients = () => http.get('/api/notifications/recipients')
 export const getNotificationSettings = () => http.get('/api/notifications/settings')
 export const saveNotificationSettings = (data) => http.put('/api/notifications/settings', data)
 export const checkNotifications = () => http.post('/api/notifications/check', {})

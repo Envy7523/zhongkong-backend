@@ -2260,6 +2260,13 @@ function notificationSettingsPayload(config) {
 }
 // 设置类路由必须注册在 /:id 之前，否则 /api/notifications/settings 会被当成 id。
 // 通知设置：选择每类通知的接收人（后台账号）与提前天数。
+// 收件人通讯录独立于通知规则：所有登录账号可选，只返回显示所需字段。
+app.get('/api/notifications/recipients', (req, res) => {
+  try {
+    const users = db.queryAll('SELECT id,username,display_name,role FROM users ORDER BY id');
+    res.json({ ok: true, users });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 app.get('/api/notifications/settings', (req, res) => {
   try {
     const payload = notificationSettingsPayload(loadConfig());

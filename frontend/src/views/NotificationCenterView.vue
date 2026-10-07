@@ -122,7 +122,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
-import { getNotifications, checkNotifications, updateNotification, getNotificationCreated, createNotification, getNotificationSettings, updateCreatedNotification, withdrawNotification } from '@/api'
+import { getNotifications, checkNotifications, updateNotification, getNotificationCreated, createNotification, getNotificationRecipients, updateCreatedNotification, withdrawNotification } from '@/api'
 
 const router = useRouter()
 const scope = ref('pending')
@@ -165,7 +165,7 @@ async function loadCreated() {
 }
 async function loadUsers() {
   if (users.value.length) return
-  try { users.value = (await getNotificationSettings()).users || [] } catch { /* 失败不阻断 */ }
+  try { users.value = (await getNotificationRecipients()).users || [] } catch (error) { ElMessage.error('接收人加载失败：' + error.message) }
 }
 async function openCompose() {
   await loadUsers()
