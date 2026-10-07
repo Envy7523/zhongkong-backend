@@ -17,7 +17,7 @@
       <article class="stat-card violet"><span>联营 / 加盟</span><b>{{ joinedStoreCount }}</b><small>联营 {{ stats.joint_count ?? 0 }} · 加盟 {{ stats.franchise_count ?? 0 }}</small></article>
     </section>
     <p v-if="Number(stats.relocated_in_count)" class="stats-note">
-      其中 <b>{{ stats.relocated_in_count }}</b> 家是<b>迁址而来</b>（非全新开门店）；全新开门 <b>{{ stats.newly_opened_count }}</b> 家。
+      其中 <b>{{ stats.relocated_in_count }}</b> 家是<b>迁址而来</b>（按新店统计）；新建门店总数 <b>{{ stats.newly_opened_count }}</b> 家。
       迁址店只记录新店自己的数据，与原店的关系在「门店履历」里可查。
     </p>
 
@@ -107,8 +107,9 @@
             <el-form-item label="收款性质"><el-input v-model="form.payment_type" placeholder="例如：法人收款" /></el-form-item>
             <el-form-item label="收银机构编码">
               <el-input v-model="form.pos_store_code" placeholder="例如：MD00009" />
-              <small class="field-hint">来自收银机「品项销售明细」报表的机构编码，导入时自动回填；一般不用手填。它是导入识别门店的第一优先键，不能与其它门店重复。</small>
+              <small class="field-hint">来自收银机「品项销售明细」报表的机构编码，导入时自动回填；一般不用手填。它是导入识别门店的第一优先键，营业中的门店不能重复；沿用旧编码需填写启用日期。</small>
             </el-form-item>
+            <el-form-item label="收银编码启用日期"><el-date-picker v-model="form.pos_code_start_date" type="date" value-format="YYYY-MM-DD" placeholder="沿用或更换编码时填写" style="width:100%" /><small class="field-hint">旧关联保留；沿用已有编码时，启用日期不能与旧店营业日期重叠。</small></el-form-item>
           </div>
         </section>
         <section class="form-section"><h4>地址与联系</h4>
@@ -131,7 +132,7 @@
     <el-dialog v-model="closeVisible" :title="closeMode === 'relocate' ? `发起迁址 · ${closingStore?.store_name || ''}` : `闭店 · ${closingStore?.store_name || ''}`" width="min(960px, calc(100vw - 32px))" top="5vh" destroy-on-close class="close-dialog">
       <el-alert v-if="closeMode === 'relocate'" type="warning" :closable="false" show-icon class="mb"
         title="迁址 = 老店闭店 + 新建门店 + 双向关联"
-        description="老店按「已闭店(迁址)」结束并移入闭店门店分组；新店单独建档、只记自己的数据。两家店的履历会自动互相指向，便于日后查证。收银机构编码请填新店的编码。" />
+        description="老店按「已闭店(迁址)」结束并移入闭店门店分组；新店单独建档、只记自己的数据。两家店的履历会自动互相指向，便于日后查证。收银编码可沿用，需填写新店启用日期且晚于老店最后营业日。" />
       <div class="dialog-scroll">
       <el-form label-position="top">
         <div class="form-grid two">
@@ -161,12 +162,13 @@
             <el-form-item label="新门店名称" required><el-input v-model="newStore.store_name" placeholder="例如：鹅太公烧鹅（龙岗大运店）" /></el-form-item>
             <el-form-item label="状态"><el-select v-model="newStore.status"><el-option label="筹建中" value="筹建中" /><el-option label="正常营业" value="正常营业" /></el-select></el-form-item>
             <el-form-item label="收银机构编码">
-              <el-input v-model="newStore.pos_store_code" placeholder="新址在收银系统的机构编码" />
+              <el-input v-model="newStore.pos_store_code" placeholder="可沿用老店编码或填新编码" />
               <small class="field-hint">
-                <template v-if="closingStore?.pos_store_code">老店编码为 <b>{{ closingStore.pos_store_code }}</b>；新址在收银系统通常会有<b>新的</b>机构编码，请填新的（不能与老店重复）。</template>
+                <template v-if="closingStore?.pos_store_code">老店编码为 <b>{{ closingStore.pos_store_code }}</b>；可以沿用，填写新店启用日期即可；营业中的其他门店不可使用相同编码。</template>
                 <template v-else>老店尚未绑定机构编码。可在收银机导出的「品项销售明细」里查看「机构编码」列。</template>
               </small>
             </el-form-item>
+            <el-form-item label="收银编码启用日期"><el-date-picker v-model="newStore.pos_code_start_date" type="date" value-format="YYYY-MM-DD" placeholder="沿用编码时必填" style="width:100%" /><small class="field-hint">旧店最后营业日归旧店，新店从启用日起记账；中间停业日期不归新店。</small></el-form-item>
           </div>
           <div class="form-grid three"><el-form-item label="省"><el-input v-model="newStore.province" /></el-form-item><el-form-item label="市"><el-input v-model="newStore.city" /></el-form-item><el-form-item label="区 / 县"><el-input v-model="newStore.district" /></el-form-item></div>
           <el-form-item label="详细地址"><el-input v-model="newStore.address" placeholder="新址的门牌号" /></el-form-item>
@@ -306,7 +308,7 @@ const meta = ref({ closed_types: ['迁址', '租约到期', '经营不善', '商
 // 闭店弹窗里排除「迁址」—— 迁址有专门的「发起迁址」流程（要同时建新店并双向关联）
 const closeTypeOptions = computed(() => (meta.value.closed_types || []).filter(t => t !== '迁址'))
 
-const makeForm = () => ({ store_name: '', status: '筹建中', store_type: '直营店', legal_person: '', payment_type: '法人收款', pos_store_code: '', region: '', province: '', city: '', district: '', address: '', phone: '', business_hours: '', opening_date: null, table_2person: 0, table_4person: 0, store_size: '', lat: '', lng: '' })
+const makeForm = () => ({ store_name: '', status: '筹建中', store_type: '直营店', legal_person: '', payment_type: '法人收款', pos_store_code: '', pos_code_start_date: '', region: '', province: '', city: '', district: '', address: '', phone: '', business_hours: '', opening_date: null, table_2person: 0, table_4person: 0, store_size: '', lat: '', lng: '' })
 
 const stats = ref({})
 const stores = ref([])
@@ -340,7 +342,7 @@ const selectedEmpIds = ref([])
 const batchAction = ref('transfer_new')
 const batchTargetStoreId = ref(null)
 const closeForm = reactive({ closed_date: '', closed_type: '', closed_reason: '', attachment_url: '', attachment_name: '' })
-const newStore = reactive({ store_name: '', status: '筹建中', pos_store_code: '', province: '', city: '', district: '', address: '', phone: '', opening_date: null, store_size: '' })
+const newStore = reactive({ store_name: '', status: '筹建中', pos_store_code: '', pos_code_start_date: '', province: '', city: '', district: '', address: '', phone: '', opening_date: null, store_size: '' })
 const reopenVisible = ref(false)
 const reopenForm = reactive({ reopen_date: '', note: '' })
 const lifecycleVisible = ref(false)
@@ -439,7 +441,7 @@ async function openClose(store, mode) {
   closingStore.value = store
   closeMode.value = mode
   Object.assign(closeForm, { closed_date: '', closed_type: mode === 'relocate' ? '迁址' : '', closed_reason: '', attachment_url: '', attachment_name: '' })
-  Object.assign(newStore, { store_name: '', status: '筹建中', pos_store_code: '', province: '', city: '', district: '', address: '', phone: '', opening_date: null, store_size: '' })
+  Object.assign(newStore, { store_name: '', status: '筹建中', pos_store_code: store.pos_store_code || '', pos_code_start_date: '', province: '', city: '', district: '', address: '', phone: '', opening_date: null, store_size: '' })
   Object.keys(empActions).forEach(k => delete empActions[k])
   selectedEmpIds.value = []
   batchAction.value = mode === 'relocate' ? 'transfer_new' : 'resign'

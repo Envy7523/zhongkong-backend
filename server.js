@@ -31,6 +31,7 @@ const dingtalkAttendance = require('./lib/dingtalk-attendance');
 const { employeeCalendar } = require('./lib/attendance-calendar');
 const notifications = require('./lib/notifications');
 const storeLifecycle = require('./lib/store-lifecycle');
+const storePos = require('./lib/store-pos-identity');
 const { GROUP_NAMES, isGroupAffiliation } = require('./lib/staff-affiliation');
 const { createBusinessAssistant } = require('./lib/wecom-business-assistant');
 const syncJobAudit = require('./lib/sync-job-audit');
@@ -1084,8 +1085,8 @@ app.get('/api/db/stores/stats', (req, res) => {
         COUNT(*) as total
       FROM stores
     `);
-    // 迁址店不是“全新开门店”：用 relocated_from_store_id 判定，单一事实来源，不额外增加字段。
-    row.newly_opened_count = Number(row.total || 0) - Number(row.relocated_in_count || 0);
+    // 迁址新建门店计入新店，迁址来源保留作履历追溯。
+    row.newly_opened_count = Number(row.total || 0);
     res.json({ ok: true, stats: row });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1139,18 +1140,18 @@ app.get('/api/db/stores', (req, res) => {
     const pg = parseInt(page) || 1;
     const offset = (pg - 1) * psize;
     params.push(psize, offset);
-    const stores = db.queryAll(`SELECT * FROM stores ${where} ORDER BY id LIMIT ? OFFSET ?`, params);
+    const stores = db.queryAll(`SELECT * FROM stores ${where} ORDER BY id LIMIT ? OFFSET ?`, params).map(store => storePos.decorate(db, store));
     res.json({ ok: true, stores, total, page: pg, page_size: psize });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/db/stores/:id', (req, res) => {
-  try { const store = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const platforms = db.queryAll('SELECT * FROM store_platforms WHERE store_id=?', [req.params.id]); const fixedCosts = db.queryAll('SELECT * FROM store_fixed_costs WHERE store_id=?', [req.params.id]); const employees = db.queryAll('SELECT * FROM employees WHERE store_id=?', [req.params.id]); res.json({ ok: true, store, platforms, fixedCosts, employees }); }
+  try { const store = db.queryOne('SELECT * FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const platforms = db.queryAll('SELECT * FROM store_platforms WHERE store_id=?', [req.params.id]); const fixedCosts = db.queryAll('SELECT * FROM store_fixed_costs WHERE store_id=?', [req.params.id]); const employees = db.queryAll('SELECT * FROM employees WHERE store_id=?', [req.params.id]); res.json({ ok: true, store: storePos.decorate(db, store), platforms, fixedCosts, employees }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 app.post('/api/db/stores', (req, res) => {
-  try { const { store_name, status, store_type, legal_person, payment_type, region, province, city, district, address, phone, business_hours, opening_date, table_2person, table_4person, store_size, lat, lng, pos_store_code } = req.body; if (!store_name) return res.status(400).json({ error: '门店名称不能为空' }); const code = String(pos_store_code || '').trim(); if (code && db.queryOne('SELECT id FROM stores WHERE pos_store_code=?', [code])) return res.status(400).json({ error: `收银机构编码 ${code} 已被其它门店占用` }); const id = db.insert('INSERT INTO stores (store_name,status,store_type,legal_person,payment_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size,lat,lng,pos_store_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [store_name, status||'正常营业', store_type||'直营店', legal_person||'', payment_type||'法人收款', region||'', province||'', city||'', district||'', address||'', phone||'', business_hours||'', opening_date||null, table_2person||0, table_4person||0, store_size||'', lat||null, lng||null, code]); db.save(); res.json({ ok: true, id }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try { const { store_name, status, store_type, legal_person, payment_type, region, province, city, district, address, phone, business_hours, opening_date, table_2person, table_4person, store_size, lat, lng, pos_store_code } = req.body; if (!store_name) return res.status(400).json({ error: '门店名称不能为空' }); const code = String(pos_store_code || '').trim(); storePos.validate(db, { ...req.body, status:status||'正常营业',pos_store_code:code }); db.run('BEGIN'); const id = db.insert('INSERT INTO stores (store_name,status,store_type,legal_person,payment_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size,lat,lng,pos_store_code) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [store_name, status||'正常营业', store_type||'直营店', legal_person||'', payment_type||'法人收款', region||'', province||'', city||'', district||'', address||'', phone||'', business_hours||'', opening_date||null, table_2person||0, table_4person||0, store_size||'', lat||null, lng||null, code]); storePos.sync(db,id,{start:req.body.pos_code_start_date||opening_date||''}); db.run('COMMIT'); db.save(); res.json({ ok: true, id }); }
+  catch (e) { try { db.run('ROLLBACK'); } catch {} res.status(400).json({ error: e.message }); }
 });
 app.put('/api/db/stores/:id', (req, res) => {
   try {
@@ -1164,17 +1165,9 @@ app.put('/api/db/stores/:id', (req, res) => {
       if (willClose && !wasClosed) return res.status(400).json({ error: '闭店请使用「闭店」或「发起迁址」：它们会校验员工处置、写入门店履历并移入闭店门店分组' });
       if (!willClose && wasClosed) return res.status(400).json({ error: '重开请使用「重开」操作：它会恢复闭店前的区域归属并留下履历' });
     }
-    // 收银机构编码可人工维护（多数情况下由收银报表导入时自动回填）——必须校验唯一，
-    // 它是导入时识别门店的第一优先键，重复会让报表落到错误的门店上。
-    if (req.body.pos_store_code !== undefined) {
-      const code = String(req.body.pos_store_code || '').trim();
-      if (code) {
-        const occupied = db.queryOne('SELECT id,store_name FROM stores WHERE pos_store_code=? AND id<>?', [code, Number(req.params.id)]);
-        if (occupied) return res.status(400).json({ error: `收银机构编码 ${code} 已被「${occupied.store_name}」占用` });
-      }
-    }
-    const allowedFields = ['store_name','status','store_type','legal_person','payment_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size','lat','lng','remark','radius','pos_store_code']; const sets = [], params = []; allowedFields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+    storePos.validate(db, {...current,...req.body,pos_store_code:String(req.body.pos_store_code ?? current.pos_store_code ?? '').trim()});
+    const allowedFields = ['store_name','status','store_type','legal_person','payment_type','region','province','city','district','address','phone','business_hours','opening_date','table_2person','table_4person','store_size','lat','lng','remark','radius','pos_store_code']; const sets = [], params = []; allowedFields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); sets.push("updated_at=datetime('now','localtime')"); params.push(req.params.id); db.run('BEGIN'); const affected = db.run(`UPDATE stores SET ${sets.join(',')} WHERE id=?`, params); storePos.sync(db,Number(req.params.id),{start:req.body.pos_code_start_date||''}); db.run('COMMIT'); db.save(); if (!affected) return res.status(404).json({ error: '门店不存在' }); res.json({ ok: true, message: '已更新' }); }
+  catch (e) { try { db.run('ROLLBACK'); } catch {} res.status(400).json({ error: e.message }); }
 });
 app.delete('/api/db/stores/:id', (req, res) => {
   try {
@@ -1317,6 +1310,7 @@ function disposeEmployeeForClosure(employee, action, targetStore, { eventDate, r
 /** 闭店主体（闭店与迁址共用）：写字段、移入闭店分组、解绑店长、写事件 */
 function finalizeStoreClosure(store, { closedDate, closedType, closedReason, attachment, source, extraDetails = {}, eventType = '闭店', eventNote = '' }) {
   const regionBefore = storeLifecycle.currentRegion(db, store.id);
+  storePos.close(db, store.id, closedDate);
   db.run(`UPDATE stores SET status='已闭店', closed_date=?, closed_type=?, closed_reason=?, updated_at=datetime('now','localtime') WHERE id=?`,
     [closedDate, closedType, String(closedReason || '').trim(), store.id]);
   const move = storeLifecycle.moveToClosedRegion(db, store.id);
@@ -1416,12 +1410,12 @@ app.post('/api/db/stores/:id/relocate', (req, res) => {
     const incoming = req.body?.new_store && typeof req.body.new_store === 'object' ? req.body.new_store : {};
     const newName = String(incoming.store_name || '').trim();
     if (!newName) return res.status(400).json({ error: '请填写新门店名称' });
-    if (newName === oldStore.store_name) return res.status(400).json({ error: '新门店名称不能与原门店相同（迁址后新店应使用新址名称）' });
+    if (newName === oldStore.store_name) return res.status(400).json({ error: '请为新门店填写包含新址的名称，便于区分历史门店' });
     if (db.queryOne('SELECT id FROM stores WHERE store_name=?', [newName])) return res.status(400).json({ error: `门店名称「${newName}」已存在` });
     const posCode = String(incoming.pos_store_code || '').trim();
-    if (posCode && db.queryOne('SELECT id FROM stores WHERE pos_store_code=?', [posCode])) {
-      return res.status(400).json({ error: `收银机构编码 ${posCode} 已被其它门店占用` });
-    }
+    const codeStart = incoming.pos_code_start_date || incoming.opening_date || '';
+    if (posCode && posCode === String(oldStore.pos_store_code || '').trim() && (!storePos.date(codeStart) || codeStart <= closedDate)) return res.status(400).json({ error: '沿用老店编码时，新店编码启用日期必须晚于老店最后营业日' });
+    storePos.validate(db, {...incoming,status:incoming.status||'筹建中',pos_store_code:posCode,pos_code_start_date:codeStart},{excludeIds:[oldId]});
     const check = validateEmployeeDisposition(oldId, req.body?.employee_actions);
     if (check.error) return res.status(400).json({ error: check.error, pending_employees: check.pending });
 
@@ -1435,6 +1429,8 @@ app.post('/api/db/stores/:id/relocate', (req, res) => {
     let newId = null; let applied = [];
     db.run('BEGIN');
     try {
+      storePos.close(db,oldId,closedDate);
+      db.run("UPDATE stores SET status='已闭店',closed_date=? WHERE id=?",[closedDate,oldId]);
       newId = db.insert(
         `INSERT INTO stores (store_name,status,store_type,legal_person,payment_type,region,province,city,district,address,phone,business_hours,opening_date,table_2person,table_4person,store_size,lat,lng,pos_store_code,relocated_from_store_id)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -1447,6 +1443,7 @@ app.post('/api/db/stores/:id/relocate', (req, res) => {
           String(incoming.store_size || ''), incoming.lat || null, incoming.lng || null,
           posCode, oldId]
       );
+      storePos.sync(db,newId,{start:codeStart});
       // 新店默认继承原区域（用户可再到门店区域管理里改）
       if (regionBefore && !regionBefore.code) {
         db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [regionBefore.id, newId]);
@@ -1507,6 +1504,7 @@ app.post('/api/db/stores/:id/reopen', (req, res) => {
     if (!store) return res.status(404).json({ error: '门店不存在' });
     if (!storeLifecycle.isClosedStatus(store.status)) return res.status(400).json({ error: `「${store.store_name}」当前不是闭店状态` });
     const reopenDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body?.reopen_date || '')) ? String(req.body.reopen_date) : localDateString();
+    storePos.validate(db,{...store,status:'正常营业',closed_date:'',pos_code_start_date:reopenDate});
     const source = staffAuditSource(req.user);
     const closedEvent = db.queryOne(
       "SELECT details_json FROM store_lifecycle_events WHERE store_id=? AND event_type IN ('闭店','迁址迁出') ORDER BY event_date DESC, id DESC LIMIT 1",
@@ -1515,7 +1513,9 @@ app.post('/api/db/stores/:id/reopen', (req, res) => {
     const details = storeLifecycle.safeJson(closedEvent?.details_json);
     const backRegionId = Number(details.previous_region_id) || null;
 
+    db.run('BEGIN');
     db.run("UPDATE stores SET status='正常营业', closed_date='', closed_type='', closed_reason='', updated_at=datetime('now','localtime') WHERE id=?", [storeId]);
+    storePos.sync(db,storeId,{start:reopenDate,forceNew:true});
     const closedRegion = storeLifecycle.closedRegionId(db);
     db.run('DELETE FROM store_region_members WHERE store_id=?', [storeId]);
     const restore = backRegionId && db.queryOne('SELECT id FROM store_regions WHERE id=?', [backRegionId]) ? backRegionId : null;
@@ -1527,9 +1527,10 @@ app.post('/api/db/stores/:id/reopen', (req, res) => {
       source, attachment: { url: String(req.body?.attachment_url || '').trim(), name: String(req.body?.attachment_name || '').trim() },
       details: { restored_region_id: restore, closed_region_id: closedRegion, previous_closed_date: store.closed_date || '' },
     });
+    db.run('COMMIT');
     db.save();
     res.json({ ok: true, store_id: storeId, region_restored: Boolean(restore), restored_region_id: restore, reopen_date: reopenDate });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { try { db.run('ROLLBACK'); } catch {} res.status(400).json({ error: e.message }); }
 });
 
 // ===== 第三方平台 =====
