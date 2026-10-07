@@ -11,7 +11,7 @@
       <p class="scope-note">应提交范围：当月有制薪员工或已经生成工资表的门店 / 集团。无制薪员工的门店不计入漏交数量；退回后需重新提交，才再次进入待审队列。</p>
     </section>
     <section class="card-compact"><el-tabs v-model="queueTab"><el-tab-pane :label="`待审核（${pendingSheets.length}）`" name="pending" /><el-tab-pane :label="`已审核（${approvedSheets.length}）`" name="approved" /></el-tabs><el-table :data="queueTab==='pending'?pendingSheets:approvedSheets" :empty-text="queueTab==='pending'?'本月暂无已提交待审核工资表':'本月暂无已审核工资表'"><el-table-column type="index" label="序号" width="65" /><el-table-column prop="store_name" label="门店 / 集团" min-width="220" /><el-table-column prop="employee_count" label="员工数" width="90" /><el-table-column prop="submitter_name" label="提交人" width="110" /><el-table-column prop="submitted_at" label="提交时间" width="175" /><el-table-column label="操作" width="140"><template #default="{row}"><el-button link type="primary" @click="openSheet(row.id)">{{ queueTab==='pending'?'查看并审核':'查看已审核' }}</el-button></template></el-table-column></el-table></section>
-    <section v-if="activeSheetId" class="review-detail"><el-button @click="clearDetail">收起明细</el-button><SalaryPlaceholder :key="`${period}-${activeSheetId}`" detail-only :sheet-id="activeSheetId" :review-period="period" @changed="reviewChanged" /></section>
+    <el-dialog v-model="detailOpen" title="工资表明细与审核" fullscreen append-to-body destroy-on-close :close-on-click-modal="false" @closed="finishClose"><SalaryPlaceholder v-if="activeSheetId" :key="`${period}-${activeSheetId}`" detail-only :sheet-id="activeSheetId" :review-period="period" @changed="reviewChanged" /></el-dialog>
   </div>
 </template>
 <script setup>
@@ -20,7 +20,7 @@ import { ElMessage } from 'element-plus'
 import { getPayrollReview } from '@/api'
 import SalaryPlaceholder from './SalaryPlaceholder.vue'
 const now=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit'}).format(new Date()),[year,month]=now.split('-').map(Number)
-const period=ref(new Date(Date.UTC(year,month-2,1)).toISOString().slice(0,7)),staffGroup=ref('store'),progressFilter=ref('all'),queueTab=ref('pending'),activeSheetId=ref(null),loading=ref(false)
+const period=ref(new Date(Date.UTC(year,month-2,1)).toISOString().slice(0,7)),staffGroup=ref('store'),progressFilter=ref('all'),queueTab=ref('pending'),activeSheetId=ref(null),detailOpen=ref(false),loading=ref(false)
 const report=ref({coverage:[],pending:[],approved:[]})
 const scopedRows=computed(()=>report.value.coverage.filter(row=>staffGroup.value==='all' || row.staff_group===staffGroup.value))
 const submitted=row=>['待审核','已审核'].includes(row.status)
@@ -30,8 +30,9 @@ const pendingSheets=computed(()=>report.value.pending.filter(row=>staffGroup.val
 const approvedSheets=computed(()=>report.value.approved.filter(row=>staffGroup.value==='all' || row.staff_group===staffGroup.value))
 const statusType=status=>({'待审核':'warning','已审核':'success','未提交':'info','退回待重提':'danger'}[status] || 'info')
 let requestId=0
-function clearDetail(){activeSheetId.value=null}
-function openSheet(id){activeSheetId.value=id}
+function clearDetail(){detailOpen.value=false;activeSheetId.value=null}
+function finishClose(){if(!detailOpen.value)activeSheetId.value=null}
+function openSheet(id){activeSheetId.value=id;detailOpen.value=true}
 async function loadReview(){const token=++requestId;loading.value=true;try{const data=await getPayrollReview(period.value);if(token===requestId)report.value=data}catch(error){if(token===requestId){report.value={coverage:[],pending:[],approved:[]};ElMessage.error(error.message)}}finally{if(token===requestId)loading.value=false}}
 async function changePeriod(){clearDetail();await loadReview()}
 async function reviewChanged(){clearDetail();await loadReview()}
