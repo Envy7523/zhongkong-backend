@@ -26,11 +26,11 @@ test('办公室休息计划和真实出勤分开，休息日打卡优先显示�
 test('历史应出勤天数不能虚构休息日期；闰年日期完整',()=>{
  const result=employeeCalendar({period:'2024-02',records:[],today:'2026-10-07'});assert.equal(result.days.length,29);assert.ok(result.days.every(day=>day.status==='unknown'));
 });
-function readRoute(employee,setting){
+function readRoute(employee,setting,supervisor=null){
  const source=fs.readFileSync(require.resolve('../server.js'),'utf8');let handler;
  const queries=[];const db={queryOne(sql){queries.push(sql);return sql.includes('FROM employees')?employee:setting},queryAll(){return [punch('2026-10-02','09:00','OnDuty'),punch('2026-10-02','17:00','OffDuty')]}};
  const snippet=source.slice(source.indexOf("app.get('/api/staff/:id/dingtalk-attendance'"),source.indexOf('// POST /api/staff/seed'));
- new Function('app','db','normalizeAttendanceDate','employeeCalendar','isGroupAffiliation',snippet)({get(path,fn){handler=fn}},db,v=>v,employeeCalendar,isGroupAffiliation);
+ new Function('app','db','normalizeAttendanceDate','employeeCalendar','isGroupAffiliation','staffSupervisor',snippet)({get(path,fn){handler=fn}},db,v=>v,employeeCalendar,isGroupAffiliation,{assignment:()=>supervisor});
  const request=query=>{let status=200,result;const res={status(value){status=value;return this},json(value){result=value}};handler({params:{id:1},query},res);return {status,result}};
  return {request,queries};
 }
@@ -60,4 +60,10 @@ test('分段摘要显示每段打卡；去重、缺卡、跨日和秒级合计�
  const result=punchSummary([...rows,rows[0],rows[1]]);assert.equal(result.hours,5.92);assert.equal(result.segments.length,2);assert.equal(result.segments[0].start_time,'2026-10-05 11:34');assert.equal(result.segments[0].end_time,'2026-10-05 14:00');assert.equal(result.segments[1].start_time,'2026-10-05 17:30');assert.equal(result.segments[1].end_time,'2026-10-05 21:00');
  const missing=punchSummary([...rows.slice(0,2),rows[2]]);assert.equal(missing.segments.length,2);assert.equal(missing.segments[1].end_time,null);assert.equal(missing.incomplete,true);
  const cross=punchSummary([p('2026-10-05 22:00:00','OnDuty'),p('2026-10-06 06:00:00','OffDuty')]);assert.equal(cross.segments[0].end_time,'2026-10-06 06:00');assert.equal(cross.hours,8);
+});
+
+
+test('集团督导个人考勤使用门店规则，不套用办公室休息日',()=>{
+ const route=readRoute({id:1,name:'督导',store_name:'鹅太公品牌'},{calendar_json:JSON.stringify([{date:'2026-10-01',type:'rest'}])},{store_id:12});
+ const response=route.request({period:'2026-10'});assert.equal(response.status,200);assert.equal(response.result.days[0].status,'unknown');assert.equal(route.queries.length,1);
 });

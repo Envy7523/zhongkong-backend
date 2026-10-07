@@ -2450,7 +2450,9 @@ function formatPayrollRow(input = {}, scheduledDays = 26) {
 }
 function readPayrollSheet(sheet) {
   const items = db.queryAll('SELECT id,employee_id,sort_order,data FROM payroll_sheet_items WHERE sheet_id=? ORDER BY sort_order,id', [sheet.id]).map(item => {
-    const data = JSON.parse(item.data || '{}');
+    let data = JSON.parse(item.data || '{}');
+    const supervisor=staffSupervisor.assignment(db,item.employee_id);
+    if(supervisor && Number(supervisor.store_id)===Number(sheet.store_id) && ['草稿','已保存','退回'].includes(sheet.status)){const employee=db.queryOne('SELECT store_name FROM employees WHERE id=?',[item.employee_id]);if(employee && isGroupAffiliation(employee.store_name))data={...data,supervisor_display_only:true,payroll_group_name:employee.store_name};}
     return { ...formatPayrollRow({ ...data, scheduled_days: data.is_dispatch_support ? 0 : data.supervisor_group_payroll?data.scheduled_days:sheet.scheduled_days, payroll_base_days:data.supervisor_group_payroll?data.payroll_base_days:sheet.scheduled_days }, sheet.scheduled_days), id: item.id, employee_id: item.employee_id, sort_order: item.sort_order };
   });
   return { ...sheet, items };
@@ -2774,7 +2776,7 @@ app.get('/api/staff/:id/dingtalk-attendance', (req, res) => {
     const records = db.queryAll(`SELECT id,work_date,check_time,check_type,time_result,location_result,synced_at FROM dingtalk_attendance_records WHERE ${where.join(' AND ')} ORDER BY check_time DESC`, params);
     let calendar={};
     if(period){
-      const office=isGroupAffiliation(employee.store_name);
+      const office=isGroupAffiliation(employee.store_name) && !staffSupervisor.assignment(db,employee.id);
       const setting=office?db.queryOne("SELECT calendar_json FROM payroll_attendance_settings WHERE period=? AND staff_group='group'",[period]):null;
       const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date());
       calendar={...employeeCalendar({period,records,officeCalendar:JSON.parse(setting?.calendar_json || '[]'),today}),office};
@@ -4867,6 +4869,7 @@ app.delete('/api/users/:id', (req, res) => {
     }
     const user = db.queryOne('SELECT avatar_url FROM users WHERE id=?', [req.params.id]);
     if (!user) return res.status(404).json({ error: '用户不存在' });
+    db.run('DELETE FROM user_positions WHERE user_id=?',[req.params.id]);
     db.run('DELETE FROM users WHERE id=?', [req.params.id]);
     db.save();
     removeAvatarFile(user.avatar_url);

@@ -266,3 +266,13 @@ test('集团督导工资归集团，兼任门店仅展示零工资；伪造金�
  assert.equal((await api('/api/payroll-sheets/'+sheet.id,'PUT',{version:sheet.version,items:sheet.items})).status,200);
  assert.equal(helpers.formatPayrollRow({...zero,reward:999,salary_overrides:{actual_base_salary:100}}).gross_salary,0);
 }));
+
+
+test('督导从门店调整为集团后，旧草稿即时展示0，存储快照未被读取修改',()=>check(async({db,api})=>{
+ db.run("UPDATE employees SET store_id=1,store_name='A店' WHERE id=3");
+ const old=(await prepare(api)).data.sheet;const row=old.items.find(r=>r.employee_id===3);assert(row.gross_salary>0);
+ const snapshot=db.queryOne('SELECT data FROM payroll_sheet_items WHERE id=?',[row.id]).data;
+ db.run("UPDATE employees SET store_id=NULL,store_name='永文总公司' WHERE id=3");const supervisor=require('../lib/staff-supervisor');supervisor.initialize(db);supervisor.save(db,3,1);
+ const result=await api('/api/payroll-sheets/'+old.id);assert.equal(result.status,200);const display=result.data.sheet.items.find(r=>r.employee_id===3);assert(display.supervisor_display_only);assert.equal(display.gross_salary,0);
+ assert.equal(db.queryOne('SELECT data FROM payroll_sheet_items WHERE id=?',[row.id]).data,snapshot);
+}));
