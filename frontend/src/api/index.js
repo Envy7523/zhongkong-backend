@@ -456,3 +456,13 @@ export const getPayrollAttendanceSettings = () => http.get('/api/payroll-attenda
 export const getPayrollReview = (period) => http.get(`/api/payroll-review/${period}`)
 export const getPayrollReviewSheet = (period, id) => http.get(`/api/payroll-review/${period}/sheets/${id}`)
 export const getEmployeePayslips = (period, view = 'submitted') => http.get(`/api/employee-payslips/${period}`, { params: { view } })
+
+// 周排班与个人调休库存：独立于员工资料编辑。
+export const getRosterContext=()=>http.get('/api/staff-roster/context')
+export const getRosterWeek=params=>http.get('/api/staff-roster/week',{params})
+export const saveRosterWeek=data=>http.put('/api/staff-roster/week',data)
+export const getRosterBalance=id=>http.get(`/api/staff-roster/employees/${id}/balance`)
+export const saveRosterException=(id,date,data)=>http.put(`/api/staff-roster/employees/${id}/exceptions/${date}`,data)
+
+export const previewRosterPayroll=id=>http.get(`/api/staff-roster/payroll/${id}/preview`)
+export const applyRosterPayroll=(id,data)=>http.post(`/api/staff-roster/payroll/${id}/apply`,data)

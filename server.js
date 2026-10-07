@@ -21,6 +21,7 @@ const ledgerBackupImport = require('./lib/bookkeeping-import');
 const posBookkeepingDaily = require('./lib/pos-bookkeeping-daily');
 const bookkeepingReview = require('./lib/bookkeeping-review');
 const payrollWorkflow = require('./lib/payroll-workflow');
+const staffRoster = require('./lib/staff-roster');
 const storeStaff = require('./lib/store-staff');
 const wecomBot = require('./lib/wecom-bot');
 const staffImport = require('./lib/staff-import');
@@ -2498,6 +2499,7 @@ function payrollWorkbook(sheet) {
 }
 
 payrollWorkflow.mount({ app, db, readPayrollSheet, payrollTemplateRows, formatPayrollRow, payrollWorkbook, XLSX });
+const rosterEngine=staffRoster.mount({app,db,readPayrollSheet,formatPayrollRow});
 storeStaff.mount({ app, db, validateStaffFields });
 
 // 工资表制作：仅根据员工档案和 C 级薪酬构成生成新的月度工作表，不会改动第三方工资文件或员工薪酬档案。
@@ -7075,6 +7077,9 @@ app.get('/api/bot/status', (_req, res) => {
   setupConsoleEncoding();
   await db.init();
   payrollWorkflow.initialize(db);
+  staffRoster.initialize(db);
+  // Replay balances after midnight and after punch corrections; unchanged accounts do not write.
+  const rosterTick=setInterval(()=>{try{rosterEngine.runAll()}catch(error){console.warn("[staff-roster] 自动核算失败："+error.message)}},15*60*1000);rosterTick.unref();
   analysisAgents.recoverInterrupted(db);
   db.seed();
   wecomRouting.syncDefaultWebhookBot(db, loadConfig());
