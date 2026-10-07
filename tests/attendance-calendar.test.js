@@ -53,3 +53,11 @@ test('打卡摘要保留分段起止、跨日时间、缺卡与真实工时，�
  const cross=punchSummary([punch('2026-10-05T14:00:00Z','OnDuty'),punch('2026-10-06 06:00:00','OffDuty')]);assert.equal(cross.start_time,'2026-10-05 22:00');assert.equal(cross.end_time,'2026-10-06 06:00');assert.equal(cross.hours,8);
  const missing=punchSummary([punch('2026-10-05 08:00:00','OnDuty'),punch('2026-10-05 17:00:00','OffDuty','NotSigned')]);assert.equal(missing.end_time,null);assert.equal(missing.hours,null);assert.equal(missing.incomplete,true);assert.equal(punchSummary([]).punch_count,0);
 });
+
+test('分段摘要显示每段打卡；去重、缺卡、跨日和秒级合计保持原计算',()=>{
+ const {punchSummary}=require('../lib/attendance-calendar');const p=(time,type)=>({check_time:time,check_type:type,time_result:'Normal'});
+ const rows=[p('2026-10-05 11:34:14','OnDuty'),p('2026-10-05 14:00:15','OffDuty'),p('2026-10-05 17:30:58','OnDuty'),p('2026-10-05 21:00:08','OffDuty')];
+ const result=punchSummary([...rows,rows[0],rows[1]]);assert.equal(result.hours,5.92);assert.equal(result.segments.length,2);assert.equal(result.segments[0].start_time,'2026-10-05 11:34');assert.equal(result.segments[0].end_time,'2026-10-05 14:00');assert.equal(result.segments[1].start_time,'2026-10-05 17:30');assert.equal(result.segments[1].end_time,'2026-10-05 21:00');
+ const missing=punchSummary([...rows.slice(0,2),rows[2]]);assert.equal(missing.segments.length,2);assert.equal(missing.segments[1].end_time,null);assert.equal(missing.incomplete,true);
+ const cross=punchSummary([p('2026-10-05 22:00:00','OnDuty'),p('2026-10-06 06:00:00','OffDuty')]);assert.equal(cross.segments[0].end_time,'2026-10-06 06:00');assert.equal(cross.hours,8);
+});
