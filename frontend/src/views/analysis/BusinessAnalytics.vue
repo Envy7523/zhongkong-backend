@@ -368,14 +368,13 @@
       >
     </section>
 
-    <MeituanSettlement v-if="isMeituanPage && meituanOpLoaded" :totals="mtOpTot" />
     <section
-      v-if="isDeliverySettlementView && !isMeituanPage"
+      v-if="isDeliverySettlementView"
       class="delivery-settlement-chain"
       :aria-label="`${scopeChip}数据口径拆解`"
     >
       <div>
-        <span>营业额</span><strong>{{ money(chainGross) }}</strong>
+        <span>{{ isMeituanPage && mtOpTot.settlement?.has_bills && !mtOpTot.settlement?.complete ? '营业额（已结算店日）' : '营业额' }}</span><strong>{{ money(chainGross) }}</strong>
       </div>
       <b>−</b>
       <el-tooltip
@@ -400,7 +399,7 @@
       </el-tooltip>
       <b>=</b>
       <div class="settlement-result">
-        <span>实际到账</span><strong>{{ money(chainActual) }}</strong>
+        <span>{{ isMeituanPage && !mtOpTot.settlement?.has_bills ? '营业收入' : '实际到账' }}</span><strong>{{ money(chainActual) }}</strong>
       </div>
       <b>−</b>
       <el-tooltip effect="light" placement="bottom" :show-after="140" popper-class="delivery-expense-tooltip">
@@ -416,6 +415,8 @@
         <span>实际到手</span><strong>{{ money(chainTakeHome) }}</strong>
       </div>
     </section>
+
+    <MeituanSettlement v-if="isMeituanPage && meituanOpLoaded" :totals="mtOpTot" :missing-platform-days="data.missing_platform_days || []" />
 
     <section
       v-if="isMeituanGroupBuyView"
@@ -3882,7 +3883,9 @@ const cardDiscountRatio = computed(() =>
 );
 // 结算拆解链：美团外卖视角与卡片/经营日报同一口径；实际到账 = 营业收入 − 平台费用
 const chainGross = computed(() =>
-  mtOpView.value ? cardGross.value : Number(data.totals.gross_amount || 0),
+  isMeituanPage.value && mtOpTot.value.settlement?.has_bills
+    ? Number(mtOpTot.value.settlement.covered_gross_amount || 0)
+    : mtOpView.value ? cardGross.value : Number(data.totals.gross_amount || 0),
 );
 const chainDiscount = computed(() =>
   mtOpView.value
@@ -3898,7 +3901,11 @@ const chainFees = computed(() =>
   mtOpView.value ? mtOpFees.value : Number(data.totals.fees || 0),
 );
 const chainActual = computed(() =>
-  mtOpView.value
+  isMeituanPage.value
+    ? mtOpTot.value.settlement?.has_bills
+      ? Number(mtOpTot.value.settlement.covered_confirmed_amount || 0)
+      : mtOpIncomeRaw.value
+    : mtOpView.value
     ? isTaobaoOperation.value
       ? mtOpActualRaw.value
       : mtOpActualRaw.value || mtOpIncomeRaw.value
@@ -3969,6 +3976,10 @@ const feeBreakdownItems = computed(() => {
   return list.filter((item) => Math.abs(item.amount) > 0.005);
 });
 const deliveryExpenseItems = computed(() => {
+  if (isMeituanPage.value) {
+    if (mtOpTot.value.settlement?.has_bills) return (mtOpTot.value.settlement.covered_expense_items || []).map((item, index) => ({ ...item, key: `settlement-${index}` }));
+    return Math.abs(chainExpenses.value) > 0.005 ? [{ key: 'operating_expense', label: '补贴及支出', amount: chainExpenses.value }] : [];
+  }
   const breakdown = mtOpView.value
     ? mtOpTot.value.fee_breakdown || {}
     : data.totals.fee_breakdown || {};
