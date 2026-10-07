@@ -21,7 +21,7 @@ test('超过月出勤额度按实际超额半天存假，未超额不存',()=>{
  const result=run(days,'2026-10-28');assert.equal(result.balance,0.5);assert.equal(result.lots[0].date,'2026-10-26');assert.equal(result.months[0].paid_days,25);assert.equal(result.days[25].leave_days,0.5);
 });
 test('先用本月正常休息额度，再扣最早到期批次，不透支库存',()=>{
- const days=[work('2026-08-01'),work('2026-08-02'),...Array.from({length:8},(_,i)=>rest(`2026-10-${String(i+1).padStart(2,'0')}`))];
+ const days=[work('2026-08-01'),work('2026-08-02'),...Array.from({length:8},(_,i)=>({...rest(`2026-10-${String(i+1).padStart(2,'0')}`),plan:{type:i<6?'rest':'comp'}}))];
  const result=run(days,'2026-10-10');assert.equal(result.balance,0);assert.equal(result.events.filter(e=>e.type==='use').length,2);assert.equal(result.events.find(e=>e.type==='use').source_date,'2026-08-01');assert.equal(result.days.find(d=>d.date==='2026-10-07').paid_days,1);
  const insufficient=run([...days,rest('2026-10-09')],'2026-10-10');assert.equal(insufficient.days.at(-1).status,'pending');assert.equal(insufficient.balance,0);
 });
@@ -43,4 +43,12 @@ test('兼职实际工时不按正式员工半天规则，也不重复存假',()=
 test('今日和未来排班不提前入账，重复重放不重复计假，补卡修订可撤回旧信用',()=>{
  const days=[work('2026-08-01'),work('2026-10-07')];assert.deepEqual(run(days),run(days));assert.equal(run(days).balance,1);assert.equal(run(days).days[1].status,'planned');
  assert.equal(run([{date:'2026-08-01',records:[],plan:{type:'work'}}]).balance,0);assert.equal(dateAdd('2026-12-31',1),'2027-01-01');
+});
+
+test('指定调休直接扣个人库存，普通休息不自动扣库存，请假安排无需人事表单',()=>{
+ const result=run([work('2026-08-01'),{date:'2026-10-01',plan:{type:'comp'}},rest('2026-10-02'),{date:'2026-10-03',plan:{type:'leave',reason:'就医'}},work('2026-10-04',3,{plan:{type:'leave',reason:'就医'}})]);
+ assert.equal(result.days[1].status,'comp');assert.equal(result.days[1].used,1);assert.equal(result.months.find(m=>m.period==='2026-10').normal_rest_used,1);
+ assert.equal(result.days[3].leave_days,1);assert.equal(result.days[4].leave_days,0.5);assert.equal(result.days[4].work_days,0.5);
+ const restDays=[work('2026-08-01'),...Array.from({length:7},(_,i)=>rest(`2026-10-${String(i+1).padStart(2,'0')}`))];
+ const ordinary=run(restDays,'2026-10-09');assert.equal(ordinary.balance,1);assert.equal(ordinary.days.at(-1).status,'pending');
 });
