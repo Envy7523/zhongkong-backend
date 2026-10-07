@@ -34,8 +34,8 @@ test('兼职沿用默认班次无需填写时间，提交后仍可调整未来�
  body=payload(week);body.employees[0].days[0].start_time='10:00';body.employees[0].days[0].end_time='08:00';assert.equal((await api('/api/staff-roster/week','PUT',body)).status,400);body.employees[0].days[0].next_day=true;assert.equal((await api('/api/staff-roster/week','PUT',body)).status,200);
 }));
 test('历史周与已过去日期不可改，异常修订走人事独立接口',()=>check(async({api})=>{
- const old=await read(api,1,'2026-09-28');assert.equal(old.can_submit,false);assert.equal((await api('/api/staff-roster/week','PUT',payload(old))).status,403);
- const week=await read(api,1,'2026-10-05'),body=payload(week);body.employees[0].days[0].type='rest';assert.equal((await api('/api/staff-roster/week','PUT',body)).status,403);
+ const old=await read(api,1,'2026-09-21');assert.equal(old.can_submit,false);assert.equal((await api('/api/staff-roster/week','PUT',payload(old))).status,403);
+ const week=await read(api,1,'2026-10-05'),body=payload(week);body.employees[0].days[0].type='rest';const filled=await api('/api/staff-roster/week','PUT',body);assert.equal(filled.status,200);const changed=payload(filled.data.week);changed.employees[0].days[0].type='work';assert.equal((await api('/api/staff-roster/week','PUT',changed)).status,403);
  assert.equal((await api('/api/staff-roster/week?week_start=2026-10-06')).status,400);
 }));
 test('请假必填原因，店长只能申请，人事才可批准、认定旷工及修订工时',()=>check(async({api,db})=>{
@@ -93,4 +93,15 @@ test('已赚取存假可调休，但跨周预留及到期日均不得重复使�
  let body=payload(await read(api));body.employees[0].days[0].type='comp';body.publish=true;assert.equal((await api('/api/staff-roster/week','PUT',body)).status,200);
  body=payload(await read(api,1,'2026-10-19'));body.employees[0].days[0].type='comp';assert.equal((await api('/api/staff-roster/week','PUT',body)).status,400);
  body=payload(await read(api,1,'2027-01-04'));body.employees[0].days[0].type='comp';assert.equal((await api('/api/staff-roster/week','PUT',body)).status,400);
+}));
+
+test('本月空白日期允许店长补排，已有过去安排只能人事修改，历史月份均只读',()=>check(async({api,db})=>{
+ let week=await read(api,1,'2026-10-05');assert.equal(week.employees[0].days[0].can_edit,true);
+ let body=payload(week);body.employees[0].days[0].type='work';let saved=await api('/api/staff-roster/week','PUT',body);assert.equal(saved.status,200);assert.equal(saved.data.week.employees[0].days[0].can_edit,false);assert.match(saved.data.week.employees[0].days[0].readonly_reason,/联系人事/);
+ week=await read(api,2,'2026-10-05');assert.equal(week.employees[0].days[0].can_edit,true);body=payload(week);body.employees[0].days[0].type='leave';body.employees[0].days[0].reason='补登记事假';assert.equal((await api('/api/staff-roster/week','PUT',body,2)).status,200);
+ week=await read(api,2,'2026-09-21');assert.equal(week.can_submit,false);assert.equal(week.employees[0].days[0].can_edit,false);assert.match(week.employees[0].days[0].readonly_reason,/历史月份/);assert.equal((await api('/api/staff-roster/week','PUT',payload(week),2)).status,403);
+ assert.equal(db.queryOne('SELECT COUNT(*) n FROM staff_roster_audit').n,2);
+}));
+test('补排已过去调休仍检查当日库存，不用未来或启用前的虚构余额',()=>check(async({api})=>{
+ const week=await read(api,2,'2026-10-05'),body=payload(week);body.employees[0].days[0].type='comp';const result=await api('/api/staff-roster/week','PUT',body,2);assert.equal(result.status,400);assert.match(result.data.error,/不能补排调休/);
 }));
