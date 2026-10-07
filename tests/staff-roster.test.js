@@ -105,3 +105,9 @@ test('本月空白日期允许店长补排，已有过去安排只能人事修�
 test('补排已过去调休仍检查当日库存，不用未来或启用前的虚构余额',()=>check(async({api})=>{
  const week=await read(api,2,'2026-10-05'),body=payload(week);body.employees[0].days[0].type='comp';const result=await api('/api/staff-roster/week','PUT',body,2);assert.equal(result.status,400);assert.match(result.data.error,/不能补排调休/);
 }));
+
+test('周排班返回真实打卡摘要，启用之前月份和今天缺卡也可展示，跨店不泄露',()=>check(async({api,db})=>{
+ db.run("INSERT INTO dingtalk_attendance_records VALUES(1,1,'2026-09-22','2026-09-22 22:00:00','OnDuty','Normal'),(2,1,'2026-09-22','2026-09-23 06:00:00','OffDuty','Normal'),(3,1,'2026-10-07','2026-10-07 08:00:00','OnDuty','Normal'),(4,2,'2026-10-07','2026-10-07 09:00:00','OnDuty','Normal')");
+ const old=await read(api,1,'2026-09-21'),summary=old.employees[0].days[1].attendance;assert.equal(summary.start_time,'2026-09-22 22:00');assert.equal(summary.end_time,'2026-09-23 06:00');assert.equal(summary.hours,8);
+ const week=await read(api,1,'2026-10-05');assert.equal(week.employees.length,1);const today=week.employees[0].days[2].attendance;assert.equal(today.start_time,'2026-10-07 08:00');assert.equal(today.end_time,null);assert.equal(today.hours,null);assert.equal(today.incomplete,true);assert.equal(week.employees[0].days[3].attendance.punch_count,0);
+}));

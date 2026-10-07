@@ -44,3 +44,12 @@ test('办公室员工接口读取对应月份安排，原始流水接口保持�
  assert.equal(route.request({period:'2026-10'}).result.days[0].status,'rest');
  const result=route.request({date_from:'2026-10-01',date_to:'2026-10-31'}).result;assert.equal(result.records.length,2);assert.equal(result.days,undefined);
 });
+
+test('打卡摘要保留分段起止、跨日时间、缺卡与真实工时，不把午休算成出勤',()=>{
+ const {punchSummary}=require('../lib/attendance-calendar');
+ const punch=(time,type,result='Normal')=>({check_time:time,check_type:type,time_result:result});
+ const summary=punchSummary([punch('2026-10-05 08:00:00','OnDuty'),punch('2026-10-05 12:00:00','OffDuty'),punch('2026-10-05 13:00:00','OnDuty'),punch('2026-10-05 17:00:00','OffDuty')]);
+ assert.equal(summary.start_time,'2026-10-05 08:00');assert.equal(summary.end_time,'2026-10-05 17:00');assert.equal(summary.hours,8);assert.equal(summary.incomplete,false);
+ const cross=punchSummary([punch('2026-10-05T14:00:00Z','OnDuty'),punch('2026-10-06 06:00:00','OffDuty')]);assert.equal(cross.start_time,'2026-10-05 22:00');assert.equal(cross.end_time,'2026-10-06 06:00');assert.equal(cross.hours,8);
+ const missing=punchSummary([punch('2026-10-05 08:00:00','OnDuty'),punch('2026-10-05 17:00:00','OffDuty','NotSigned')]);assert.equal(missing.end_time,null);assert.equal(missing.hours,null);assert.equal(missing.incomplete,true);assert.equal(punchSummary([]).punch_count,0);
+});
