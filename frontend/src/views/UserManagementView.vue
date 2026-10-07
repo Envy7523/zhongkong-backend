@@ -130,15 +130,13 @@
           </el-form-item>
         </div>
         <el-form-item label="岗位权限（可多选）" required>
-          <div class="position-picker">
-            <el-checkbox-group v-model="profileForm.position_ids" class="position-checklist" aria-label="账号岗位权限组合">
-              <el-checkbox v-for="position in positions" :key="position.id" :label="position.id" :class="['position-choice', { selected: profileForm.position_ids.includes(position.id) }]">
-                <span>{{ position.name }}</span><small>{{ position.permissions?.includes('*') ? '全部权限' : `${position.permissions?.length || 0} 项权限` }}</small>
-              </el-checkbox>
-            </el-checkbox-group>
-            <div class="position-selection-summary">已选 {{ profileForm.position_ids.length }} 个岗位<span v-if="selectedPositionNames.length">：{{ selectedPositionNames.join('、') }}</span></div>
+          <div class="selected-position-field">
+            <div class="selected-position-tags">
+              <el-tag v-for="position in selectedPositions" :key="position.id" closable @close="removeSelectedPosition(position.id)">{{ position.name }}</el-tag>
+              <span v-if="!selectedPositions.length" class="position-empty">尚未选择权限</span>
+            </div>
+            <el-button type="primary" plain @click="openPositionPicker">{{ selectedPositions.length ? '修改权限' : '选择权限' }}</el-button>
           </div>
-          <div class="position-form-hint">勾选多个岗位后权限合并，例如“人事”＋“工资审核”；无需为每个特殊组合新建岗位。</div>
         </el-form-item>
         <el-form-item label="绑定门店" :required="requiresStore"><el-select v-model="profileForm.store_id" filterable clearable placeholder="选择账号所属门店" style="width:100%"><el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" /></el-select><div class="position-form-hint">使用“店长（员工与工资）”岗位时必填；店长只能访问绑定门店。</div></el-form-item>
         <div class="form-grid form-grid-single">
@@ -173,6 +171,28 @@
           {{ profileMode === 'create' ? '创建成员' : '保存修改' }}
         </el-button>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="positionPickerVisible" title="选择岗位权限" width="min(720px, 94vw)" align-center append-to-body class="position-picker-dialog">
+      <div class="position-picker-layout">
+        <nav class="position-category-nav" aria-label="权限分类">
+          <button v-for="category in positionCategories" :key="category.id" type="button" :class="{ active: positionCategory === category.id }" :aria-pressed="positionCategory === category.id" @click="positionCategory = category.id">
+            <span>{{ category.name }}</span><small>{{ draftCategoryCount(category.id) }} 已选</small>
+          </button>
+        </nav>
+        <section class="position-options">
+          <el-input v-model="positionSearch" clearable placeholder="搜索岗位名称" aria-label="搜索岗位名称" />
+          <div class="position-options-heading"><b>{{ positionCategory === 'group' ? '集团权限' : '门店权限' }}</b><span>可多选</span></div>
+          <el-checkbox-group v-model="draftPositionIds" class="position-option-list" aria-label="可选岗位权限">
+            <el-checkbox v-for="position in visiblePositions" :key="position.id" :label="position.id" class="position-option-row">
+              <span>{{ position.name }}</span><small>{{ position.permissions?.includes('*') ? '全部权限' : `${position.permissions?.length || 0} 项权限` }}</small>
+            </el-checkbox>
+          </el-checkbox-group>
+          <el-empty v-if="!visiblePositions.length" description="没有匹配的岗位" :image-size="60" />
+        </section>
+      </div>
+      <div class="position-picker-summary"><span>已选 {{ draftPositionIds.length }} 项</span><div><el-tag v-for="position in draftSelectedPositions" :key="position.id" closable @close="draftPositionIds = draftPositionIds.filter(id => id !== position.id)">{{ position.name }}</el-tag><span v-if="!draftPositionIds.length" class="position-empty">请选择需要的权限</span></div></div>
+      <template #footer><el-button @click="positionPickerVisible = false">取消</el-button><el-button type="primary" @click="confirmPositionPicker">确定</el-button></template>
     </el-dialog>
 
     <el-dialog
@@ -229,7 +249,32 @@ const users = ref([])
 const positions = ref([])
 const stores = ref([])
 const requiresStore = computed(() => {const permissions=positions.value.filter(position=>profileForm.position_ids.includes(position.id)).flatMap(position=>position.permissions || []);return permissions.includes('staff.store.edit') && !permissions.includes('*')})
-const selectedPositionNames = computed(() => positions.value.filter(position => profileForm.position_ids.includes(position.id)).map(position => position.name))
+const selectedPositions = computed(() => positions.value.filter(position => profileForm.position_ids.includes(position.id)))
+const positionPickerVisible = ref(false)
+const draftPositionIds = ref([])
+const positionCategory = ref('group')
+const positionSearch = ref('')
+const positionCategories = [{ id: 'group', name: '集团权限' }, { id: 'store', name: '门店权限' }]
+// 分类仅帮助选择现有岗位；授权仍由岗位权限并集和账号绑定门店执行。
+function positionGroup(position) {
+  return position.permissions?.includes('staff.store.edit') || /店长/.test(position.name) ? 'store' : 'group'
+}
+const visiblePositions = computed(() => positions.value.filter(position => positionGroup(position) === positionCategory.value && position.name.toLowerCase().includes(positionSearch.value.trim().toLowerCase())))
+const draftSelectedPositions = computed(() => positions.value.filter(position => draftPositionIds.value.includes(position.id)))
+function draftCategoryCount(category) { return draftSelectedPositions.value.filter(position => positionGroup(position) === category).length }
+function openPositionPicker() {
+  draftPositionIds.value = [...profileForm.position_ids]
+  positionCategory.value = 'group'
+  positionSearch.value = ''
+  positionPickerVisible.value = true
+}
+function confirmPositionPicker() {
+  if (!draftPositionIds.value.length) { ElMessage.warning('请至少选择一个岗位权限'); return }
+  if (draftPositionIds.value.length > 10) { ElMessage.warning('最多选择10个岗位权限'); return }
+  profileForm.position_ids = [...draftPositionIds.value]
+  positionPickerVisible.value = false
+}
+function removeSelectedPosition(id) { profileForm.position_ids = profileForm.position_ids.filter(value => value !== id) }
 const keyword = ref('')
 const loading = ref(false)
 const saving = ref(false)
@@ -694,14 +739,30 @@ async function removeAvatar(user) {
   gap: 14px;
 }
 .form-grid-single { grid-template-columns: 1fr; }
-.position-picker { width:100%; }
-.position-checklist { display:grid;grid-template-columns:1fr 1fr;gap:8px;max-height:230px;overflow:auto;padding:2px; }
-.position-choice { margin:0;height:auto;min-height:48px;padding:8px 10px;border:1px solid #e5eaf2;border-radius:8px;white-space:normal;box-sizing:border-box; }
-.position-choice.selected { border-color:#93b4ff;background:#f0f5ff; }
-.position-choice :deep(.el-checkbox__label) { min-width:0;line-height:1.5; }
-.position-choice span,.position-choice small { display:block; }
-.position-choice small { font-size:11px;color:#8290a4; }
-.position-selection-summary { margin-top:10px;font-size:12px;line-height:1.6;color:#315b9a; }
+.selected-position-field { display:flex;align-items:center;gap:12px;width:100%;padding:12px;border:1px solid #dce5f3;border-radius:8px;box-sizing:border-box; }
+.selected-position-tags { display:flex;flex:1;flex-wrap:wrap;gap:8px;min-width:0; }
+.position-empty { color:#7b879b;font-size:13px; }
+.position-picker-layout { display:grid;grid-template-columns:160px minmax(0,1fr);min-height:300px; }
+.position-category-nav { padding:0 16px 0 0;border-right:1px solid #e7edf5; }
+.position-category-nav button { display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:48px;margin-bottom:8px;padding:10px 12px;background:transparent;border:0;border-radius:6px;color:#43536d;cursor:pointer; }
+.position-category-nav button.active { color:#245eea;background:#eef4ff;font-weight:600; }
+.position-category-nav small { font-size:12px;font-weight:400; }
+.position-options { padding-left:20px; }
+.position-options-heading { display:flex;justify-content:space-between;margin:16px 0 4px;padding:10px 12px;background:#f5f7fb;color:#43536d; }
+.position-options-heading span { color:#7b879b;font-size:12px; }
+.position-option-list { display:flex;flex-direction:column;max-height:300px;overflow:auto; }
+.position-option-row { margin:0;min-height:46px;height:auto;padding:10px 12px;border-bottom:1px solid #edf1f7;box-sizing:border-box;white-space:normal; }
+.position-option-row :deep(.el-checkbox__label) { display:flex;flex:1;justify-content:space-between;gap:12px;line-height:1.5; }
+.position-option-row small { color:#7b879b;font-size:12px;flex-shrink:0; }
+.position-picker-summary { display:flex;gap:16px;align-items:flex-start;border-top:1px solid #e7edf5;margin-top:20px;padding-top:16px;font-size:13px; }
+.position-picker-summary > span { white-space:nowrap;color:#526580;line-height:24px; }
+.position-picker-summary > div { display:flex;gap:8px;flex-wrap:wrap; }
+@media (max-width:560px) {
+  .position-picker-layout { grid-template-columns:1fr; }
+  .position-category-nav { display:flex;gap:8px;padding:0;border-right:0; }
+  .position-options { padding-left:0; }
+  .selected-position-field { align-items:flex-start; }
+}
 .avatar-management {
   display: flex;
   align-items: center;
