@@ -494,7 +494,7 @@ const POPUP_CONFIG = {
           { index: 'staff-management-employees', label: '员工管理' },
           { index: 'staff-management-store', label: '门店管理' },
           { index: 'staff-management-salary', label: '工资表制作' },
-          { index: 'staff-management-roster', label: '员工周排班' },
+          { index: 'staff-management-roster', label: '员工考勤' },
           { index: 'staff-management-attendance', label: '月出勤管理' },
           { index: 'staff-management-review', label: '工资审核' },
           { index: 'staff-management-payslips', label: '员工工资条查询' },
@@ -624,7 +624,7 @@ const pageTitle = computed(() => {
   if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
   if (isStore3dRoute.value) return '筹建门店 · 门店渲染'
   if (isDbViewerRoute.value) return '数据库查看'
-  if (isStaffManagementRoute.value) return ({ 'staff-management-roster': '人事专区 · 员工周排班', 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作', 'staff-management-attendance': '人事专区 · 月出勤管理', 'staff-management-review': '人事专区 · 工资审核', 'staff-management-payslips': '人事专区 · 员工工资条查询', 'staff-management-dispatch': '人事专区 · 员工调岗' }[staffRouteTabId.value] || '人事专区 · 员工管理')
+  if (isStaffManagementRoute.value) return ({ 'staff-management-roster': '人事专区 · 员工考勤', 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作', 'staff-management-attendance': '人事专区 · 月出勤管理', 'staff-management-review': '人事专区 · 工资审核', 'staff-management-payslips': '人事专区 · 员工工资条查询', 'staff-management-dispatch': '人事专区 · 员工调岗' }[staffRouteTabId.value] || '人事专区 · 员工管理')
   if (isWorkspaceRoute.value) return store.activeTab?.title || '工作台'
   return store.activeTab?.title || '数据概括'
 })

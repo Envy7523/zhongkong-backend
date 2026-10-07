@@ -459,6 +459,7 @@ export const getPayrollReviewSheet = (period, id) => http.get(`/api/payroll-revi
 export const getEmployeePayslips = (period, view = 'submitted') => http.get(`/api/employee-payslips/${period}`, { params: { view } })
 
 // 周排班与个人调休库存：独立于员工资料编辑。
+export const syncRosterWeek=data=>http.post('/api/staff-roster/sync',data,{timeout:120000})
 export const getRosterContext=()=>http.get('/api/staff-roster/context')
 export const getRosterWeek=params=>http.get('/api/staff-roster/week',{params})
 export const saveRosterWeek=data=>http.put('/api/staff-roster/week',data)
