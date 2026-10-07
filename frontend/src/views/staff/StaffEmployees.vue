@@ -186,10 +186,13 @@
       <p class="dingtalk-hint">可在员工列表勾选后只同步选中员工；未勾选时同步全部已绑定员工。日期超过 7 天会自动分段拉取。钉钉员工 ID 在“基础信息”维护。</p>
       <template #footer><el-button @click="dingtalkVisible = false">关闭</el-button><el-button type="primary" :disabled="!dingtalkStatus.configured || !dingtalkStatus.mappedEmployees || (selectedStaff.length && !selectedDingTalkCount)" :loading="dingtalkSyncing" @click="syncDingTalk">{{ selectedStaff.length ? '同步选中员工' : '同步全部员工' }}</el-button></template>
     </el-dialog>
-    <el-dialog v-model="attendanceVisible" :title="`${attendanceEmployee?.name || ''} · 钉钉打卡记录`" width="650px">
-      <el-date-picker v-model="attendanceDateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width:330px;margin-bottom:14px" @change="loadAttendance" />
-      <el-table :data="attendanceRecords" v-loading="attendanceLoading" size="small" max-height="380"><el-table-column prop="work_date" label="工作日" width="110" /><el-table-column prop="check_time" label="打卡时间" min-width="165" /><el-table-column prop="check_type" label="类型" width="95"><template #default="{ row }">{{ row.check_type === 'OnDuty' ? '上班' : row.check_type === 'OffDuty' ? '下班' : row.check_type || '打卡' }}</template></el-table-column><el-table-column prop="time_result" label="结果" width="90"><template #default="{ row }">{{ row.time_result === 'Normal' ? '正常' : row.time_result === 'Late' ? '迟到' : row.time_result || '—' }}</template></el-table-column><el-table-column prop="location_result" label="地点" width="90"><template #default="{ row }">{{ row.location_result === 'Normal' ? '正常' : row.location_result || '—' }}</template></el-table-column></el-table>
-      <div v-if="!attendanceLoading && !attendanceRecords.length" class="lifecycle-empty">该日期范围暂无已同步的钉钉打卡记录。</div>
+    <el-dialog v-model="attendanceVisible" :title="`${attendanceEmployee?.name || ''} · 员工考勤`" width="min(800px, 96vw)">
+      <div v-loading="attendanceLoading">
+        <div class="attendance-toolbar"><el-date-picker v-model="attendancePeriod" type="month" value-format="YYYY-MM" :clearable="false" @change="loadAttendance" /><span>出勤 {{ attendanceSummary.attended_days || 0 }} 天 · 已配对工时 {{ attendanceSummary.hours || 0 }} 小时</span></div>
+        <MonthCalendar :period="attendancePeriod" :days="attendanceDays" selectable :selected="attendanceSelected?.date" @select="day=>attendanceSelected=day"><template #default="{day}"><span class="attendance-status">{{ attendanceLabels[day.status] }}</span><small v-if="day.hours!==null">{{ day.hours }} 小时{{ day.incomplete?' · 缺卡':'' }}</small><small v-else-if="day.incomplete">缺卡 · 工时待核</small></template></MonthCalendar>
+        <p class="attendance-note">工时按上班、下班逐段配对，午休间隔不计；缺卡不推算工时。休息 / 放假来自办公室安排；门店无打卡记录的日期不判定为休息。</p>
+        <template v-if="attendanceSelected"><h4>{{ attendanceSelected.date }} · {{ attendanceLabels[attendanceSelected.status] }}</h4><el-table :data="attendanceSelected.records" size="small" max-height="180" empty-text="当日没有已同步打卡记录"><el-table-column prop="check_time" label="打卡时间" min-width="165" /><el-table-column label="类型" width="95"><template #default="{row}">{{ row.check_type==='OnDuty'?'上班':row.check_type==='OffDuty'?'下班':row.check_type }}</template></el-table-column><el-table-column label="结果" width="100"><template #default="{row}">{{ ({Normal:'正常',Late:'迟到',Early:'早退',NotSigned:'未打卡'})[row.time_result] || row.time_result || '—' }}</template></el-table-column></el-table></template>
+      </div>
     </el-dialog>
   </div>
 </template>
@@ -198,6 +201,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 import PhotoThumb from '@/components/PhotoThumb.vue'
+import MonthCalendar from '@/components/MonthCalendar.vue'
 import AttachmentPreview from '@/components/AttachmentPreview.vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { createStaff, getConfig, getDingTalkAttendanceStatus, getStaffDingTalkAttendance, getStaffLifecycle, getStaffList, getStaffSalaryProfile, getStaffStats, getStores, importStaffWorkbook, saveStaffSalaryProfile, syncDingTalkAttendance, syncStaffFromWecom, updateStaff } from '@/api'
@@ -229,7 +233,9 @@ function onFilterAffiliationChange(value) {
 function changeAffiliationType() { storeName.value = ''; search() }
 const lifecycleVisible = ref(false), lifecycleLoading = ref(false), lifecycleEmployee = ref(null), lifecycleEvents = ref([])
 const dingtalkVisible = ref(false), dingtalkSyncing = ref(false), dingtalkStatus = ref({}), dingtalkDateRange = ref([])
-const attendanceVisible = ref(false), attendanceLoading = ref(false), attendanceEmployee = ref(null), attendanceRecords = ref([]), attendanceDateRange = ref([])
+const attendanceVisible = ref(false), attendanceLoading = ref(false), attendanceEmployee = ref(null), attendancePeriod = ref(''), attendanceDays = ref([]), attendanceSummary = ref({}), attendanceSelected = ref(null)
+const attendanceLabels={attended:'出勤',rest:'休息（安排）',holiday:'放假（安排）',missing:'未打卡',unknown:'无记录',future:'待记录'}
+let attendanceGeneration=0
 
 const editVisible = ref(false)
 const saving = ref(false)
@@ -550,19 +556,17 @@ async function syncDingTalk() {
   finally { dingtalkSyncing.value = false }
 }
 async function openAttendance(row) {
-  attendanceVisible.value = true; attendanceEmployee.value = row; attendanceRecords.value = []
-  const today = new Date().toISOString().slice(0, 10)
-  attendanceDateRange.value = [today, today]
+  attendanceVisible.value = true; attendanceEmployee.value = row; attendanceDays.value = [];attendanceSummary.value={};attendanceSelected.value=null
+  attendancePeriod.value = new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit'}).format(new Date())
   await loadAttendance()
 }
 async function loadAttendance() {
-  if (!attendanceEmployee.value) return
-  const [date_from, date_to] = attendanceDateRange.value || []
-  if (!date_from || !date_to) return
-  attendanceLoading.value = true
-  try { attendanceRecords.value = (await getStaffDingTalkAttendance(attendanceEmployee.value.id, { date_from, date_to })).records || [] }
-  catch (error) { ElMessage.error('考勤记录读取失败：' + error.message) }
-  finally { attendanceLoading.value = false }
+  if (!attendanceEmployee.value || !attendancePeriod.value) return
+  const generation=++attendanceGeneration
+  attendanceLoading.value=true;attendanceSelected.value=null
+  try {const data=await getStaffDingTalkAttendance(attendanceEmployee.value.id,{period:attendancePeriod.value});if(generation!==attendanceGeneration)return;attendanceDays.value=data.days || [];attendanceSummary.value=data.summary || {}}
+  catch (error) {if(generation===attendanceGeneration){attendanceDays.value=[];attendanceSummary.value={};ElMessage.error('考勤记录读取失败：'+error.message)}}
+  finally {if(generation===attendanceGeneration)attendanceLoading.value=false}
 }
 
 function nextLevel() {
@@ -719,6 +723,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.attendance-toolbar{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:14px;font-size:13px}.attendance-toolbar :deep(.el-date-editor){width:160px}.attendance-status{font-size:12px}.attendance-note{font-size:12px;color:#64748b;line-height:1.6}
 
 .staff-employees-page { max-width:1440px; margin:0 auto; padding:4px 0 34px; color:#263750; }
 .staff-hero { display:flex; align-items:center; justify-content:space-between; gap:24px; margin-bottom:16px; padding:22px 26px; border:1px solid #dbe8fb; border-radius:18px; background:linear-gradient(120deg,#f5f9ff 0%,#eef6ff 56%,#f8fbff 100%); box-shadow:0 10px 28px rgba(38,93,168,.06); }

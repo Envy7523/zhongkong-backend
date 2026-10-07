@@ -27,6 +27,7 @@ const staffImport = require('./lib/staff-import');
 const idCardOcr = require('./lib/idcard-ocr');
 const wecomStaffSync = require('./lib/wecom-staff-sync');
 const dingtalkAttendance = require('./lib/dingtalk-attendance');
+const { employeeCalendar } = require('./lib/attendance-calendar');
 const notifications = require('./lib/notifications');
 const storeLifecycle = require('./lib/store-lifecycle');
 const { GROUP_NAMES, isGroupAffiliation } = require('./lib/staff-affiliation');
@@ -2747,14 +2748,25 @@ app.post('/api/staff/dingtalk/auto-sync/run', async (req, res) => {
 
 app.get('/api/staff/:id/dingtalk-attendance', (req, res) => {
   try {
-    const employee = db.queryOne('SELECT id,name,dingtalk_user_id FROM employees WHERE id=?', [req.params.id]);
-    if (!employee) return res.status(404).json({ error: '员工不存在' });    const dateFrom = normalizeAttendanceDate(req.query.date_from) || '';
-    const dateTo = normalizeAttendanceDate(req.query.date_to) || '';
+    const employee = db.queryOne('SELECT id,name,store_name,dingtalk_user_id FROM employees WHERE id=?', [req.params.id]);
+    if (!employee) return res.status(404).json({ error: '员工不存在' });
+    const period=String(req.query.period || '');
+    if(period && !/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) return res.status(400).json({error:'请选择正确月份'});
+    const lastDay=period?new Date(Date.UTC(Number(period.slice(0,4)),Number(period.slice(5)),0)).getUTCDate():0;
+    const dateFrom = period?`${period}-01`:normalizeAttendanceDate(req.query.date_from) || '';
+    const dateTo = period?`${period}-${lastDay}`:normalizeAttendanceDate(req.query.date_to) || '';
     const where = ['employee_id=?']; const params = [employee.id];
     if (dateFrom) { where.push('work_date>=?'); params.push(dateFrom); }
     if (dateTo) { where.push('work_date<=?'); params.push(dateTo); }
     const records = db.queryAll(`SELECT id,work_date,check_time,check_type,time_result,location_result,synced_at FROM dingtalk_attendance_records WHERE ${where.join(' AND ')} ORDER BY check_time DESC`, params);
-    res.json({ ok: true, employee, records });
+    let calendar={};
+    if(period){
+      const office=isGroupAffiliation(employee.store_name);
+      const setting=office?db.queryOne("SELECT calendar_json FROM payroll_attendance_settings WHERE period=? AND staff_group='group'",[period]):null;
+      const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date());
+      calendar={...employeeCalendar({period,records,officeCalendar:JSON.parse(setting?.calendar_json || '[]'),today}),office};
+    }
+    res.json({ ok: true, employee, records, ...calendar });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
