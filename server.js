@@ -39,7 +39,9 @@ const JWT_EXPIRES = '24h';
 
 const app = express();
 const PORT = process.env.PORT || 3456;
-const CONFIG_PATH = path.join(__dirname, 'config.json');
+const CONFIG_PATH = process.env.ZHONGKONG_CONFIG_PATH
+  ? path.resolve(process.env.ZHONGKONG_CONFIG_PATH)
+  : path.join(__dirname, 'config.json');
 const AVATAR_DIR = path.join(__dirname, 'data', 'avatars');
 if (!fs.existsSync(AVATAR_DIR)) fs.mkdirSync(AVATAR_DIR, { recursive: true });
 const businessAssistant = createBusinessAssistant({ db, businessAnalytics, getAiConfig: getActiveAiConfig });
@@ -7172,7 +7174,7 @@ app.post('/api/webhook/smartsheet', async (req, res) => {
   }
 });
 
-  const server = app.listen(PORT, () => {
+  const server = app.listen(PORT, process.env.ZHONGKONG_HOST || undefined, () => {
     console.log(`🚀 中控后台已启动: http://localhost:${PORT}`);
     console.log(`📦 数据库: data/database.sqlite`);
     // 每日自动同步钉钉考勤（默认 01:00 同步上一天，可在 config.json 的 dingtalkAttendance 调整）
