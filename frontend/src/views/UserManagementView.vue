@@ -129,11 +129,16 @@
             <el-input v-model="profileForm.display_name" maxlength="30" placeholder="请输入成员名称" />
           </el-form-item>
         </div>
-        <el-form-item label="岗位" required>
-          <el-select v-model="profileForm.position_ids" multiple collapse-tags collapse-tags-tooltip placeholder="可选择多个岗位" style="width:100%;">
-            <el-option v-for="position in positions" :key="position.id" :label="`${position.name} · ${position.permissions?.includes('*') ? '全部权限' : `${position.permissions?.length || 0} 项权限`}`" :value="position.id" />
-          </el-select>
-          <div class="position-form-hint">岗位即该成员的系统角色与权限来源，可多选，权限合并；在“系统管理 → 岗位设置”统一维护。</div>
+        <el-form-item label="岗位权限（可多选）" required>
+          <div class="position-picker">
+            <el-checkbox-group v-model="profileForm.position_ids" class="position-checklist" aria-label="账号岗位权限组合">
+              <el-checkbox v-for="position in positions" :key="position.id" :label="position.id" :class="['position-choice', { selected: profileForm.position_ids.includes(position.id) }]">
+                <span>{{ position.name }}</span><small>{{ position.permissions?.includes('*') ? '全部权限' : `${position.permissions?.length || 0} 项权限` }}</small>
+              </el-checkbox>
+            </el-checkbox-group>
+            <div class="position-selection-summary">已选 {{ profileForm.position_ids.length }} 个岗位<span v-if="selectedPositionNames.length">：{{ selectedPositionNames.join('、') }}</span></div>
+          </div>
+          <div class="position-form-hint">勾选多个岗位后权限合并，例如“人事”＋“工资审核”；无需为每个特殊组合新建岗位。</div>
         </el-form-item>
         <el-form-item label="绑定门店" :required="requiresStore"><el-select v-model="profileForm.store_id" filterable clearable placeholder="选择账号所属门店" style="width:100%"><el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" /></el-select><div class="position-form-hint">使用“店长（员工与工资）”岗位时必填；店长只能访问绑定门店。</div></el-form-item>
         <div class="form-grid form-grid-single">
@@ -224,6 +229,7 @@ const users = ref([])
 const positions = ref([])
 const stores = ref([])
 const requiresStore = computed(() => {const permissions=positions.value.filter(position=>profileForm.position_ids.includes(position.id)).flatMap(position=>position.permissions || []);return permissions.includes('staff.store.edit') && !permissions.includes('*')})
+const selectedPositionNames = computed(() => positions.value.filter(position => profileForm.position_ids.includes(position.id)).map(position => position.name))
 const keyword = ref('')
 const loading = ref(false)
 const saving = ref(false)
@@ -688,6 +694,14 @@ async function removeAvatar(user) {
   gap: 14px;
 }
 .form-grid-single { grid-template-columns: 1fr; }
+.position-picker { width:100%; }
+.position-checklist { display:grid;grid-template-columns:1fr 1fr;gap:8px;max-height:230px;overflow:auto;padding:2px; }
+.position-choice { margin:0;height:auto;min-height:48px;padding:8px 10px;border:1px solid #e5eaf2;border-radius:8px;white-space:normal;box-sizing:border-box; }
+.position-choice.selected { border-color:#93b4ff;background:#f0f5ff; }
+.position-choice :deep(.el-checkbox__label) { min-width:0;line-height:1.5; }
+.position-choice span,.position-choice small { display:block; }
+.position-choice small { font-size:11px;color:#8290a4; }
+.position-selection-summary { margin-top:10px;font-size:12px;line-height:1.6;color:#315b9a; }
 .avatar-management {
   display: flex;
   align-items: center;
