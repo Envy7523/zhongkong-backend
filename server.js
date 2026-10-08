@@ -6911,6 +6911,15 @@ app.post('/api/internal/syncbot/test-cleanup', express.raw({ type: () => true, l
 });
 
 /** 概览：最近一次运行 / 最近成功时间 / 今日成功失败等待人工数 / 待处理异常数 */
+app.get('/api/business-analytics/sync-runs/bookkeeping-review', (req, res) => {
+  const user = getAuthUserById(req.user?.id);
+  if (!positionPermissions.can(user?.position_permissions, 'data-import.manage') && !positionPermissions.can(user?.position_permissions, 'analysis.view')) {
+    return res.status(403).json({ error: '没有查看复核看板的权限' });
+  }
+  try { res.json(require('./lib/bookkeeping-review-dashboard').dashboard(db)); }
+  catch { res.status(503).json({ error: '记账本复核记录暂时不可读取' }); }
+});
+
 app.get('/api/business-analytics/sync-runs/overview', (req, res) => {
   try { res.json({ ok: true, ...syncJobAudit.overview(db) }); }
   catch (e) { res.status(500).json({ error: e.message }); }

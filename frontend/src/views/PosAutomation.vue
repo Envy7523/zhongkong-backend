@@ -12,6 +12,7 @@
       <button type="button" :class="{ active: section === 'runs' }" :aria-current="section === 'runs' ? 'page' : undefined" @click="router.push('/data-import/pos/automation')">运行记录</button>
       <button v-if="canManageSchedule" type="button" :class="{ active: section === 'schedule' }" :aria-current="section === 'schedule' ? 'page' : undefined" @click="router.push('/data-import/pos/automation/schedule')">各报表同步计划</button>
     </nav>
+    <BookkeepingReviewDashboard v-if="section === 'runs'" />
     <SyncRuns v-if="section === 'runs'" />
     <ReportSyncPlans v-else-if="section === 'schedule'" />
   </main>
@@ -23,6 +24,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import SyncRuns from '@/views/analysis/SyncRuns.vue'
 import ReportSyncPlans from '@/views/ReportSyncPlans.vue'
+import BookkeepingReviewDashboard from '@/views/BookkeepingReviewDashboard.vue'
 
 const router = useRouter()
 const route = useRoute()

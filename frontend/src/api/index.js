@@ -307,6 +307,7 @@ export const getBusinessTemplate = (sourceType) => http.get('/api/business-analy
 
 // ===== AI 自动导报表运行审计（结构化事件；不从普通日志解析）=====
 export const getSyncRunsOverview = () => http.get('/api/business-analytics/sync-runs/overview')
+export const getBookkeepingReviewDashboard = () => http.get('/api/business-analytics/sync-runs/bookkeeping-review')
 export const getSyncRuns = (params) => http.get('/api/business-analytics/sync-runs', { params })
 export const getSyncRunDetail = (id) => http.get(`/api/business-analytics/sync-runs/${id}`)
 
