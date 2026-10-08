@@ -148,6 +148,15 @@ app.use('/api/mp', require('./lib/mp/router'));
 app.use('/api/db-viewer', require('./lib/db-viewer').router);
 
 // 静态文件：优先使用 Vue 前端构建产物，回退到旧版静态文件
+// 即使回退到旧版根目录静态服务，任务照片也只能通过鉴权接口读取。
+app.use((req, res, next) => {
+  let decoded;
+  try { decoded = decodeURIComponent(req.path); } catch { return res.sendStatus(400); }
+  const requested = path.resolve(__dirname, '.' + decoded).toLowerCase();
+  const privateTaskFiles = path.join(__dirname, 'data', 'store-task-files').toLowerCase();
+  if (requested === privateTaskFiles || requested.startsWith(privateTaskFiles + path.sep)) return res.sendStatus(404);
+  next();
+});
 const vueDist = path.join(__dirname, 'frontend', 'dist');
 if (fs.existsSync(vueDist)) {
   // index.html 绝不缓存：每次构建后的 JS 文件名都会变化，旧 HTML 若被缓存会引用不存在的旧资源并白屏。
@@ -6911,6 +6920,16 @@ app.post('/api/internal/syncbot/test-cleanup', express.raw({ type: () => true, l
 });
 
 /** 概览：最近一次运行 / 最近成功时间 / 今日成功失败等待人工数 / 待处理异常数 */
+app.use('/api/store-tasks', require('./lib/store-task-router').createRouter({
+  db,
+  authenticate: (req, res, next) => {
+    const user = getAuthUserById(req.user?.id);
+    if (!user) return res.status(401).json({ error: '请先登录' });
+    req.taskUser = user; next();
+  },
+  scopeFor: require('./lib/mp/auth').storeScope,
+}));
+
 app.get('/api/business-analytics/sync-runs/bookkeeping-review', (req, res) => {
   const user = getAuthUserById(req.user?.id);
   if (!positionPermissions.can(user?.position_permissions, 'data-import.manage') && !positionPermissions.can(user?.position_permissions, 'analysis.view')) {
@@ -7128,6 +7147,9 @@ app.get('/api/bot/status', (_req, res) => {
   if (process.env.DISABLE_WECOM_BOT !== '1') wecomBot.start().catch(err => console.error('[wecom-bot] 启动失败:', err.message));
   setupConsoleEncoding();
   await db.init();
+  const taskPlanTick=()=>{try{require('./lib/store-tasks').generateScheduled(db)}catch(e){console.warn('[store-tasks] 长期任务生成失败：'+e.message)}};
+  taskPlanTick();
+  const taskPlanTimer=setInterval(taskPlanTick,60000);taskPlanTimer.unref();
   payrollWorkflow.initialize(db);
   dingScheduleModule.initialize(db);
   staffRoster.initialize(db);

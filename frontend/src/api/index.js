@@ -7,6 +7,25 @@ const http = axios.create({
   timeout: 30000,
 })
 
+export const storeTaskApi = {
+  config: () => http.get('/api/store-tasks/config'),
+  templates: () => http.get('/api/store-tasks/templates'),
+  save: data => http.post('/api/store-tasks/templates', data),
+  dispatch: data => http.post('/api/store-tasks/dispatch', data),
+  schedules: () => http.get('/api/store-tasks/schedules'),
+  stopSchedule: id => http.post(`/api/store-tasks/schedules/${id}/stop`),
+  list: params => http.get('/api/store-tasks/instances', {params}),
+  submissions: params => http.get('/api/store-tasks/submissions', {params}),
+  submission: id => http.get(`/api/store-tasks/submissions/${id}`),
+  detail: id => http.get(`/api/store-tasks/instances/${id}`),
+  answer: (id,data) => http.post(`/api/store-tasks/instances/${id}/answer`,data),
+  submit: (id,data) => http.post(`/api/store-tasks/instances/${id}/submit`,data),
+  review: (id,data) => http.post(`/api/store-tasks/instances/${id}/review`,data),
+  upload: (id,data) => http.post(`/api/store-tasks/instances/${id}/photo`,{data}),
+  guideUpload: data => http.post('/api/store-tasks/guide-images',{data}),
+  photo: path => http.get('/api/store-tasks/photo',{params:{path}}),
+}
+
 // 请求拦截：自动带 token
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY)

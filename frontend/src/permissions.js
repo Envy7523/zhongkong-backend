@@ -12,6 +12,7 @@ export const PERMISSION_KEYS = [
   'cost.manage',
   'staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review',
   'collab.manage',
+  'store-tasks.manage', 'store-tasks.execute', 'store-tasks.review',
   'bookkeeping.manage',
   'data-import.manage',
   'pipeline.manage',
@@ -29,7 +30,7 @@ export const PERMISSION_KEYS = [
 export const NAV_GROUP_PERMISSIONS = {
   dashboard: ['dashboard.view'],
   'core-business': ['analysis.view', 'store.manage', 'store-preparation.manage', 'menu.manage', 'cost.manage', 'staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'],
-  'operation-tools': ['collab.manage', 'bookkeeping.manage', 'data-import.manage', 'pipeline.manage', 'ai-assistant.view', 'notifications.view'],
+  'operation-tools': ['collab.manage', 'store-tasks.manage', 'store-tasks.execute', 'store-tasks.review', 'bookkeeping.manage', 'data-import.manage', 'pipeline.manage', 'ai-assistant.view', 'notifications.view'],
   system: ['db-viewer.view', 'enterprise-settings.manage', 'users.manage', 'positions.manage', 'settings.manage', 'notifications.rules'],
 }
 
@@ -43,6 +44,7 @@ export const NAV_ITEM_PERMISSIONS = {
   'cost-accounting-group': 'cost.manage',
   'staff-management-group': ['staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'],
   'collab-list': 'collab.manage',
+  'store-tasks': ['store-tasks.manage','store-tasks.execute','store-tasks.review'],
   'bookkeeping-entry': 'bookkeeping.manage',
   'data-import-group': 'data-import.manage',
   pipeline: 'pipeline.manage',

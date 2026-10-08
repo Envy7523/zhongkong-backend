@@ -3,7 +3,7 @@
     {
       "path": "pages/home/index",
       "style": {
-        "navigationBarTitleText": "工作台",
+        "navigationBarTitleText": "首页",
         "enablePullDownRefresh": true
       }
     },
@@ -48,6 +48,37 @@
         "navigationBarTitleText": "记账本",
         "enablePullDownRefresh": true
       }
+    },
+    {
+      "path": "pages/reports/index",
+      "style": {
+        "navigationBarTitleText": "报表"
+      }
+    },
+    {
+      "path": "pages/workbench/index",
+      "style": {
+        "navigationBarTitleText": "工作台"
+      }
+    },
+    {
+      "path": "pages/mine/index",
+      "style": {
+        "navigationBarTitleText": "我的"
+      }
+    },
+    {
+      "path": "pages/tasks/list",
+      "style": {
+        "navigationBarTitleText": "任务进度",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/tasks/detail",
+      "style": {
+        "navigationBarTitleText": "任务申报"
+      }
     }
   ],
   "globalStyle": {
@@ -64,25 +95,25 @@
     "list": [
       {
         "pagePath": "pages/home/index",
-        "text": "工作台",
+        "text": "首页",
         "iconPath": "static/nav/home.png",
         "selectedIconPath": "static/nav/home-on.png"
       },
       {
-        "pagePath": "pages/collab/list",
-        "text": "协同",
-        "iconPath": "static/nav/collab.png",
-        "selectedIconPath": "static/nav/collab-on.png"
-      },
-      {
-        "pagePath": "pages/revenue/index",
-        "text": "门店数据",
+        "pagePath": "pages/reports/index",
+        "text": "报表",
         "iconPath": "static/nav/revenue.png",
         "selectedIconPath": "static/nav/revenue-on.png"
       },
       {
-        "pagePath": "pages/bookkeeping/index",
-        "text": "记账本",
+        "pagePath": "pages/workbench/index",
+        "text": "工作台",
+        "iconPath": "static/nav/collab.png",
+        "selectedIconPath": "static/nav/collab-on.png"
+      },
+      {
+        "pagePath": "pages/mine/index",
+        "text": "我的",
         "iconPath": "static/nav/ledger.png",
         "selectedIconPath": "static/nav/ledger-on.png"
       }

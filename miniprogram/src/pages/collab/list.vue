@@ -241,7 +241,7 @@ function goCreate() {
 }
 
 function goRevenue() {
-  uni.switchTab({ url: '/pages/revenue/index' })
+  uni.navigateTo({ url: '/pages/revenue/index' })
 }
 </script>
 

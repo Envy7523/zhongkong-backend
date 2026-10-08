@@ -1,58 +1,18 @@
-<template>
-  <view class="workbench">
-    <view class="welcome"><text class="eyebrow">鹅太公中控</text><view class="welcome-title">门店工作台</view><text class="welcome-sub">事项有进度，经营有数据，账目有明细。</text></view>
-    <view class="profile"><view class="avatar">{{ (user?.display_name || user?.username || '鹅').slice(0, 1) }}</view><view class="profile-info"><view class="profile-name">{{ user?.display_name || user?.username || '加载中' }}</view><text class="muted">{{ user?.role || '正在获取权限' }} · {{ user?.store_id ? '本店范围' : '按岗位授权' }}</text></view><button class="logout" @tap="logout">退出登录</button></view>
-    <view v-if="error" class="error"><text>{{ error }}</text><button @tap="refresh">重新加载</button></view>
-    <view class="section-heading"><text>常用功能</text><text class="muted">{{ loading ? '更新中…' : '按当前人员权限开放' }}</text></view>
-    <button v-for="item in entries" :key="item.key" class="feature" :disabled="!allowed(item.permission)" @tap="open(item.path)">
-      <view class="feature-icon" :class="item.key"><image :src="item.icon" /></view>
-      <view class="feature-body"><view class="feature-title">{{ item.title }}<text class="feature-tag">{{ allowed(item.permission) ? item.tag : '未开通' }}</text></view><text class="feature-desc">{{ item.description }}</text></view><text class="chevron">›</text>
-    </button>
-    <view v-if="allowed('collab.manage')" class="task-panel"><view class="section-heading"><text>协同进度</text><text class="muted">{{ statsLoading ? '加载中' : '当前可见事项' }}</text></view><view class="task-metrics"><view><text class="metric-num">{{ stats?.pending ?? '—' }}</text><text>待开始</text></view><view><text class="metric-num orange">{{ stats?.doing ?? '—' }}</text><text>进行中</text></view><view><text class="metric-num">{{ stats?.done ?? '—' }}</text><text>已完成</text></view></view></view>
-    <view class="workbench-note">数据来自中控后台。门店范围与功能权限由管理员统一管理。</view>
-  </view>
-</template>
+<template><view class="page"><view class="welcome">门店工作 · 每一天</view><view class="hero"><view class="kicker">当前门店</view><picker v-if="stores.length" :range="stores" range-key="store_name" @change="change"><view class="store">{{ store?.store_name }} ▾</view></picker><view v-else class="store">{{ loading?'正在加载…':'暂未配置门店' }}</view><view class="hello">{{ user.display_name||user.username }}，今天也一起把工作做好。</view><view class="date">{{ today }}</view></view><view v-if="error" class="error">{{ error }}<button @click="load">重新加载</button></view><view class="section"><text>今日任务</text><text class="link" @click="tasks">查看全部 →</text></view><view class="stats"><view><text class="number">{{ pendingCount }}</text><text>待完成</text></view><view><text class="number">{{ reviewCount }}</text><text>待审核</text></view><view><text class="number">{{ approvedCount }}</text><text>已通过</text></view></view><view v-if="!rows.length" class="empty">{{ loading?'正在加载任务…':hasTasks?'今天暂无下发任务':'当前岗位未开放门店任务' }}</view><view v-for="row in rows.slice(0,3)" :key="row.id" class="task" @click="uni.navigateTo({url:'/pages/tasks/detail?id='+row.id})"><view><view class="task-title">{{ row.title }}</view><view class="muted">进行中 {{ row.in_progress||0 }} · 已完成 {{ row.completed||0 }}/{{ row.total||0 }} · {{ row.business_date }}</view></view><text class="link">{{ taskStatus(row.status) }} →</text></view><view class="section">常用入口</view><view class="shortcuts"><view @click="tasks">✓<text>任务进度</text></view><view @click="uni.switchTab({url:'/pages/reports/index'})">¥<text>门店报表</text></view><view @click="uni.switchTab({url:'/pages/workbench/index'})">▦<text>全部功能</text></view><view @click="uni.switchTab({url:'/pages/mine/index'})">○<text>我的账号</text></view></view></view></template>
 <script setup>
-import { ref } from 'vue'
-import { onShow, onPullDownRefresh } from '@dcloudio/uni-app'
+import {ref,computed} from 'vue'
+import {onShow,onPullDownRefresh} from '@dcloudio/uni-app'
 import api from '../../common/api'
-import { getToken, getUser, saveSession, clearAllSession } from '../../common/request'
-const user = ref(getUser())
-const loading = ref(false)
-const statsLoading = ref(false)
-const error = ref('')
-const stats = ref(null)
-const entries = [
-  { key: 'collab', title: '协同事项', tag: '跟进', description: '发起事项、查看回复、跟进处理进度', permission: 'collab.manage', path: '/pages/collab/list', icon: '/static/nav/collab-on.png' },
-  { key: 'revenue', title: '门店数据', tag: '经营', description: '按门店与日期查看营业额及渠道构成', permission: 'analysis.view', path: '/pages/revenue/index', icon: '/static/nav/revenue-on.png' },
-  { key: 'ledger', title: '记账本', tag: '明细', description: '按门店、单日或周期核对分类与记账流水', permission: 'bookkeeping.manage', path: '/pages/bookkeeping/index', icon: '/static/nav/ledger-on.png' },
-]
-function allowed(permission) { return (user.value?.position_permissions || []).some(p => p === '*' || p === permission) }
-function open(path) { uni.switchTab({ url: path }) }
-function logout() { clearAllSession(); uni.reLaunch({ url: '/pages/login/login' }) }
-async function refresh() {
-  if (!getToken()) { uni.reLaunch({ url: '/pages/login/login' }); return }
-  if (loading.value) return
-  loading.value = true; error.value = ''; stats.value = null
-  try {
-    const res = await api.me(); user.value = res.user; saveSession(getToken(), res.user)
-    if (allowed('collab.manage')) {
-      statsLoading.value = true
-      try { stats.value = (await api.issueStats()).stats } catch { /* 数字保持未加载状态，不伪装为零 */ }
-      finally { statsLoading.value = false }
-    }
-  } catch (e) { error.value = e.message }
-  finally { loading.value = false }
-}
-onShow(refresh)
-onPullDownRefresh(async () => { await refresh(); uni.stopPullDownRefresh() })
+import {getToken} from '../../common/request'
+import {localDate} from '../../common/format'
+import {activeStore,selectStore,taskStatus} from '../../common/task-context'
+const user=ref({}),stores=ref([]),store=ref(null),rows=ref([]),error=ref(''),loading=ref(false),today=ref(localDate())
+const can=p=>(user.value.position_permissions||[]).some(v=>v==='*'||v===p)
+const hasTasks=computed(()=>['store-tasks.execute','store-tasks.review','store-tasks.manage'].some(can))
+const pendingCount=computed(()=>rows.value.filter(r=>['draft','rejected'].includes(r.status)).length),reviewCount=computed(()=>rows.value.filter(r=>r.status==='pending').length),approvedCount=computed(()=>rows.value.filter(r=>r.status==='approved').length)
+function tasks(){if(hasTasks.value)uni.navigateTo({url:'/pages/tasks/list'});else uni.showToast({title:'当前岗位未开放门店任务',icon:'none'})}
+async function load(){if(!getToken())return uni.reLaunch({url:'/pages/login/login'});loading.value=true;error.value='';today.value=localDate();try{user.value=(await api.me()).user;if(hasTasks.value)stores.value=(await api.taskConfig()).stores;else if(can('analysis.view'))stores.value=(await api.storeList()).stores;else if(can('bookkeeping.manage'))stores.value=(await api.bookkeepingOptions()).stores;else stores.value=[];store.value=stores.value.find(s=>s.id===activeStore()?.id)||stores.value[0]||null;if(store.value)selectStore(store.value);rows.value=hasTasks.value&&store.value?(await api.taskList({from:today.value,to:today.value,store_id:store.value.id})).rows:[]}catch(e){error.value=e.message;rows.value=[]}finally{loading.value=false;uni.stopPullDownRefresh()}}
+function change(e){store.value=stores.value[Number(e.detail.value)];selectStore(store.value);load()}
+onShow(load);onPullDownRefresh(load)
 </script>
-<style scoped>
-.workbench { padding: 32rpx 28rpx 48rpx; }
-.welcome { padding: 28rpx 8rpx 40rpx; }.eyebrow { color: var(--brand); font-size: 24rpx; font-weight: 600; }.welcome-title { font-size: 52rpx; font-weight: 700; margin: 12rpx 0; letter-spacing: 2rpx; }.welcome-sub { color: var(--text-2); font-size: 26rpx; }
-.profile { display: flex; align-items: center; gap: 18rpx; padding: 24rpx; background: white; border-radius: 22rpx; margin-bottom: 36rpx; }.avatar { width: 76rpx; height: 76rpx; line-height: 76rpx; text-align: center; background: var(--brand-soft); color: var(--brand); border-radius: 22rpx; font-size: 34rpx; font-weight: 700; }.profile-info { flex: 1; min-width: 0; }.profile-name { font-weight: 600; font-size: 30rpx; }.muted { font-size: 24rpx; color: var(--text-2); }.logout { margin: 0; font-size: 24rpx; background: #f5f6f8; padding: 0 20rpx; line-height: 88rpx; color: var(--text-2); }
-.section-heading { display: flex; align-items: center; justify-content: space-between; font-size: 30rpx; font-weight: 600; margin-bottom: 20rpx; }.section-heading .muted { font-weight: 400; }
-.feature { display: flex; align-items: center; text-align: left; padding: 28rpx 24rpx; margin: 0 0 20rpx; background: white; border-radius: 24rpx; line-height: 1.5; color: var(--text-1); box-shadow: 0 4rpx 20rpx rgba(31,35,41,.03); }.feature[disabled] { opacity: .55; }.feature-icon { background: var(--brand-soft); width: 88rpx; height: 88rpx; border-radius: 22rpx; display: flex; align-items: center; justify-content: center; margin-right: 22rpx; }.feature-icon image { width: 48rpx; height: 48rpx; }.feature-body { flex: 1; min-width: 0; }.feature-title { font-size: 32rpx; font-weight: 600; display: flex; align-items: center; gap: 16rpx; }.feature-tag { font-size: 20rpx; padding: 2rpx 10rpx; background: #f5f6f8; border-radius: 8rpx; font-weight: 400; color: var(--text-2); }.feature-desc { display: block; color: var(--text-2); font-size: 24rpx; margin-top: 10rpx; }.chevron { font-size: 40rpx; color: var(--text-3); padding-left: 12rpx; }
-.task-panel { margin-top: 36rpx; padding: 28rpx; background: white; border-radius: 24rpx; }.task-metrics { display: flex; }.task-metrics view { flex: 1; display: flex; flex-direction: column; text-align: center; font-size: 24rpx; color: var(--text-2); }.metric-num { font-size: 44rpx; font-weight: 700; color: var(--text-1); margin-bottom: 6rpx; }.orange { color: var(--brand); }.workbench-note { margin: 32rpx 16rpx; color: var(--text-2); font-size: 24rpx; line-height: 1.8; }.error { background: #fff0ed; padding: 24rpx; margin-bottom: 24rpx; color: #a33320; border-radius: 16rpx; }.error button { font-size: 26rpx; }
-button::after { border: none; }
-</style>
+<style scoped>.page{padding:32rpx}.welcome{font-size:26rpx;color:#919a9f;margin-bottom:24rpx}.hero{padding:36rpx;background:linear-gradient(130deg,#c94425,#ed7442);border-radius:28rpx;color:#fff}.kicker{opacity:.75;font-size:24rpx}.store{font-size:39rpx;font-weight:700;line-height:1.5;margin:16rpx 0}.hello{font-size:25rpx;opacity:.85;line-height:1.7}.date{margin-top:30rpx;font-size:24rpx;opacity:.7}.section{display:flex;justify-content:space-between;margin:40rpx 0 22rpx;font-size:32rpx;font-weight:700}.link{font-size:24rpx;color:#d94f2b;font-weight:400}.stats{display:flex;background:#fff;border-radius:22rpx;padding:30rpx 10rpx}.stats view{flex:1;display:flex;flex-direction:column;align-items:center;font-size:24rpx;color:#90999f;gap:12rpx}.number{font-size:46rpx;color:#273139;font-weight:700}.empty{color:#919a9f;font-size:26rpx;text-align:center;padding:36rpx}.task{display:flex;justify-content:space-between;align-items:center;background:#fff;border-radius:20rpx;padding:26rpx;margin-top:18rpx}.task-title{font-size:30rpx;font-weight:600;margin-bottom:10rpx}.muted{color:#919a9f;font-size:23rpx}.shortcuts{display:flex;background:#fff;border-radius:22rpx;padding:32rpx 8rpx}.shortcuts view{flex:1;text-align:center;color:#d94f2b;font-size:40rpx}.shortcuts text{display:block;font-size:23rpx;color:#59656f;margin-top:16rpx}.error{color:#b33b28;padding:20rpx}</style>

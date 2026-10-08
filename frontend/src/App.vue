@@ -93,6 +93,7 @@
             <el-icon><List /></el-icon>
             <template #title><span>协同事项</span><small class="nav-badge new">NEW</small></template>
           </el-menu-item>
+          <el-menu-item v-if="canSeeNav('store-tasks')" index="store-tasks"><el-icon><List /></el-icon><template #title>门店日常任务</template></el-menu-item>
           <el-menu-item v-if="canSeeNav('bookkeeping-entry')" index="bookkeeping-entry">
             <el-icon><Notebook /></el-icon>
             <template #title><span>记账本</span><small class="nav-badge new">NEW</small></template>
@@ -587,6 +588,7 @@ const workspaceRouteTabId = computed(() => {
     'workspace-user-management': 'user-management',
     'workspace-position-settings': 'position-settings',
     'workspace-settings': 'settings',
+    'store-tasks': 'store-tasks',
     // 挂在工作台下的独立静态路由（不是 :section 通配），刷新/直接访问时必须能反查回标签 id，
     // 否则地址栏正确但内容区落到数据概括。新增这类页面记得同步登记。
     'menu-management-category': 'menu-management-category',
@@ -594,7 +596,7 @@ const workspaceRouteTabId = computed(() => {
   }[route.name] || ''
 })
 const isWorkspaceRoute = computed(() => Boolean(workspaceRouteTabId.value))
-const isSpecialRoute = computed(() => isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value || isDbViewerRoute.value)
+const isSpecialRoute = computed(() => router.currentRoute.value.name === 'store-tasks' || isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value || isDbViewerRoute.value)
 const businessRouteTabId = computed(() => router.currentRoute.value.meta.analysisKey || 'analysis-total-brand')
 const dataImportRouteTabId = computed(() => ({
   pos: 'data-import-pos',
@@ -613,6 +615,7 @@ const staffRouteTabId = computed(() => ({
   '/staff-management/dispatch': 'staff-management-dispatch',
 }[router.currentRoute.value.path] || 'staff-management-employees'))
 const pageTitle = computed(() => {
+  if (router.currentRoute.value.name === 'store-tasks') return '门店日常任务'
   if (isCollabRoute.value) return '协同事项'
   if (isBusinessAnalyticsRoute.value) {
     return `数据分析 · ${router.currentRoute.value.meta.analysisTitle || '总数据视角'}`
@@ -629,6 +632,7 @@ const pageTitle = computed(() => {
   return store.activeTab?.title || '数据概括'
 })
 const sidebarActive = computed(() => {
+  if (router.currentRoute.value.name === 'store-tasks') return 'store-tasks'
   if (isCollabRoute.value) return 'collab-list'
   if (isBusinessAnalyticsRoute.value) return 'analysis-group'
   if (isDataImportRoute.value) return 'data-import-group'
@@ -806,6 +810,7 @@ async function leaveSpecialRoute() {
 }
 
 const WORKSPACE_TAB_ROUTES = {
+  'store-tasks': '/store-tasks',
   dashboard: '/dashboard',
   pipeline: '/pipeline/group-buy-daily',
   'ai-assistant': '/ai-assistant',

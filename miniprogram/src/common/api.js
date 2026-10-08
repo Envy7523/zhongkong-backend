@@ -27,6 +27,16 @@ export const api = {
   applyWechat: (data) => request({ url: '/api/mp/auth/wechat/apply', method: 'POST', data, auth: false }),
 
   me: () => request({ url: '/api/mp/me' }),
+  updateProfile: data => request({ url: '/api/mp/profile', method: 'PUT', data }),
+  revenueRange: params => request({ url: '/api/mp/revenue/range' + qs(params) }),
+  taskConfig: () => request({ url: '/api/mp/store-tasks/config' }),
+  taskList: params => request({ url: '/api/mp/store-tasks/instances' + qs(params) }),
+  taskDetail: id => request({ url: `/api/mp/store-tasks/instances/${id}` }),
+  taskAnswer: (id, data) => request({ url: `/api/mp/store-tasks/instances/${id}/answer`, method: 'POST', data }),
+  taskSubmit: (id, data) => request({ url: `/api/mp/store-tasks/instances/${id}/submit`, method: 'POST', data }),
+  taskReview: (id, data) => request({ url: `/api/mp/store-tasks/instances/${id}/review`, method: 'POST', data }),
+  taskUpload: (id, data) => request({ url: `/api/mp/store-tasks/instances/${id}/photo`, method: 'POST', data }),
+  taskPhoto: path => request({ url: '/api/mp/store-tasks/photo' + qs({ path }) }),
   bookkeepingOptions: () => request({ url: '/api/mp/bookkeeping/options' }),
   bookkeepingList: params => request({ url: '/api/mp/bookkeeping/entries' + qs(params) }),
 

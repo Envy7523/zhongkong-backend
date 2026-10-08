@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
 const PAGE_TITLES = {
+  'store-tasks': '门店日常任务',
   dashboard: '数据概括',
   collab: '协同事项',
   'enterprise-settings': '企业设置',

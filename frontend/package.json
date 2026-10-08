@@ -10,14 +10,15 @@
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
+    "@form-create/designer": "3.5.0",
     "axios": "^1.18.1",
     "echarts": "^6.1.0",
     "element-plus": "^2.14.3",
     "pinia": "^3.0.4",
     "three": "^0.185.1",
     "vue": "^3.5.39",
-    "xlsx": "^0.18.5",
-    "vue-router": "^4.6.4"
+    "vue-router": "^4.6.4",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.7",

@@ -6,6 +6,7 @@ import LoginView from '@/views/LoginView.vue'
 import ProductBinding from '@/views/analysis/ProductBinding.vue'
 
 const routes = [
+  { path: '/store-tasks', name: 'store-tasks', component: () => import('@/views/StoreTasks.vue'), meta: { requiredPermission: ['store-tasks.manage','store-tasks.execute','store-tasks.review'], pageTitle: '门店日常任务' } },
   {
     path: '/login',
     name: 'login',
