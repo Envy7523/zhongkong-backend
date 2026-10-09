@@ -490,3 +490,5 @@ export const saveRosterException=(id,date,data)=>http.put(`/api/staff-roster/emp
 
 export const previewRosterPayroll=id=>http.get(`/api/staff-roster/payroll/${id}/preview`)
 export const applyRosterPayroll=(id,data)=>http.post(`/api/staff-roster/payroll/${id}/apply`,data)
+
+export const getDouyinReviews = params => http.get('/api/business-analytics/douyin-reviews', { params })

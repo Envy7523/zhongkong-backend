@@ -55,6 +55,7 @@ const props = defineProps({
   modelValue: { type: [Array, Number, String, null], default: null },
   stores: { type: Array, default: () => [] },
   multiple: { type: Boolean, default: false },
+  restrictToStores: { type: Boolean, default: false },
   showGroup: { type: Boolean, default: false },
   clearable: { type: Boolean, default: true },
   filterable: { type: Boolean, default: true },
@@ -98,7 +99,7 @@ function makeRegionNode(region) {
   // 则回退到区域接口自带的成员名称，避免“显示 1 家却没有门店行”。
   const directStores = visibleStores.value.filter(store => storeIds.has(Number(store.id)))
   const knownStoreIds = new Set(directStores.map(store => Number(store.id)))
-  const fallbackStores = (region.stores || []).filter(store => !knownStoreIds.has(Number(store.id)) && !isClosedStore(store))
+  const fallbackStores = props.restrictToStores ? [] : (region.stores || []).filter(store => !knownStoreIds.has(Number(store.id)) && !isClosedStore(store))
   node.children = children.length
     ? children.map(makeRegionNode)
     : [...directStores, ...fallbackStores]

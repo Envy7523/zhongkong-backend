@@ -44,23 +44,23 @@
         <button
           v-for="item in timeModes"
           :key="item.value"
-          :class="{ active: filters.timeMode === item.value }"
+          :class="{ active: queryFilters.timeMode === item.value }"
           @click="changeTimeMode(item.value)"
         >
           {{ item.label }}
         </button>
       </div>
       <el-date-picker
-        v-if="filters.timeMode === 'day'"
-        v-model="filters.day"
+        v-if="queryFilters.timeMode === 'day'"
+        v-model="queryFilters.day"
         :clearable="false"
         type="date"
         value-format="YYYY-MM-DD"
         placeholder="选择日期"
       />
       <el-date-picker
-        v-else-if="filters.timeMode === 'week'"
-        v-model="filters.week"
+        v-else-if="queryFilters.timeMode === 'week'"
+        v-model="queryFilters.week"
         :clearable="false"
         type="week"
         value-format="YYYY-MM-DD"
@@ -68,8 +68,8 @@
         placeholder="选择周次"
       />
       <el-date-picker
-        v-else-if="filters.timeMode === 'month'"
-        v-model="filters.month"
+        v-else-if="queryFilters.timeMode === 'month'"
+        v-model="queryFilters.month"
         :clearable="false"
         type="month"
         value-format="YYYY-MM"
@@ -77,7 +77,7 @@
       />
       <el-date-picker
         v-else
-        v-model="filters.customRange"
+        v-model="queryFilters.customRange"
         :clearable="false"
         class="compact-range-picker"
         type="daterange"
@@ -89,14 +89,14 @@
       <template v-if="showRevenueSourceControls">
         <div class="analysis-source-switch">
           <span>数据视角</span
-          ><el-radio-group v-model="filters.dataView"
+          ><el-radio-group v-model="queryFilters.dataView"
             ><el-radio-button label="cashier">收银机</el-radio-button
             ><el-radio-button label="real"
               >真实第三方</el-radio-button
             ></el-radio-group
           >
         </div>
-        <span v-if="filters.dataView === 'cashier'" class="source-mode-hint"
+        <span v-if="queryFilters.dataView === 'cashier'" class="source-mode-hint"
           >线上渠道按收银机入账，平台配置不参与本次取数</span
         >
         <el-button
@@ -115,7 +115,7 @@
         >
           <span>平台</span>
           <el-radio-group
-            v-model="filters.platform"
+            v-model="queryFilters.platform"
             size="small"
             @change="switchDeliveryPlatform"
           >
@@ -136,7 +136,7 @@
           :aria-label="`${analysisScope === 'group-buy' ? '团购' : '外卖'}门店范围`"
         >
           <StoreRegionSelect
-            v-model="filters.deliveryStoreIds"
+            v-model="queryFilters.deliveryStoreIds"
             :stores="storeOptions"
             multiple
             :filterable="false"
@@ -150,7 +150,7 @@
       <template v-else>
         <StoreRegionSelect
           v-if="analysisMode === 'platform'"
-          v-model="filters.platformStoreIds"
+          v-model="queryFilters.platformStoreIds"
           :stores="storeOptions"
           multiple
           :filterable="false"
@@ -161,7 +161,7 @@
         />
         <StoreRegionSelect
           v-else-if="analysisMode === 'store'"
-          v-model="filters.storeIds"
+          v-model="queryFilters.storeIds"
           :stores="storeOptions"
           multiple
           :filterable="false"
@@ -172,7 +172,7 @@
         />
         <el-select
           v-if="showPlatformSelect"
-          v-model="filters.platform"
+          v-model="queryFilters.platform"
           style="width: 180px"
           ><el-option label="平台汇总" value="" /><el-option
             v-for="platform in scopedPlatforms"
@@ -212,6 +212,7 @@
       </div>
     </section>
 
+    <template v-if="!requiresExplicitQuery || queryResultsReady">
     <section
       class="metric-grid"
       :class="{ compact: analysisScope === 'total' }"
@@ -2302,6 +2303,13 @@
       </div>
     </section>
 
+    <DouyinStoreReviews v-if="queryResultsReady && analysisMode === 'store' && analysisScope === 'group-buy' && effectivePlatform === '抖音团购'" :key="submittedQuery.revision" :scope="submittedQuery.scope" />
+
+    </template>
+    <section v-else class="panel">
+      <el-empty description="请选择门店和日期，点击查询后查看结果" :image-size="90" />
+    </section>
+
     <el-dialog
       v-model="externalExpenseDialog.visible"
       title="外卖额外开销"
@@ -2737,6 +2745,8 @@ import {
   saveBusinessProductMapping,
   saveDishSalesMapping,
 } from "@/api";
+import { validQueryRange, querySignature } from "@/utils/analysis-query-gate.mjs";
+import DouyinStoreReviews from "@/components/DouyinStoreReviews.vue";
 import StoreRegionSelect from "@/components/StoreRegionSelect.vue";
 import { groupOperationMetrics } from "@/utils/group-operation";
 
@@ -2816,6 +2826,8 @@ const compareMode = ref(false),
   compareCurrentSelection = ref(null),
   comparePreviousSelection = ref(null),
   hasQueried = ref(false);
+const submittedQuery = ref(null);
+let submittedQueryRevision = 0;
 const reconciliationPage = ref(1),
   reconciliationPageSize = ref(20);
 const deliveryReconChannelOptions = [
@@ -2923,6 +2935,8 @@ const filters = reactive({
     meituan_group: "platform",
   },
 });
+const draftFilters = reactive(JSON.parse(JSON.stringify(filters)));
+const queryFilters = computed(() => requiresExplicitQuery.value ? draftFilters : filters);
 const data = reactive({
   totals: {},
   trend: [],
@@ -4348,20 +4362,19 @@ const rankingBands = computed(() => {
     { key: "bottom", label: "后三", rows: bottom },
   ];
 });
-const requiresInitialStoreSelection = computed(
-  () =>
-    !hasQueried.value &&
-    analysisMode.value === "store" &&
-    ["delivery", "group-buy"].includes(analysisScope.value),
-);
-const hasRequiredInitialStore = computed(
-  () => filters.deliveryStoreIds.length > 0,
-);
-const canQuery = computed(
-  () =>
-    !(filters.timeMode === "custom" && activeRange.value?.length !== 2) &&
-    (!requiresInitialStoreSelection.value || hasRequiredInitialStore.value),
-);
+const requiresExplicitQuery = computed(() => analysisMode.value === "store" && ["delivery", "group-buy"].includes(analysisScope.value));
+const currentQuerySignature = computed(() => querySignature({ platform: effectivePlatform.value, storeIds: filters.deliveryStoreIds, range: reportRange.value, previousRange: comparePreviousRange.value, compare: compareMode.value, timeMode: filters.timeMode, dataView: filters.dataView }));
+const queryResultsReady = computed(() => hasQueried.value && Boolean(submittedQuery.value));
+const requiresInitialStoreSelection = computed(() => requiresExplicitQuery.value);
+const pendingQueryRange = computed(() => {
+  if (compareMode.value) return compareCurrentRange.value;
+  const pending = queryFilters.value;
+  return pending.timeMode === 'day' ? [pending.day, pending.day]
+    : pending.timeMode === 'week' ? fullWeekRange(pending.week)
+    : pending.timeMode === 'month' ? monthRange(pending.month) : pending.customRange;
+});
+const hasRequiredInitialStore = computed(() => queryFilters.value.deliveryStoreIds.length > 0);
+const canQuery = computed(() => validQueryRange(pendingQueryRange.value) && (!requiresExplicitQuery.value || hasRequiredInitialStore.value));
 const selectedExternalExpenseStoreIds = computed(() =>
   analysisMode.value === "store" && analysisScope.value === "delivery"
     ? filters.deliveryStoreIds.map(Number).filter(Boolean)
@@ -4564,7 +4577,7 @@ function compareValueClass(value) {
   return value > 0 ? "compare-up" : value < 0 ? "compare-down" : "compare-flat";
 }
 function changeTimeMode(mode) {
-  filters.timeMode = mode;
+  queryFilters.value.timeMode = mode;
 }
 function currentStoreScope() {
   // 团购、外卖三种子视角共用平台框架：品牌汇总不传门店，
@@ -4811,7 +4824,8 @@ async function applyCompareMode() {
   reconciliationPage.value = 1;
   compareMode.value = true;
   compareDialogVisible.value = false;
-  await loadData();
+  await nextTick();
+  await queryData();
 }
 function exitCompareMode() {
   compareMode.value = false;
@@ -4825,10 +4839,15 @@ function exitCompareMode() {
 function handleCompareDialogClosed() {
   if (!compareMode.value) compareDialogVisible.value = false;
 }
-function queryData() {
+async function queryData() {
+  if (!validQueryRange(pendingQueryRange.value)) { ElMessage.warning("请选择有效日期范围"); return; }
   if (requiresInitialStoreSelection.value && !hasRequiredInitialStore.value) {
-    ElMessage.warning("门店视角首次查询请先选择至少一个门店");
+    ElMessage.warning("请先选择至少一个门店");
     return;
+  }
+  if (requiresExplicitQuery.value) {
+    Object.assign(filters, JSON.parse(JSON.stringify(draftFilters)));
+    await nextTick();
   }
   reconciliationPage.value = 1;
   // 只有用户主动“查询”才丢弃缓存；平台切换始终复用这一轮查询的结果。
@@ -4840,6 +4859,8 @@ function queryData() {
 }
 async function switchDeliveryPlatform() {
   if (!["delivery", "group-buy"].includes(analysisScope.value)) return;
+  if (requiresExplicitQuery.value) return; // 筛选只是草稿，只有点击查询才加载。
+
   // 门店视角的首轮数据必须先由用户明确门店范围，平台切换不能绕过该条件。
   // 首次成功查询后，门店范围会保留，后续切换平台直接复用当前范围查询即可。
   if (requiresInitialStoreSelection.value && !hasRequiredInitialStore.value) {
@@ -4893,7 +4914,11 @@ async function runDiagnosis() {
 }
 let analyticsRequestId = 0;
 async function loadData() {
+  if (requiresExplicitQuery.value && !canQuery.value) return;
   const request = ++analyticsRequestId;
+  const submittedSignature = currentQuerySignature.value;
+  const submittedScope = { ...currentStoreScope(), date_from: reportRange.value?.[0], date_to: reportRange.value?.[1] };
+  if (requiresExplicitQuery.value) submittedQuery.value = null;
   const range = reportRange.value;
   if (
     (!compareMode.value &&
@@ -4921,6 +4946,7 @@ async function loadData() {
             effectivePlatform.value,
           ),
         ]);
+        if (request !== analyticsRequestId) return;
         Object.assign(data, result);
         Object.assign(compareData, previous);
         await Promise.all([
@@ -4928,10 +4954,9 @@ async function loadData() {
           warmDeliveryDatasets(comparePreviousRange.value),
         ]);
       } else {
-        Object.assign(
-          data,
-          await fetchDeliveryDataset(range, effectivePlatform.value),
-        );
+        const result = await fetchDeliveryDataset(range, effectivePlatform.value);
+        if (request !== analyticsRequestId) return;
+        Object.assign(data, result);
         Object.assign(compareData, {
           totals: {},
           stores: [],
@@ -4948,6 +4973,7 @@ async function loadData() {
           analyticsParams(comparePreviousRange.value),
         ),
       ]);
+      if (request !== analyticsRequestId) return;
       Object.assign(data, result);
       Object.assign(compareData, previous);
     } else {
@@ -4964,6 +4990,7 @@ async function loadData() {
         channel_breakdown: [],
       });
     }
+    if (request !== analyticsRequestId) return;
     reconciliationPage.value =
       Number(data.reconciliation_page) || reconciliationPage.value;
     hasQueried.value = true;
@@ -4972,6 +4999,8 @@ async function loadData() {
     if (isMeituanOperationView.value) await loadMeituanOperation();
     if (analysisScope.value === "total") await loadDishAnalytics();
     if (hasProductBoard.value) await loadProductAnalytics();
+    if (request !== analyticsRequestId || (requiresExplicitQuery.value && submittedSignature !== currentQuerySignature.value)) return;
+    if (requiresExplicitQuery.value) submittedQuery.value = { signature: submittedSignature, scope: submittedScope, revision: ++submittedQueryRevision };
     await refreshDiagnosis();
     await nextTick();
   } catch (error) {
@@ -5876,6 +5905,7 @@ onMounted(async () => {
   }));
   storeOptions.value = result.stores || [];
   resetScopeFilters();
+  Object.assign(draftFilters, JSON.parse(JSON.stringify(filters)));
   hasQueried.value = false;
   clearData();
   window.addEventListener("resize", resizeCharts);
