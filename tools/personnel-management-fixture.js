@@ -31,9 +31,19 @@ module.exports=async function fixture(){
 };
 if(require.main===module)(async()=>{
  const express=require('express'),path=require('path'),{pathToFileURL}=require('url');const f=await module.exports(),{db,wechat}=f;
- const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={id:1};next()});
+ const app=express();app.use(express.json({limit:'4mb'}));app.use((req,res,next)=>{req.user={id:1};next()});
  const wrap=fn=>(req,res)=>{try{res.json(fn(req))}catch(e){res.status(e.status||400).json({error:e.message})}};
  A.mount(app,db,id=>f.user(id));
+ // Avatar bytes stay in memory for this isolated fixture, never in the live uploads directory.
+ const avatars=new Map();let avatarVersion=0;
+ app.post('/api/users/:id/avatar',wrap(req=>{
+  const id=Number(req.params.id),u=db.queryOne('SELECT id,avatar_url FROM users WHERE id=?',[id]);if(!u)throw Error('用户不存在');
+  const match=String(req.body.data||'').match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/=]+)$/);if(!match)throw Error('图片格式无效');
+  const bytes=Buffer.from(match[2],'base64');if(!bytes.length||bytes.length>2*1024*1024)throw Error('头像大小不能超过2MB');
+  const url='/api/fixture-avatars/'+id+'/'+(++avatarVersion)+'.'+match[1];avatars.delete(u.avatar_url);avatars.set(url,{bytes,type:'image/'+match[1]});db.run('UPDATE users SET avatar_url=? WHERE id=?',[url,id]);return {ok:true,avatar_url:url};
+ }));
+ app.get('/api/fixture-avatars/:id/:file',(req,res)=>{const image=avatars.get(req.path);if(!image)return res.sendStatus(404);res.set('Content-Type',image.type).send(image.bytes)});
+ app.delete('/api/users/:id/avatar',wrap(req=>{const u=db.queryOne('SELECT avatar_url FROM users WHERE id=?',[Number(req.params.id)]);if(!u)throw Error('用户不存在');avatars.delete(u.avatar_url);db.run("UPDATE users SET avatar_url='' WHERE id=?",[Number(req.params.id)]);return {ok:true}}));
  app.get('/api/users/wechat-bindings',wrap(()=>({requests:wechat.list()})));
  app.post('/api/users/wechat-bindings/:id/review',wrap(req=>wechat.review(req.params.id,req.body,1)));
  app.get('/api/users',wrap(()=>({users:db.queryAll('SELECT * FROM users').map(u=>f.user(u.id))})));
@@ -42,7 +52,7 @@ if(require.main===module)(async()=>{
  app.use('/api',(req,res)=>res.status(404).json({error:'隔离验收未开放此操作'}));
  app.listen(3495,'127.0.0.1');
  const {createServer}=await import(pathToFileURL(path.resolve('frontend/node_modules/vite/dist/node/index.js')).href);
- const html=`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>人员管理 · 隔离验收</title></head><body style="margin:0;padding:24px;background:#f5f7fa"><div id="app"></div><script type="module">import {createApp} from 'vue';import {createPinia} from 'pinia';import {createRouter,createMemoryHistory} from 'vue-router';import ElementPlus from 'element-plus';import 'element-plus/dist/index.css';import People from '/src/views/UserManagementView.vue';import {useAuthStore} from '/src/stores/auth.js';const pinia=createPinia();localStorage.setItem('etaigong_token','fixture-1');useAuthStore(pinia).user={id:1,position_permissions:['*']};const app=createApp(People);app.use(pinia);app.use(createRouter({history:createMemoryHistory(),routes:[{path:'/:pathMatch(.*)*',component:{render:()=>null}}]}));app.use(ElementPlus);app.mount('#app');</script></body></html>`;
+ const html=`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>人员管理 · 隔离验收</title></head><body style="margin:0;padding:0;background:#f5f7fa"><div id="app"></div><script type="module">import {createApp,h} from 'vue';import {createPinia} from 'pinia';import {createRouter,createMemoryHistory} from 'vue-router';import ElementPlus from 'element-plus';import 'element-plus/dist/index.css';import '/src/style.css';import '/src/styles/enterprise.css';import zhCn from 'element-plus/dist/locale/zh-cn.mjs';import People from '/src/views/UserManagementView.vue';import {useAuthStore} from '/src/stores/auth.js';const pinia=createPinia();localStorage.setItem('etaigong_token','fixture-1');useAuthStore(pinia).user={id:1,position_permissions:['*']};const app=createApp({render:()=>h('div',{class:'app-layout enterprise-theme',style:'display:block;height:auto'},[h('div',{class:'content-area',style:'overflow:visible'},[h(People)])])});app.use(pinia);app.use(createRouter({history:createMemoryHistory(),routes:[{path:'/:pathMatch(.*)*',component:{render:()=>null}}]}));app.use(ElementPlus,{locale:zhCn});app.mount('#app');</script></body></html>`;
  const vite=await createServer({root:path.resolve('frontend'),configFile:path.resolve('frontend/vite.config.js'),plugins:[{name:'personnel-fixture-page',configureServer(server){server.middlewares.use('/people-check.html',async(req,res,next)=>{try{res.setHeader('Content-Type','text/html; charset=utf-8');res.end(await server.transformIndexHtml('/people-check.html',html))}catch(e){next(e)}})}}],server:{host:'127.0.0.1',port:3494,strictPort:true,proxy:{'/api':{target:'http://127.0.0.1:3495'}}}});await vite.listen();
  console.log('Isolated personnel management: http://127.0.0.1:3494/people-check.html');
 })().catch(e=>{console.error(e);process.exitCode=1});

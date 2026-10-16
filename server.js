@@ -4844,7 +4844,7 @@ app.post('/api/users', (req, res) => {
     if(userPositions.ownOnly(permissions) && !storeId)throw Error('店长账号必须绑定有效门店');
     if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
     if (username.length > 50) return res.status(400).json({ error: '用户名不能超过 50 个字符' });
-    if (phone.length > 30) return res.status(400).json({ error: '手机号格式不正确' });
+    require('./lib/personnel-profile-fields').mobile(phone);
     require('./lib/store-manager-uniqueness').assertPerson(db,{id:0,store_id:storeId},require('./lib/store-manager-uniqueness').legacyConfig(db,{store_id:storeId},roles));
     const hash = crypto.createHash('md5').update(password).digest('hex');
     const id = db.insert(
@@ -4878,7 +4878,7 @@ app.put('/api/users/:id', (req, res) => {
       if (req.body[field] === undefined) continue;
       const value = String(req.body[field] ?? '').trim();
       if (field === 'username' && !value) return res.status(400).json({ error: '用户名不能为空' });
-      if (field === 'phone' && value.length > 30) return res.status(400).json({ error: '手机号格式不正确' });
+      if (field === 'phone') require('./lib/personnel-profile-fields').mobile(value);
       sets.push(`${field}=?`);
       params.push(value);
     }
