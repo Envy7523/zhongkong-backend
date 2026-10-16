@@ -91,6 +91,7 @@ app.use(express.json({ limit: '50mb' }));
 
 // 岗位功能权限：权限码目录与接口映射都在 lib/permissions.js，岗位设置界面复用同一份目录。
 const positionPermissions = require('./lib/permissions');
+const personnelAccess = require('./lib/personnel-access');
 
 // JWT 认证中间件（保护 /api/*，放行登录接口）
 app.use((req, res, next) => {
@@ -108,13 +109,19 @@ app.use((req, res, next) => {
   }
   try {
     req.user = jwt.verify(authHeader.split(' ')[1], JWT_SECRET);
+    if(require('./lib/employee-mini-context').departed(require('./lib/employee-mini-context').employee(db,req.user)))return res.status(403).json({error:'员工已离职，登录已停用'});
+    const access=personnelAccess.config(db,req.user.id);
+    if(access&&!access.channels.includes('web'))return res.status(403).json({error:'此账号仅开放小程序，不能访问网页'});
     next();
   } catch {
     return res.status(401).json({ error: '登录已过期，请重新登录' });
   }
 });
 
+app.use(require('./lib/staff-profile-policy').middleware(db));
+app.use(personnelAccess.webGuard(db));
 app.use(payrollWorkflow.scopeGuard(db));
+app.use(require('./lib/headquarter-staff-guard').middleware(db));
 
 // 岗位权限强制校验（只对 /api/* 且映射到权限码的接口生效，其余请求零开销）
 const positionGuard = positionPermissions.createGuard({
@@ -148,6 +155,17 @@ app.use('/api/mp', require('./lib/mp/router'));
 app.use('/api/db-viewer', require('./lib/db-viewer').router);
 
 // 静态文件：优先使用 Vue 前端构建产物，回退到旧版静态文件
+// 即使回退到旧版根目录静态服务，任务照片也只能通过鉴权接口读取。
+app.use((req, res, next) => {
+  let decoded;
+  try { decoded = decodeURIComponent(req.path); } catch { return res.sendStatus(400); }
+  const requested = path.resolve(__dirname, '.' + decoded).toLowerCase();
+  const privateKnowledgeFiles=path.join(__dirname,'data','knowledge-files').toLowerCase();
+  if(requested===privateKnowledgeFiles||requested.startsWith(privateKnowledgeFiles+path.sep))return res.sendStatus(404);
+  const privateTaskFiles = path.join(__dirname, 'data', 'store-task-files').toLowerCase();
+  if (requested === privateTaskFiles || requested.startsWith(privateTaskFiles + path.sep)) return res.sendStatus(404);
+  next();
+});
 const vueDist = path.join(__dirname, 'frontend', 'dist');
 if (fs.existsSync(vueDist)) {
   // index.html 绝不缓存：每次构建后的 JS 文件名都会变化，旧 HTML 若被缓存会引用不存在的旧资源并白屏。
@@ -967,7 +985,7 @@ function listStoreRegions() {
     ORDER BY r.sort_order ASC, r.id ASC
   `);
   const members = db.queryAll(`
-    SELECT m.region_id, m.store_id, s.store_name
+    SELECT m.region_id, m.store_id, s.store_name, s.province, s.city, s.status
     FROM store_region_members m
     JOIN stores s ON s.id=m.store_id
     ORDER BY s.store_name
@@ -975,7 +993,7 @@ function listStoreRegions() {
   const memberMap = new Map();
   members.forEach(member => {
     const list = memberMap.get(member.region_id) || [];
-    list.push({ id: member.store_id, store_name: member.store_name });
+    list.push({ id: member.store_id, store_name: member.store_name, province: member.province, city: member.city, status: member.status });
     memberMap.set(member.region_id, list);
   });
   return regions.map(region => ({
@@ -996,11 +1014,14 @@ app.post('/api/store-regions', (req, res) => {
     const parentId = req.body.parent_id === '' || req.body.parent_id == null ? null : Number(req.body.parent_id);
     if (!name) return res.status(400).json({ error: '区域名称不能为空' });
     if (parentId && !db.queryOne('SELECT id FROM store_regions WHERE id=?', [parentId])) return res.status(400).json({ error: '上级区域不存在' });
-    const id = db.insert('INSERT INTO store_regions (name,parent_id,sort_order) VALUES (?,?,?)', [name, parentId || null, Number(req.body.sort_order) || 0]);
-    normalizeStoreIds(req.body.store_ids).forEach(storeId => db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [id, storeId]));
+    const id = require('./lib/store-manager-uniqueness').protect(db,()=>{
+      const id = db.insert('INSERT INTO store_regions (name,parent_id,sort_order) VALUES (?,?,?)', [name, parentId || null, Number(req.body.sort_order) || 0]);
+      normalizeStoreIds(req.body.store_ids).forEach(storeId => db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [id, storeId]));
+      return id;
+    });
     db.save();
     res.json({ ok: true, id, regions: listStoreRegions() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status||500).json({ error: e.message }); }
 });
 
 app.put('/api/store-regions/:id', (req, res) => {
@@ -1023,14 +1044,16 @@ app.put('/api/store-regions/:id', (req, res) => {
         cursor = cursor.parent_id ? db.queryOne('SELECT id,parent_id FROM store_regions WHERE id=?', [cursor.parent_id]) : null;
       }
     }
+    require('./lib/store-manager-uniqueness').protect(db,()=>{
     db.run("UPDATE store_regions SET name=?, parent_id=?, sort_order=?, updated_at=datetime('now','localtime') WHERE id=?", [name, parentId || null, Number(req.body.sort_order) || 0, id]);
     if (Array.isArray(req.body.store_ids)) {
       db.run('DELETE FROM store_region_members WHERE region_id=?', [id]);
       normalizeStoreIds(req.body.store_ids).forEach(storeId => db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [id, storeId]));
     }
+    });
     db.save();
     res.json({ ok: true, regions: listStoreRegions() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status||500).json({ error: e.message }); }
 });
 
 app.delete('/api/store-regions/:id', (req, res) => {
@@ -1044,7 +1067,7 @@ app.delete('/api/store-regions/:id', (req, res) => {
     db.run('DELETE FROM store_regions WHERE id=?', [id]);
     db.save();
     res.json({ ok: true, regions: listStoreRegions() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status||500).json({ error: e.message }); }
 });
 
 // 单门店的区域归属只保留一个末级区域。这样在门店列表中调整分组时，
@@ -1064,11 +1087,13 @@ app.put('/api/stores/:id/region-membership', (req, res) => {
       if (child) return res.status(400).json({ error: '门店只能归属到末级区域' });
     }
 
-    db.run('DELETE FROM store_region_members WHERE store_id=?', [storeId]);
-    if (regionId != null) db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [regionId, storeId]);
+    require('./lib/store-manager-uniqueness').protect(db,()=>{
+      db.run('DELETE FROM store_region_members WHERE store_id=?', [storeId]);
+      if (regionId != null) db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [regionId, storeId]);
+    });
     db.save();
     res.json({ ok: true, regions: listStoreRegions() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status||500).json({ error: e.message }); }
 });
 
 // 统计卡片
@@ -1133,6 +1158,7 @@ app.get('/api/db/stores', (req, res) => {
     const { keyword, status, store_type, legal_person, page, page_size } = req.query;
     let where = 'WHERE 1=1';
     const params = [];
+    if(req.accessStoreScope!==undefined){const scope=personnelAccess.sqlScope(req.accessStoreScope,'id');where+=' AND '+scope.sql;params.push(...scope.params)}
     if (keyword) { where += ' AND store_name LIKE ?'; params.push('%' + keyword + '%'); }
     if (status) { where += ' AND status=?'; params.push(status); }
     if (store_type) { where += ' AND store_type=?'; params.push(store_type); }
@@ -1214,7 +1240,7 @@ app.delete('/api/db/stores/:id', (req, res) => {
 
 // ===== 门店生命周期：闭店 / 迁址 / 重开 / 履历 =====
 // 口径与共同逻辑集中在 lib/store-lifecycle.js（文件顶部有业务口径说明）。
-// 三条硬规则：① 状态只有三态，迁址是闭店原因；② 迁址一律「老店闭店 + 新建门店 + 双向关联」，不做数据合并；
+// 三条硬规则：① 状态只有三态，迁址是闭店原因；② 迁址先停业待定，确定新址后「新建门店 + 双向关联」，不做数据合并；
 //             ③ 闭店前该店在职员工必须全部处置（随迁/调岗/离职），否则拒绝闭店。
 
 app.get('/api/store-lifecycle/meta', (_req, res) => {
@@ -1339,6 +1365,7 @@ function finalizeStoreClosure(store, { closedDate, closedType, closedReason, att
 function validateEmployeeDisposition(storeId, rawActions) {
   const pending = storeLifecycle.pendingEmployees(db, storeId);
   const actions = Array.isArray(rawActions) ? rawActions : [];
+  if (new Set(actions.map(a => Number(a?.employee_id))).size !== actions.length) return { error: '同一员工不能重复提交处置项' };
   const byId = new Map();
   actions.forEach(a => { const id = Number(a?.employee_id); if (Number.isInteger(id) && id > 0) byId.set(id, a); });
   const missing = pending.filter(e => !byId.has(Number(e.id)));
@@ -1402,13 +1429,38 @@ app.post('/api/db/stores/:id/relocate', (req, res) => {
     const oldId = Number(req.params.id);
     const oldStore = db.queryOne('SELECT * FROM stores WHERE id=?', [oldId]);
     if (!oldStore) return res.status(404).json({ error: '原门店不存在' });
-    if (storeLifecycle.isClosedStatus(oldStore.status)) return res.status(400).json({ error: `原门店「${oldStore.store_name}」已经闭店` });
+    const completing = storeLifecycle.isClosedStatus(oldStore.status) && oldStore.closed_type === '迁址' && !oldStore.relocated_to_store_id;
+    if (storeLifecycle.isClosedStatus(oldStore.status) && !completing) return res.status(400).json({ error: `原门店「${oldStore.store_name}」已经闭店` });
 
-    const closedDate = String(req.body?.closed_date || '').trim();
+    const closedDate = completing ? oldStore.closed_date : String(req.body?.closed_date || '').trim();
     const closedReason = String(req.body?.closed_reason || '').trim();
     const invalid = storeLifecycle.validateCloseInput({ closedDate, closedType: storeLifecycle.RELOCATION_CLOSED_TYPE });
     if (invalid) return res.status(400).json({ error: invalid });
 
+    if (req.body?.relocation_stage === 'awaiting') {
+      if (completing) return res.status(400).json({ error: '已登记迁址停业，请使用补录新址' });
+      const check = validateEmployeeDisposition(oldId, req.body?.employee_actions);
+      if (check.error) return res.status(400).json({ error: check.error, pending_employees: check.pending });
+      const source = staffAuditSource(req.user);
+      const attachment = { url: String(req.body?.attachment_url || '').trim(), name: String(req.body?.attachment_name || '').trim() };
+      db.run('BEGIN');
+      try {
+        const awaiting = [];
+        for (const item of req.body?.employee_actions || []) {
+          const employee = db.queryOne('SELECT id,name,store_id FROM employees WHERE id=?', [Number(item.employee_id)]);
+          if (item.action === 'await_relocation') { awaiting.push({ id: employee.id, name: employee.name }); continue; }
+          if (item.action === 'transfer' && !item.target_store_id) throw Error('新址未定时不能随迁到新店，请选择待迁址安排或其他门店');
+          const target = item.target_store_id ? db.queryOne('SELECT id,store_name FROM stores WHERE id=?', [Number(item.target_store_id)]) : null;
+          const r = disposeEmployeeForClosure(employee, String(item.action || ''), target, { eventDate: closedDate, reason: oldStore.store_name + ' 迁址停业', source, attachment });
+          if (!r.ok) throw Error(r.error);
+        }
+        finalizeStoreClosure(oldStore, { closedDate, closedType: storeLifecycle.RELOCATION_CLOSED_TYPE, closedReason, attachment, source,
+          eventType: '迁址迁出', eventNote: '迁址停业，新址待定', extraDetails: { relocation_stage: 'awaiting', awaiting_employees: awaiting } });
+        db.run('COMMIT');
+      } catch (error) { db.run('ROLLBACK'); return res.status(400).json({ error: error.message }); }
+      db.save();
+      return res.json({ ok: true, old_store_id: oldId, old_store_name: oldStore.store_name, relocation_stage: 'awaiting', closed_date: closedDate });
+    }
     const incoming = req.body?.new_store && typeof req.body.new_store === 'object' ? req.body.new_store : {};
     const newName = String(incoming.store_name || '').trim();
     if (!newName) return res.status(400).json({ error: '请填写新门店名称' });
@@ -1423,7 +1475,9 @@ app.post('/api/db/stores/:id/relocate', (req, res) => {
 
     const source = staffAuditSource(req.user);
     const attachment = { url: String(req.body?.attachment_url || '').trim(), name: String(req.body?.attachment_name || '').trim() };
-    const regionBefore = storeLifecycle.currentRegion(db, oldId);
+    const priorEvent = completing ? db.queryOne("SELECT details_json FROM store_lifecycle_events WHERE store_id=? AND event_type='迁址迁出' ORDER BY id DESC LIMIT 1", [oldId]) : null;
+    const priorDetails = storeLifecycle.safeJson(priorEvent?.details_json);
+    const regionBefore = completing && priorDetails.previous_region_id ? db.queryOne('SELECT * FROM store_regions WHERE id=?', [priorDetails.previous_region_id]) : storeLifecycle.currentRegion(db, oldId);
     // 默认继承老店：店型 / 法人 / 收款性质 / 区域归属（业务确认：默认继承，之后可自行微调）。
     // 地址类字段（省市区/详细地址/经纬度/开业日期）一律不继承 —— 迁址本就意味着地址变化，预填旧地址反而会误导。
     const inherit = (key, fallback = '') => (incoming[key] !== undefined && incoming[key] !== null && String(incoming[key]).trim() !== '' ? incoming[key] : (oldStore[key] ?? fallback));
@@ -1451,16 +1505,20 @@ app.post('/api/db/stores/:id/relocate', (req, res) => {
         db.run('INSERT OR IGNORE INTO store_region_members (region_id,store_id) VALUES (?,?)', [regionBefore.id, newId]);
       }
 
+      if (!completing) {
       finalizeStoreClosure(oldStore, {
         closedDate, closedType: storeLifecycle.RELOCATION_CLOSED_TYPE, closedReason, attachment, source,
         eventType: '迁址迁出',
         eventNote: `迁址至「${newName}」${closedReason ? `｜原因：${closedReason}` : ''}`,
         extraDetails: { to_store_id: newId, to_store_name: newName },
       });
+      } else {
+        storeLifecycle.addStoreEvent(db, { storeId: oldId, eventType: '迁址迁出', eventDate: localDateString(), oldValue: '迁址中 · 新址待定', newValue: newName, note: '补录新址：'+newName, source, attachment, details: { ...priorDetails, relocation_stage: 'completed', to_store_id: newId, to_store_name: newName } });
+      }
       db.run('UPDATE stores SET relocated_to_store_id=? WHERE id=?', [newId, oldId]);
 
       storeLifecycle.addStoreEvent(db, {
-        storeId: newId, eventType: '迁址迁入', eventDate: closedDate,
+        storeId: newId, eventType: '迁址迁入', eventDate: completing ? localDateString() : closedDate,
         oldValue: oldStore.store_name, newValue: `${newName}｜${String(incoming.status || '筹建中').trim()}`,
         note: `由「${oldStore.store_name}」迁址而来${closedReason ? `｜原因：${closedReason}` : ''}`,
         source, attachment,
@@ -1478,7 +1536,7 @@ app.post('/api/db/stores/:id/relocate', (req, res) => {
         const targetId = action === 'transfer' ? Number(item.target_store_id || newId) : Number(item.target_store_id);
         const targetStore = action === 'transfer' ? db.queryOne('SELECT id,store_name FROM stores WHERE id=?', [targetId]) : null;
         const r = disposeEmployeeForClosure(employee, action, targetStore, {
-          eventDate: closedDate, reason: `${oldStore.store_name} 迁址至 ${newName}`, source, attachment,
+          eventDate: completing ? localDateString() : closedDate, reason: `${oldStore.store_name} 迁址至 ${newName}`, source, attachment,
         });
         if (!r.ok) throw new Error(r.error);
         applied.push(r);
@@ -1590,8 +1648,9 @@ function lifecycleDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? String(value) : localDateString();
 }
 // 入职状态只由日期推导，不允许手工选择，避免同一员工在不同页面出现相互矛盾的状态。
-function deriveEmploymentStatus(employee = {}) { return normalizeAttendanceDate(employee.leave_date) ? '离职' : '在职'; }
+function deriveEmploymentStatus(employee = {}) { if(['待入职','取消入职'].includes(employee.status))return employee.status;return normalizeAttendanceDate(employee.leave_date) ? '离职' : '在职'; }
 function deriveOnboardingStatus(employee = {}, today = localDateString()) {
+  if(['待入职','取消入职'].includes(employee.status))return employee.status;
   if (deriveEmploymentStatus(employee) === '离职') return '离职';
   const entryDate = normalizeAttendanceDate(employee.entry_date);
   if (!entryDate || entryDate > today) return '待入职';
@@ -1682,7 +1741,7 @@ app.get('/api/stores/:id/employees', (req, res) => {
 });
 app.post('/api/stores/:id/employees', (req, res) => { try { const { name, status, hire_date, hire_type, position, salary } = req.body; if (!name) return res.status(400).json({ error: '员工姓名不能为空' }); const id = db.insert('INSERT INTO employees (store_id,name,status,hire_date,hire_type,position,salary) VALUES (?,?,?,?,?,?,?)', [req.params.id, name, status||'在职', hire_date||null, hire_type||'全职', position||'', salary||0]); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put('/api/employees/:id', (req, res) => { try { const fields = ['store_id','name','status','hire_date','hire_type','position','salary','leave_date']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE employees SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.delete('/api/employees/:id', (req, res) => { try { db.run('DELETE FROM employees WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.delete('/api/employees/:id', (req,res)=>res.status(400).json({error:'员工档案需保留，请通过离职日期办理离职，历史记录不删除'}));
 
 // ===== 员工管理（店长 + 店员）=====
 // GET /api/staff — 列表（分页、搜索、角色筛选）
@@ -1696,6 +1755,7 @@ app.get('/api/staff', (req, res) => {
     let where = [];
     let params = [];
 
+    if(Array.isArray(req.staffProfileScope)){const allowed=personnelAccess.sqlScope(req.staffProfileScope,'e.store_id');where.push(allowed.sql);params.push(...allowed.params)}
     if (role) { where.push('e.role=?'); params.push(role); }
     if (keyword) { where.push('(e.name LIKE ? OR e.phone LIKE ?)'); params.push(`%${keyword}%`, `%${keyword}%`); }
     if (status) { where.push('e.status=?'); params.push(status); }
@@ -1781,6 +1841,7 @@ app.get('/api/staff/stats', (req, res) => {
     let where = '';
     const params = [];
     if (role) { where = 'WHERE role=?'; params.push(role); }
+    if(Array.isArray(req.staffProfileScope)){const scope=personnelAccess.sqlScope(req.staffProfileScope,'store_id');where+=(where?' AND ':'WHERE ')+scope.sql;params.push(...scope.params)}
 
     const total = db.queryOne(`SELECT COUNT(*) as cnt FROM employees ${where}`, params).cnt;
     const active = db.queryOne(`SELECT COUNT(*) as cnt FROM employees ${where}${where ? ' AND' : ' WHERE'} status='在职'`, params).cnt;
@@ -1796,6 +1857,7 @@ app.post('/api/staff', (req, res) => {
     const { name, phone, dingtalk_user_id, gender, photo_url, store_name, status, entry_date, position, job_level, role, hire_type, salary, probation_date, leave_date, id_card_number, id_card_front_url, id_card_back_url, bank_name, bank_branch, bank_account_name, bank_card_number, bank_card_front_url, bank_card_back_url, emergency_contact, emergency_phone, health_certificate_url, health_certificate_expiry, native_place, household_registration, contact_address, labor_relation, contract_start_date, contract_end_date, social_security_number, household_type, education_school, education_level, graduation_date, major, remark } = req.body || {};
     const cleanName = String(name || '').trim();
     if (!cleanName) return res.status(400).json({ error: '姓名不能为空' });
+    let validity;try { validity=require('./lib/staff-document-validity').documentValidity(req.body); } catch(error) { return res.status(400).json({error:error.message}); }
     const validationError = validateStaffFields({ phone, id_card_number });
     if (validationError) return res.status(400).json({ error: validationError });
     const affiliation = require('./lib/staff-affiliation').resolveAffiliation(store_name, db.queryAll('SELECT id,store_name FROM stores'));
@@ -1811,9 +1873,9 @@ app.post('/api/staff', (req, res) => {
       [cleanName, String(phone || '').trim(), String(gender || '').trim(), calculatedAge,
         cleanStoreName, '', deriveOnboardingStatus({ leave_date, entry_date, probation_date }), deriveEmploymentStatus({ leave_date }), String(entry_date || '').trim(),
         String(position || '').trim(), String(job_level || '').trim(), String(role || '店员').trim(), String(hire_type || '全职').trim(), Number(salary) || 0, String(probation_date || '').trim(), String(leave_date || '').trim(),
-        String(id_card_number || '').trim(), String(id_card_front_url || '').trim(), String(id_card_back_url || '').trim(), String(bank_name || '').trim(), String(bank_branch || '').trim(), String(bank_account_name || '').trim(), String(bank_card_number || '').trim(), String(bank_card_front_url || '').trim(), String(bank_card_back_url || '').trim(), String(emergency_contact || '').trim(), String(emergency_phone || '').trim(), String(health_certificate_url || '').trim(), String(health_certificate_expiry || '').trim(), String(native_place || '').trim(), String(household_registration || '').trim(), String(contact_address || '').trim(), isGroupEmployee ? String(labor_relation || '').trim() : '', String(contract_start_date || '').trim(), String(contract_end_date || '').trim(), String(social_security_number || '').trim(), String(household_type || '').trim(), isGroupEmployee ? String(education_school || '').trim() : '', isGroupEmployee ? String(education_level || '').trim() : '', isGroupEmployee ? String(graduation_date || '').trim() : '', isGroupEmployee ? String(major || '').trim() : '', String(remark || '').trim(), storeId, '']
+        String(id_card_number || '').trim(), String(id_card_front_url || '').trim(), String(id_card_back_url || '').trim(), String(bank_name || '').trim(), String(bank_branch || '').trim(), String(bank_account_name || '').trim(), String(bank_card_number || '').trim(), String(bank_card_front_url || '').trim(), String(bank_card_back_url || '').trim(), String(emergency_contact || '').trim(), String(emergency_phone || '').trim(), String(health_certificate_url || '').trim(), String(health_certificate_expiry || '').trim(), String(native_place || '').trim(), String(household_registration || '').trim(), String(contact_address || '').trim(), String(labor_relation || '').trim(), String(contract_start_date || '').trim(), String(contract_end_date || '').trim(), String(social_security_number || '').trim(), String(household_type || '').trim(), String(education_school || '').trim(), String(education_level || '').trim(), String(graduation_date || '').trim(), String(major || '').trim(), String(remark || '').trim(), storeId, '']
     );
-    db.run('UPDATE employees SET photo_url=?,dingtalk_user_id=? WHERE id=?', [String(photo_url || '').trim(), String(dingtalk_user_id || '').trim(), id]);
+    db.run('UPDATE employees SET photo_url=?,dingtalk_user_id=?,id_card_expiry=?,id_card_long_term=? WHERE id=?', [String(photo_url || '').trim(), String(dingtalk_user_id || '').trim(),validity.id_card_expiry,validity.id_card_long_term, id]);
     if(supervisorStore!==null)staffSupervisor.save(db,id,supervisorStore);
     addEmployeeLifecycleEvent(id, '入职', entry_date, '', `${cleanName}${position ? ` · ${position}` : ''}`, '建立员工档案');
     db.save();
@@ -1898,10 +1960,10 @@ async function syncStaffToSmartsheet(employee, cfg) {
     '合同截止': employee.contract_end_date || '',
     '社保参保编号': employee.social_security_number || '',
     '户口性质': employee.household_type || '',
-    '毕业院校': isGroupAffiliation(employee.store_name) ? employee.education_school || '' : '',
-    '学历': isGroupAffiliation(employee.store_name) ? employee.education_level || '' : '',
-    '毕业时间': isGroupAffiliation(employee.store_name) ? employee.graduation_date || '' : '',
-    '专业': isGroupAffiliation(employee.store_name) ? employee.major || '' : '',
+    '毕业院校': employee.education_school || '',
+    '学历': employee.education_level || '',
+    '毕业时间': employee.graduation_date || '',
+    '专业': employee.major || '',
     '备注': employee.remark || '',
   };
 
@@ -1997,11 +2059,12 @@ app.put('/api/staff/:id', async (req, res) => {
       const affiliation = require('./lib/staff-affiliation').resolveAffiliation(req.body.store_name, db.queryAll('SELECT id,store_name FROM stores'));
       if (!affiliation) return res.status(400).json({ error: '请选择后台已有门店或集团' });
       req.body.store_name = affiliation.store_name;
-      if (affiliation.store_name !== '集团') Object.assign(req.body, { education_school: '', education_level: '', graduation_date: '', major: '', labor_relation: '' });
+      // Education and labor entity apply to both store and group employees; affiliation changes preserve them.
     }
+    try { Object.assign(req.body,require('./lib/staff-document-validity').documentValidity(req.body,before)); } catch(error) { return res.status(400).json({error:error.message}); }
     const validationError = validateStaffFields({ phone: req.body.phone ?? before.phone, id_card_number: req.body.id_card_number ?? before.id_card_number });
     if (validationError) return res.status(400).json({ error: validationError });
-    const fields = ['name', 'phone', 'dingtalk_user_id', 'gender', 'photo_url', 'store_name', 'entry_date', 'position', 'job_level', 'remark', 'hire_type', 'salary', 'probation_date', 'leave_date', 'id_card_number', 'id_card_front_url', 'id_card_back_url', 'bank_name', 'bank_branch', 'bank_account_name', 'bank_card_number', 'bank_card_front_url', 'bank_card_back_url', 'emergency_contact', 'emergency_phone', 'health_certificate_url', 'health_certificate_expiry', 'native_place', 'household_registration', 'contact_address', 'labor_relation', 'contract_start_date', 'contract_end_date', 'social_security_number', 'household_type', 'education_school', 'education_level', 'graduation_date', 'major'];
+    const fields = ['name', 'phone', 'dingtalk_user_id', 'gender', 'photo_url', 'store_name', 'entry_date', 'position', 'job_level', 'remark', 'hire_type', 'salary', 'probation_date', 'leave_date', 'id_card_number', 'id_card_expiry', 'id_card_long_term', 'id_card_front_url', 'id_card_back_url', 'bank_name', 'bank_branch', 'bank_account_name', 'bank_card_number', 'bank_card_front_url', 'bank_card_back_url', 'emergency_contact', 'emergency_phone', 'health_certificate_url', 'health_certificate_expiry', 'native_place', 'household_registration', 'contact_address', 'labor_relation', 'contract_start_date', 'contract_end_date', 'social_security_number', 'household_type', 'education_school', 'education_level', 'graduation_date', 'major'];
     const sets = [];
     const params = [];
 
@@ -2259,7 +2322,7 @@ function notificationSettingsPayload(config) {
     preview_title: defs[type]?.previewTitle || '近期节点',
   }]));
   const upcomingByType = notifications.previewUpcomingAll(db, { config });
-  return { meta: settings.meta, rules, upcoming: upcomingByType[notifications.TYPE_PROBATION_DUE] || [], upcoming_by_type: upcomingByType };
+  return { meta: settings.meta, rules, upcoming: Object.values(upcomingByType).flat().sort((a,b)=>a.milestone_date.localeCompare(b.milestone_date)), upcoming_by_type: upcomingByType };
 }
 // 设置类路由必须注册在 /:id 之前，否则 /api/notifications/settings 会被当成 id。
 // 通知设置：选择每类通知的接收人（后台账号）与提前天数。
@@ -2488,7 +2551,7 @@ function payrollTemplateRows(storeName, period, scheduledDays) {
     }
   });
   const makeRow = (employee, index, overrides = {}) => formatPayrollRow({
-    employee_id: employee.id, sort_order: index, name: employee.name, position: employee.position || '', entry_date: employee.entry_date || '', hire_type: employee.hire_type || '全职', phone: employee.phone || '', bank_card_number: employee.bank_card_number || '', bank_name: [employee.bank_name, employee.bank_branch].filter(Boolean).join(' '), id_card_number: employee.id_card_number || '',
+    employee_id: employee.id, sort_order: index, name: employee.name, position: employee.position || '', entry_date: employee.entry_date || '', hire_type: employee.hire_type || '全职', phone: employee.phone || '', labor_relation: employee.labor_relation || '', home_store_name: employee.store_name || '', bank_card_number: employee.bank_card_number || '', bank_name: [employee.bank_name, employee.bank_branch].filter(Boolean).join(' '), id_card_number: employee.id_card_number || '',
     scheduled_days: scheduledDays, payroll_base_days: scheduledDays, dispatch_out_days: 0, support_days: 0,
     base_salary: Number(employee.base_salary) || (employee.hire_type === '兼职' ? 0 : Number(employee.salary) || 0), position_allowance: employee.position_allowance, performance_salary: employee.performance_salary, attendance_bonus: employee.attendance_bonus, housing_allowance: employee.housing_allowance, weekday_overtime_rate: employee.weekday_overtime_rate, restday_overtime_rate: employee.restday_overtime_rate, part_time_hourly_rate: Number(employee.part_time_hourly_rate) || (employee.hire_type === '兼职' ? Number(employee.salary) || 0 : 0),
     ...overrides,
@@ -2514,6 +2577,11 @@ function payrollWorkbook(sheet) {
   const actualFields=['actual_base_salary','actual_position_allowance','actual_performance_salary','actual_attendance_bonus','actual_housing_allowance','weekday_overtime_pay','restday_overtime_pay'];
   headers.push(...actualHeaders);
   for(let index=0;index<sheet.items.length;index++) rows[index+2].push(...actualFields.map(key=>sheet.items[index][key]));
+  headers.push('钉钉考勤出勤（天）','已批事假（小时）','已批病假（小时）','考勤统计截止日');
+  for(let index=0;index<sheet.items.length;index++){
+    const source=sheet.items[index].attendance_snapshot;
+    rows[index+2].push(...['attendance_days','personal_leave_hours','sick_leave_hours'].map(key=>source?.available?(source[key]??'待核'):'未获取'),source?.as_of||'');
+  }
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!merges'] = [{ s:{ r:0,c:0 }, e:{ r:0,c:headers.length - 1 } }]; ws['!cols'] = headers.map((header, index) => ({ wch: index === 1 || index >= 33 ? 18 : 12 })); ws['!autofilter'] = { ref: `A2:${XLSX.utils.encode_col(headers.length-1)}${Math.max(2, rows.length)}` };
   ws.A1.s = { font: { bold:true, sz:16, color:{ rgb:'25476F' } }, alignment:{ horizontal:'center' } };
@@ -2791,7 +2859,10 @@ app.get('/api/staff/:id/dingtalk-attendance', (req, res) => {
       const today=new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai'}).format(new Date());
       calendar={...employeeCalendar({period,records,officeCalendar:JSON.parse(setting?.calendar_json || '[]'),today}),office};
     }
-    res.json({ ok: true, employee, records, ...calendar });
+    const approvals = require('./lib/dingtalk-approvals').employeeApprovals(db,employee.dingtalk_user_id,dateFrom || '1900-01-01',dateTo || '2999-12-31');
+    const results = db.queryAll('SELECT work_date,check_type,time_result,plan_check_time,user_check_time FROM dingtalk_attendance_results WHERE employee_id=? AND work_date>=? AND work_date<=? ORDER BY work_date,plan_check_time',[employee.id,dateFrom || '1900-01-01',dateTo || '2999-12-31']);
+    if(calendar.days) for(const day of calendar.days) day.attendance_results=results.filter(x=>x.work_date===day.date);
+    res.json({ ok: true, employee, records, approvals, attendance_results:results, ...calendar });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -4193,6 +4264,7 @@ function getAuthUserById(id) {
   const enriched=userPositions.enrich(db,user);
   return enriched ? {...enriched,permissions_json:undefined} : null;
 }
+personnelAccess.mount(app,db,getAuthUserById);
 function issueAuthToken(user) {
   return jwt.sign({
     id: user.id, username: user.username, role: user.role,
@@ -4210,6 +4282,8 @@ app.post('/api/auth/login', (req, res) => {
     const authenticated = db.queryOne('SELECT id FROM users WHERE username=? AND password_hash=?', [username, hash]);
     if (!authenticated) return res.status(401).json({ error: '用户名或密码错误' });
     const user = getAuthUserById(authenticated.id);
+    if(require('./lib/employee-mini-context').departed(require('./lib/employee-mini-context').employee(db,user)))return res.status(403).json({error:'员工已离职，登录已停用'});
+    if(user.access_configured&&!user.access_channels.includes('web'))return res.status(403).json({error:'此账号未开放网页登录'});
     const token = issueAuthToken(user);
     res.json({ ok: true, token, user });
   } catch(e) { res.status(500).json({ error: e.message }); }
@@ -4321,34 +4395,19 @@ app.delete('/api/bookkeeping/subcategories/:id', (req, res) => {
 });
 
 // 记账记录 CRUD
-app.get('/api/bookkeeping/entries', (req, res) => {
+const bookkeepingQuery = require('./lib/bookkeeping-query');
+app.get('/api/bookkeeping/entries/export', (req,res)=>{
   try {
-    const { store_id } = getBookkeepingStore(req);
-    const { date_from, date_to, category_id, subcategory_id, aggregate, page = 1, page_size = 50 } = req.query;
-    let sql = 'SELECT * FROM bookkeeping_entries WHERE 1=1';
-    const params = [];
-    if (store_id) { sql += ' AND store_id=?'; params.push(store_id); }
-    else if (req.query.store_ids) {
-      const storeIds = String(req.query.store_ids).split(',').map(Number).filter(id => Number.isInteger(id) && id > 0);
-      if (storeIds.length) { sql += ` AND store_id IN (${storeIds.map(() => '?').join(',')})`; params.push(...storeIds); }
-    }
-    else if (req.query.store_id) { sql += ' AND store_id=?'; params.push(req.query.store_id); }
-    if (date_from) { sql += ' AND date>=?'; params.push(date_from); }
-    if (date_to) { sql += ' AND date<=?'; params.push(date_to); }
-    if (category_id) { sql += ' AND category_id=?'; params.push(category_id); }
-    if (subcategory_id) { sql += ' AND subcategory_id=?'; params.push(subcategory_id); }
-    if (aggregate === 'summary') {
-      sql = sql.replace('SELECT *', 'SELECT category_id, category_name, subcategory_id, subcategory_name, SUM(amount) as total_amount, COUNT(*) as entry_count');
-      sql += ' GROUP BY category_id, category_name, subcategory_id, subcategory_name ORDER BY category_name ASC, subcategory_name ASC';
-      const rows = db.queryAll(sql, params);
-      return res.json({ ok: true, rows, aggregate: 'summary' });
-    }
-    const total = db.queryOne(`SELECT COUNT(*) AS count FROM bookkeeping_entries ${sql.slice(sql.indexOf('WHERE'))}`, params)?.count || 0;
-    const psize = Math.min(200, Math.max(10, Number(page_size) || 50));
-    const pg = Math.max(1, Number(page) || 1);
-    sql += ' ORDER BY date DESC, id DESC LIMIT ? OFFSET ?';
-    res.json({ ok: true, entries: db.queryAll(sql, [...params, psize, (pg - 1) * psize]), total, page: pg, page_size: psize });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const data=bookkeepingQuery.query(db,req.query,bookkeepingQuery.scope(db,req,true),{all:true});
+    const filename='记账本_'+(req.query.date_from||'全部')+'_'+(req.query.date_to||'全部')+'.xlsx';
+    res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition',"attachment; filename*=UTF-8''"+encodeURIComponent(filename));
+    res.setHeader('Cache-Control','no-store');res.send(bookkeepingQuery.workbook(data,req.query));
+  }catch(e){res.status(e.status||500).json({error:e.message})}
+});
+app.get('/api/bookkeeping/entries', (req,res)=>{
+  try {res.json(bookkeepingQuery.query(db,req.query,bookkeepingQuery.scope(db,req)))}
+  catch(e){res.status(e.status||500).json({error:e.message})}
 });
 
 function cleanQuickBookkeepingCell(value) {
@@ -4715,10 +4774,10 @@ app.put('/api/positions/:id', (req, res) => {
     const id = Number(req.params.id); const current = db.queryOne('SELECT * FROM position_settings WHERE id=?', [id]);
     if (!current) return res.status(404).json({ error: '岗位不存在' });
     const { name, description, permissions } = normalizePositionPayload(req.body);
-    db.run("UPDATE position_settings SET name=?,description=?,permissions_json=?,updated_at=datetime('now','localtime') WHERE id=?", [name, description, JSON.stringify(permissions), id]);
+    require('./lib/store-manager-uniqueness').protect(db,()=>db.run("UPDATE position_settings SET name=?,description=?,permissions_json=?,updated_at=datetime('now','localtime') WHERE id=?", [name, description, JSON.stringify(permissions), id]));
     db.run('UPDATE users SET role=? WHERE position_id=?', [name, id]);
     db.save(); res.json({ ok: true });
-  } catch (e) { if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '岗位名称已存在' }); res.status(400).json({ error: e.message }); }
+  } catch (e) { if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '岗位名称已存在' }); res.status(e.status||400).json({ error: e.message }); }
 });
 app.delete('/api/positions/:id', (req, res) => {
   try {
@@ -4726,8 +4785,10 @@ app.delete('/api/positions/:id', (req, res) => {
     const id = Number(req.params.id); const current = db.queryOne('SELECT * FROM position_settings WHERE id=?', [id]);
     if (!current) return res.status(404).json({ error: '岗位不存在' });
     if (current.is_system) return res.status(400).json({ error: '系统预置岗位不能删除，可编辑权限' });
+    if(db.queryAll('SELECT config_json FROM access_person_config').some(row=>JSON.parse(row.config_json).assignments.some(a=>a.position_id===id)))return res.status(409).json({error:'此岗位已分配逐岗位门店范围，请先移除人员的该岗位，或停用岗位'});
     db.run('DELETE FROM user_positions WHERE position_id=?',[id]);
     db.run("UPDATE users SET position_id=(SELECT MIN(position_id) FROM user_positions WHERE user_id=users.id),role=COALESCE((SELECT name FROM position_settings WHERE id=(SELECT MIN(position_id) FROM user_positions WHERE user_id=users.id)),'未分配岗位') WHERE position_id=?", [id]);
+    db.run('DELETE FROM access_position_config WHERE position_id=?',[id]);
     db.run('DELETE FROM position_settings WHERE id=?', [id]); db.save(); res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -4760,6 +4821,16 @@ app.get('/api/users', (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// 继承 /api/users 的 users.manage 权限，每次请求从库里重新校验岗位。
+app.get('/api/users/wechat-bindings', (req, res) => {
+  try { res.json({ ok: true, requests: require('./lib/mp/auth').wechatBinding.list() }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.post('/api/users/wechat-bindings/:id/review', (req, res) => {
+  try { res.json(require('./lib/mp/auth').wechatBinding.review(req.params.id, req.body || {}, req.user.id)); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 app.post('/api/users', (req, res) => {
   try {
     const username = String(req.body.username || '').trim();
@@ -4774,6 +4845,7 @@ app.post('/api/users', (req, res) => {
     if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
     if (username.length > 50) return res.status(400).json({ error: '用户名不能超过 50 个字符' });
     if (phone.length > 30) return res.status(400).json({ error: '手机号格式不正确' });
+    require('./lib/store-manager-uniqueness').assertPerson(db,{id:0,store_id:storeId},require('./lib/store-manager-uniqueness').legacyConfig(db,{store_id:storeId},roles));
     const hash = crypto.createHash('md5').update(password).digest('hex');
     const id = db.insert(
       'INSERT INTO users (username,password_hash,role,display_name,phone,position_id,store_id) VALUES (?,?,?,?,?,?,?)',
@@ -4784,18 +4856,21 @@ app.post('/api/users', (req, res) => {
     res.json({ ok: true, id });
   } catch (e) {
     if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '用户名已存在' });
-    res.status(400).json({ error: e.message });
+    res.status(e.status||400).json({ error: e.message });
   }
 });
 
 app.put('/api/users/:id', (req, res) => {
   try {
+    const scoped=personnelAccess.config(db,Number(req.params.id));
+    if(scoped&&(req.body.position_id!==undefined||req.body.position_ids!==undefined||req.body.store_id!==undefined))return res.status(409).json({error:'此账号已按岗位配置负责门店，请在“岗位与负责门店”中调整'});
     const current = db.queryOne('SELECT position_id,store_id FROM users WHERE id=?', [req.params.id]);
     if (!current) return res.status(404).json({ error: '账号不存在' });
     const roles=userPositions.selected(db,req.body.position_ids || (req.body.position_id!==undefined?[req.body.position_id]:userPositions.enrich(db,{...current,id:Number(req.params.id)}).position_ids));
     const permissions=[...new Set(roles.flatMap(p=>parsePositionPermissions(p.permissions_json)))];
     const storeId = payrollWorkflow.userStoreBinding(db, roles[0].id, req.body.store_id === undefined ? current.store_id : req.body.store_id);
     if(userPositions.ownOnly(permissions) && !storeId)throw Error('店长账号必须绑定有效门店');
+    if(!scoped)require('./lib/store-manager-uniqueness').assertPerson(db,{...current,id:Number(req.params.id),store_id:storeId},require('./lib/store-manager-uniqueness').legacyConfig(db,{...current,id:Number(req.params.id),store_id:storeId},roles));
     const allowed = ['username', 'display_name', 'phone'];
     const sets = [];
     const params = [];
@@ -4816,12 +4891,12 @@ app.put('/api/users/:id', (req, res) => {
     if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' });
     params.push(req.params.id);
     db.run(`UPDATE users SET ${sets.join(',')} WHERE id=?`, params);
-    userPositions.assign(db,Number(req.params.id),roles);
+    if(!scoped)userPositions.assign(db,Number(req.params.id),roles);
     db.save();
     res.json({ ok: true });
   } catch (e) {
     if (e.message?.includes('UNIQUE')) return res.status(400).json({ error: '用户名已存在' });
-    res.status(400).json({ error: e.message });
+    res.status(e.status||400).json({ error: e.message });
   }
 });
 
@@ -4879,7 +4954,9 @@ app.delete('/api/users/:id', (req, res) => {
     }
     const user = db.queryOne('SELECT avatar_url FROM users WHERE id=?', [req.params.id]);
     if (!user) return res.status(404).json({ error: '用户不存在' });
+    if(personnelAccess.config(db,Number(req.params.id))?.employee_id)return res.status(400).json({error:'已关联员工档案的账号请保留，离职后自动停用，不删除历史身份'});
     db.run('DELETE FROM user_positions WHERE user_id=?',[req.params.id]);
+    db.run('DELETE FROM access_person_config WHERE user_id=?',[req.params.id]);
     db.run('DELETE FROM users WHERE id=?', [req.params.id]);
     db.save();
     removeAvatarFile(user.avatar_url);
@@ -5058,229 +5135,8 @@ function monthlyDashboardRange(month, asOf) {
 // ===== 人效（仅单门店）：当日出勤人员工资 ÷ 当日收银机总实收 =====
 // 运营门店范围：默认只算深圳市，按 config.json 的 laborEfficiency.includedCities 或环境变量 LABOR_EFFICIENCY_CITIES 扩充。
 // 该开关只决定「哪些门店展示人效」，不做任何数据写入，也没有防作弊作用。
-const DEFAULT_LABOR_EFFICIENCY_CITIES = ['深圳市'];
-// 全职：月工资构成合计 ÷ 当月应出勤天数 × 出勤天数；兼职：当天工作时长 × 时薪。
-// 当月应出勤天数与工资表模块同一默认值 26，可在 config.json 的 laborEfficiency.scheduledDaysPerMonth 覆盖。
-const LABOR_EFFICIENCY_SCHEDULED_DAYS = 26;
-const LABOR_EFFICIENCY_PART_TIME_TITLE = '兼职';
-const LABOR_EFFICIENCY_ROWS_LIMIT = 500;
-const round2 = value => Math.round(Number(value || 0) * 100) / 100;
-function laborEfficiencyRegion(config) {
-  const section = (config || {}).laborEfficiency || {};
-  const fromEnv = String(process.env.LABOR_EFFICIENCY_CITIES || '').split(/[,，\s]+/);
-  const configured = Array.isArray(section.includedCities) ? section.includedCities : [];
-  const source = configured.length ? 'config.laborEfficiency.includedCities' : (fromEnv.some(city => String(city).trim()) ? 'LABOR_EFFICIENCY_CITIES' : 'default');
-  const raw = configured.length ? configured : (source === 'default' ? DEFAULT_LABOR_EFFICIENCY_CITIES : fromEnv);
-  const cities = [...new Set(raw.map(city => String(city || '').trim()).filter(Boolean))];
-  const scheduledDays = Math.max(1, Math.min(31, Number(section.scheduledDaysPerMonth) || LABOR_EFFICIENCY_SCHEDULED_DAYS));
-  return { enabled: section.enabled !== false && cities.length > 0, source, cities, scheduled_days: scheduledDays };
-}
-// 从钉钉原始打卡算工时：按时间顺序把 OnDuty→OffDuty 配成对并累加，中间的空档（午休等）不计。
-// 不能用「最早上班→最晚下班」，那样会把休息时段算成工时；实测兼职平均会虚增 40%~70%。
-function laborEfficiencyWorkHours(records) {
-  const byKey = new Map();
-  records.forEach(record => {
-    const time = String(record.check_time || '').slice(11, 19);
-    if (!/^\d{2}:\d{2}:\d{2}$/.test(time)) return;
-    const key = `${time}#${record.check_type || ''}`;
-    const current = byKey.get(key);
-    if (!current || String(record.check_time) < String(current.check_time)) byKey.set(key, { check_time: record.check_time, check_type: record.check_type, time });
-  });
-  const punches = [...byKey.values()].sort((a, b) => a.time.localeCompare(b.time));
-  const toSeconds = time => Number(time.slice(0, 2)) * 3600 + Number(time.slice(3, 5)) * 60 + Number(time.slice(6, 8));
-  let hours = 0;
-  let openAt = null;
-  punches.forEach(punch => {
-    const seconds = toSeconds(punch.time);
-    if (punch.check_type === 'OnDuty') {
-      if (openAt === null) openAt = seconds;
-    } else if (punch.check_type === 'OffDuty' && openAt !== null) {
-      if (seconds > openAt) hours += Math.min(seconds - openAt, 16 * 3600) / 3600;
-      openAt = null;
-    }
-  });
-  return round2(hours);
-}
-function buildLaborEfficiency({ period, store, storeId, region }) {
-  const days = Number(period.days_in_month) || 30;
-  const scheduledDays = Number(region.scheduled_days) || LABOR_EFFICIENCY_SCHEDULED_DAYS;
-  const wageParts = parts => ({
-    base_salary: round2(parts.base_salary), position_allowance: round2(parts.position_allowance),
-    performance_salary: round2(parts.performance_salary), attendance_bonus: round2(parts.attendance_bonus),
-    housing_allowance: round2(parts.housing_allowance), monthly_total: round2(parts.monthly_total),
-  });
-  const common = {
-    enabled: region.enabled,
-    region,
-    included: false,
-    period: { month: period.month, start: period.start, end: period.cutoff, days_in_month: days },
-    scheduled_days_per_month: scheduledDays,
-    formula: {
-      full_time: `月工资构成合计（基本工资+岗位津贴+绩效工资+全勤奖+住房补贴）÷ 当月应出勤 ${scheduledDays} 天 × 出勤天数`,
-      part_time: '兼职：当天工作时长 × 时薪（时长按钉钉上下班打卡配对累加，中间休息不计）',
-      denominator: '当日/本期收银机渠道「店内销售」记录金额合计',
-      attendance_rule: '当天任意一次打卡即视为出勤；兼职工时 = 上班卡→下班卡逐对累加，单对最多计 16 小时',
-    },
-  };
-  if (!region.enabled) return { ...common, reason: 'not_configured' };
-  if (!store) return { ...common, reason: 'no_store' };
-  const storeCity = String(store.city || '').trim();
-  if (!region.cities.includes(storeCity)) return { ...common, reason: 'out_of_region', store_city: storeCity || null };
-
-  const dateFrom = period.start;
-  const dateTo = period.cutoff;
-  // 人员归属以当天实际工作门店为准：有效支援安排优先于员工的常驻门店。
-  // 这样员工在 A 打卡但被安排支援 B 时，只会进入 B 的经营看板与人效名单。
-  const dispatchedStoreByEmployeeDate = new Map();
-  db.queryAll("SELECT * FROM employee_store_dispatches WHERE status='有效'").forEach(dispatch => {
-    dispatchDates(dispatch).filter(day => day >= dateFrom && day <= dateTo).forEach(day => {
-      const key = `${Number(dispatch.employee_id)}:${day}`;
-      if (!dispatchedStoreByEmployeeDate.has(key)) dispatchedStoreByEmployeeDate.set(key, Number(dispatch.support_store_id));
-    });
-  });
-  const attendanceRows = db.queryAll(
-    `SELECT a.employee_id, a.work_date, a.check_time, a.check_type, a.source_data, e.store_id AS home_store_id
-       FROM dingtalk_attendance_records a JOIN employees e ON e.id = a.employee_id
-      WHERE a.work_date >= ? AND a.work_date <= ?
-      ORDER BY a.employee_id, a.work_date, a.check_time`,
-    [dateFrom, dateTo]
-  ).filter(record => Number(dispatchedStoreByEmployeeDate.get(`${Number(record.employee_id)}:${record.work_date}`) || record.home_store_id) === Number(storeId));
-  const dailyRows = db.queryAll(
-    `SELECT biz_date, COALESCE(SUM(recorded_amount), 0) AS amount FROM business_revenue_records
-      WHERE store_id=? AND channel='store_sales' AND biz_date>=? AND biz_date<=? GROUP BY biz_date ORDER BY biz_date`,
-    [storeId, dateFrom, dateTo]
-  );
-  const revenueByDate = new Map(dailyRows.map(row => [row.biz_date, Number(row.amount || 0)]));
-  const storeSalesDaily = round2(revenueByDate.get(dateTo) || 0);
-  const storeSalesPeriod = round2(dailyRows.reduce((sum, row) => sum + Number(row.amount || 0), 0));
-
-  const byEmployee = new Map();
-  attendanceRows.forEach(record => {
-    const id = Number(record.employee_id);
-    if (!id) return;
-    const item = byEmployee.get(id) || { employee_id: id, dates: new Set(), dateRecords: new Map(), punches: 0 };
-    item.dates.add(record.work_date);
-    const list = item.dateRecords.get(record.work_date) || [];
-    list.push({ check_time: record.check_time, check_type: record.check_type });
-    item.dateRecords.set(record.work_date, list);
-    item.punches += 1;
-    byEmployee.set(id, item);
-  });
-
-  const ids = [...byEmployee.keys()];
-  const employeeById = new Map();
-  if (ids.length) {
-    const placeholders = ids.map(() => '?').join(',');
-    const rows = db.queryAll(
-      `SELECT e.id, e.name, e.store_name, e.position, e.hire_type, e.salary,
-              COALESCE(p.base_salary,0) AS base_salary, COALESCE(p.position_allowance,0) AS position_allowance,
-              COALESCE(p.performance_salary,0) AS performance_salary, COALESCE(p.attendance_bonus,0) AS attendance_bonus,
-              COALESCE(p.housing_allowance,0) AS housing_allowance, COALESCE(p.part_time_hourly_rate,0) AS part_time_hourly_rate,
-              CASE WHEN p.employee_id IS NULL THEN 0 ELSE 1 END AS has_profile
-         FROM employees e LEFT JOIN employee_salary_profiles p ON p.employee_id = e.id
-        WHERE e.id IN (${placeholders})`,
-      ids
-    );
-    rows.forEach(row => employeeById.set(Number(row.id), row));
-  }
-
-  const periodGaps = new Set();
-  const dayGaps = new Set();
-  const periodRows = [];
-  const dayRows = [];
-  const buildRow = (id, item, scope) => {
-    const employee = employeeById.get(id) || {};
-    const isPartTime = String(employee.hire_type || '').trim() === LABOR_EFFICIENCY_PART_TIME_TITLE;
-    const profile = {
-      base_salary: Number(employee.base_salary || 0), position_allowance: Number(employee.position_allowance || 0),
-      performance_salary: Number(employee.performance_salary || 0), attendance_bonus: Number(employee.attendance_bonus || 0),
-      housing_allowance: Number(employee.housing_allowance || 0),
-    };
-    profile.monthly_total = profile.base_salary + profile.position_allowance + profile.performance_salary + profile.attendance_bonus + profile.housing_allowance;
-    const hourlyRate = Number(employee.part_time_hourly_rate || 0) || (isPartTime ? Number(employee.salary || 0) : 0);
-    const isDayScope = scope === 'day';
-    const attendanceDays = isDayScope ? 1 : item.dates.size;
-    const dayRecords = item.dateRecords.get(dateTo) || [];
-    // 工时对全职只作参考（全职按天算），对兼职是计件依据。
-    const hours = isDayScope
-      ? laborEfficiencyWorkHours(dayRecords)
-      : round2([...item.dateRecords.values()].reduce((sum, list) => sum + laborEfficiencyWorkHours(list), 0));
-    const dailyFullTimeWage = round2(profile.monthly_total / scheduledDays);
-    // 日工资先精确到分，再乘出勤天数，避免月末合计出现分位漂移。
-    const fullTimeWage = round2(dailyFullTimeWage * attendanceDays);
-    const partTimeWage = round2(hours * hourlyRate);
-    const rateMissing = isPartTime ? hourlyRate <= 0 : profile.monthly_total <= 0;
-    if (rateMissing) (isDayScope ? dayGaps : periodGaps).add(employee.name || `员工 ${id}`);
-    return {
-      employee_id: id,
-      name: employee.name || '',
-      store_name: employee.store_name || '',
-      position: employee.position || '',
-      hire_type: isPartTime ? LABOR_EFFICIENCY_PART_TIME_TITLE : '全职',
-      attendance_days: attendanceDays,
-      total_attendance_days: item.dates.size,
-      work_hours: hours,
-      hourly_rate: round2(hourlyRate),
-      daily_full_time_wage: dailyFullTimeWage,
-      monthly_wage_total: round2(profile.monthly_total),
-      wage_parts: isPartTime ? null : wageParts(profile),
-      wage: isPartTime ? partTimeWage : fullTimeWage,
-      wage_note: isPartTime
-        ? `${hours} 小时 × ${round2(hourlyRate)} 元/时`
-        : `${round2(profile.monthly_total)} ÷ ${scheduledDays} 天 × ${attendanceDays} 天`,
-      has_wage_basis: !rateMissing,
-      punches: isDayScope ? dayRecords.length : item.punches,
-    };
-  };
-
-  byEmployee.forEach((item, id) => {
-    periodRows.push(buildRow(id, item, 'period'));
-    if (item.dateRecords.has(dateTo)) dayRows.push(buildRow(id, item, 'day'));
-  });
-  periodRows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  dayRows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-
-  const summarize = rows => ({
-    people: rows.length,
-    full_time_people: rows.filter(row => row.hire_type === '全职').length,
-    part_time_people: rows.filter(row => row.hire_type === '兼职').length,
-    attendance_days: rows.filter(row => row.hire_type === '全职').reduce((sum, row) => sum + row.total_attendance_days, 0),
-    work_hours: round2(rows.filter(row => row.hire_type === '兼职').reduce((sum, row) => sum + row.work_hours, 0)),
-    wage_total: round2(rows.reduce((sum, row) => sum + row.wage, 0)),
-    missing_basis_count: rows.filter(row => !row.has_wage_basis).length,
-  });
-  const daySummary = summarize(dayRows);
-  const periodSummary = summarize(periodRows);
-  const dayRatio = (wage, revenue) => revenue > 0 ? Math.round(wage / revenue * 10000) / 10000 : null;
-
-  return {
-    ...common,
-    included: true,
-    store_name: store.store_name,
-    store_city: storeCity,
-    range: { date_from: dateFrom, date_to: dateTo },
-    days_in_month: days,
-    // 当日口径：截止日当天出勤的人，每人算当天工资
-    day: {
-      ...daySummary,
-      date: dateTo,
-      rows: dayRows,
-      store_sales: storeSalesDaily,
-      ratio: dayRatio(daySummary.wage_total, storeSalesDaily),
-    },
-    // 期间口径：月初至截止日期间出勤过的所有人，每人按各自出勤推算工资
-    range_totals: {
-      ...periodSummary,
-      rows: periodRows.slice(0, LABOR_EFFICIENCY_ROWS_LIMIT),
-      rows_total: periodRows.length,
-      rows_truncated: periodRows.length > LABOR_EFFICIENCY_ROWS_LIMIT,
-      store_sales: storeSalesPeriod,
-      ratio: dayRatio(periodSummary.wage_total, storeSalesPeriod),
-    },
-    daily_rows: dailyRows.map(row => ({ date: row.biz_date, revenue: round2(row.amount) })),
-    data_gap: { names: [...periodGaps], day_names: [...dayGaps] },
-  };
-}
+const {laborEfficiencyRegion}=require('./lib/labor-efficiency');
+function buildLaborEfficiency(options){return require('./lib/labor-efficiency').buildLaborEfficiency({...options,db});}
 
 function previousMonthRange(month) {
   const [year, monthNumber] = String(month).split('-').map(Number);
@@ -5544,11 +5400,22 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
     };
     const revenueDataView = String(req.query.data_view || 'real') === 'cashier' ? 'cashier' : 'real';
     const isCashierView = revenueDataView === 'cashier';
+    const feeRules=require('./lib/delivery-fee-rules').read(db);
+    const policyIds=scopedStoreIds.length?scopedStoreIds:db.queryAll('SELECT id FROM stores').map(r=>r.id);
+    const offlineFees = require('./lib/offline-payment-fees');
+    const offlinePayment = offlineFees.build(db, policyIds, period.start, period.cutoff);
+    const manualPlatform=feeRules.enabled?require('./lib/monthly-platform-policy').build(db,policyIds,period.start,period.cutoff,feeRules):null;
     const resolvedRevenue = businessAnalytics.getResolvedRevenueByDate(db, {
       date_from: period.start, date_to: period.cutoff, store_ids: scopedStoreIds.join(','),
       data_view: revenueDataView, source_overrides: req.query.source_overrides || '',
     });
     const resolvedSalesByDate = new Map();
+    if(manualPlatform&&!isCashierView)resolvedRevenue.rows.forEach(row=>{
+      const actual=manualPlatform.net.get(`${row.store_id}|${row.biz_date}|${row.channel}`);
+      if(actual!==undefined&&row.source_used==='platform')row.income=actual;
+      if(row.channel==='store_sales')row.income=row.settled;
+    });
+    offlineFees.applyResolved(resolvedRevenue.rows, offlinePayment.policies);
     resolvedRevenue.rows.filter(row => !row.exclude_from_sales).forEach(row => {
       const item = resolvedSalesByDate.get(row.biz_date) || { income: 0, settled: 0, fees: 0, gross: 0, orders: 0 };
       item.income += Number(row.income || 0);
@@ -5573,9 +5440,23 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
     appendStoreScope(dayWhere, dayParams);
     const dayRows = db.queryAll(`SELECT category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${dayWhere.join(' AND ')} GROUP BY category_name, subcategory_name`, dayParams);
     const profitRows = db.queryAll(
-      `SELECT date, category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${where.join(' AND ')} GROUP BY date, category_name, subcategory_name ORDER BY date`,
+      `SELECT store_id, date, category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${where.join(' AND ')} GROUP BY store_id, date, category_name, subcategory_name ORDER BY date`,
       params
     );
+    const cashFeeKeys = new Set(profitRows.filter(r=>r.amount>0&&isBookkeepingSalesRevenue(r)).map(r=>`${r.store_id}|${r.date}`));
+    const cashFeeByDate = new Map();
+    for(const [key,fee]of offlinePayment.policies)if(cashFeeKeys.has(key))cashFeeByDate.set(fee.date,(cashFeeByDate.get(fee.date)||0)+fee.fee_cents/100);
+    // Payment fees are already subtracted from income. Remove only explicitly named ledger mirrors
+    // for a store/day where this same fee policy is applied; leave generic platform fees untouched.
+    for(let i=profitRows.length-1;i>=0;i--){
+      const row=profitRows[i];
+      if(!offlineFees.isLedgerFee(row)||!offlinePayment.policies.has(`${row.store_id}|${row.date}`)||(isCashierView&&!cashFeeKeys.has(`${row.store_id}|${row.date}`)))continue;
+      for(const list of [monthRows,...(row.date===period.cutoff?[dayRows]:[])]){
+        const match=list.find(r=>r.category_name===row.category_name&&r.subcategory_name===row.subcategory_name);
+        if(match)match.amount=Math.round((Number(match.amount)-Number(row.amount))*100)/100;
+      }
+      profitRows.splice(i,1);
+    }
     const recordedAmount = (matcher) => monthRows.reduce((sum, row) => {
       const amount = Number(row.amount || 0);
       return matcher(row) && amount < 0 ? sum - amount : sum;
@@ -5632,9 +5513,15 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
     }));
     // 在经营盈亏口径中，这三类成本始终只由当前选择的数据来源形成日应计，
     // 账本中的同类一次性记录不再额外计入，避免重复计算。
-    const recurringMatcher = row => view === 'accrual' && (isBookkeepingWage(row) || isRentOrProperty(row) || isUtilities(row));
+    const manualTag=row=>require('./lib/delivery-fee-rules').ledgerType(row,feeRules);
+    const tagLabels=require('./lib/delivery-fee-rules').ledgerTypes;
+    const platformMatcher=row=>Boolean(manualPlatform)&&manualTag(row)==='platform';
+    const recurringAllowed=item=>{const rows=monthRows.filter(item.matcher);return !rows.length||rows.every(row=>manualTag(row)==='accrual');};
+    const disallowedCosts=new Set(recurringCosts.filter(item=>!recurringAllowed(item)).map(item=>item.key));
+    for(const item of recurringCosts)if(disallowedCosts.has(item.key))item.daily_amount=item.cumulative_amount=0;
+    const recurringMatcher = row => view === 'accrual' && manualTag(row)==='accrual' && recurringCosts.some(item=>!disallowedCosts.has(item.key)&&item.matcher(row));
     const accrualItems = view === 'accrual'
-      ? recurringCosts.map(item => ({
+      ? recurringCosts.filter(item=>!disallowedCosts.has(item.key)).map(item => ({
           category: item.category, subcategory: item.subcategory,
           daily_amount: item.daily_amount, cumulative_amount: item.cumulative_amount,
         }))
@@ -5644,10 +5531,9 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       if (!profitByDate.has(row.date)) profitByDate.set(row.date, { income: 0, expense: 0 });
       const target = profitByDate.get(row.date);
       const amount = Number(row.amount || 0);
-      // 收银机视角直接用记账本口径：销售类收入与平台费用都保留在账本里；
-      // 真实数据视角才从账本剔除（由平台解析/虚拟分组替代展示）。
+      // 收入视角可切换，支出始终保留记账本原始项目；平台解析费用仅用于核对。
       if (amount > 0 && !isStoredValue(row) && (isCashierView || !isBookkeepingSalesRevenue(row))) target.income += amount;
-      if (amount < 0 && !recurringMatcher(row) && (isCashierView || !isBookkeepingPlatformFee(row))) target.expense -= amount;
+      if (amount < 0 && !recurringMatcher(row) && !platformMatcher(row)) target.expense -= amount;
     });
     const dailyProfitSeries = [];
     let cumulativeProfit = 0;
@@ -5655,23 +5541,24 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       const date = `${String(month)}-${String(day).padStart(2, '0')}`;
       const row = profitByDate.get(date) || {};
       const sales = isCashierView ? {} : (resolvedSalesByDate.get(date) || {});
-      const income = Number(row.income || 0) + Number(sales.income || 0);
-      const expense = Number(row.expense || 0) + Number(sales.fees || 0) + (view === 'accrual' ? recurringCosts.reduce((sum, item) => sum + Number(item.daily_amount || 0), 0) : 0);
+      const income = Number(row.income || 0) + Number(sales.income || 0) - (isCashierView ? cashFeeByDate.get(date)||0 : 0);
+      const expense = Number(row.expense || 0) + (manualPlatform?.costs.get(date)?.[isCashierView?'cashier':'real']||0) + (view === 'accrual' ? recurringCosts.reduce((sum, item) => sum + Number(item.daily_amount || 0), 0) : 0);
       const dailyNet = income - expense;
       cumulativeProfit += dailyNet;
-      dailyProfitSeries.push({ date, day, income, expense, daily_net: dailyNet, cumulative_net: cumulativeProfit });
+      dailyProfitSeries.push({ date, day, income, expense, daily_net: ((manualPlatform&&!manualPlatform.ready)||!offlinePayment.ready)?null:dailyNet, cumulative_net: ((manualPlatform&&!manualPlatform.ready)||!offlinePayment.ready)?null:cumulativeProfit });
     }
     const ledgerIncomeTotal = monthRows.reduce((sum, row) => Number(row.amount || 0) > 0 && !isStoredValue(row) ? sum + Number(row.amount) : sum, 0);
     const ledgerFeeTotal = monthRows.reduce((sum, row) => Number(row.amount || 0) < 0 && isBookkeepingPlatformFee(row) ? sum - Number(row.amount) : sum, 0);
     const incomeRows = isCashierView
       ? buildMonthlyDashboardGroups(monthRows, dayRows, 'income')
       : buildResolvedIncomeComposition(monthRows, dayRows, resolvedRevenue.rows, period.cutoff, resolvedRevenue.policy);
-    const expenseRows = isCashierView
-      ? buildMonthlyDashboardGroups(monthRows, dayRows, 'expense', { excludeRow: recurringMatcher, accrualItems })
-      : appendDashboardVirtualGroup(
-          buildMonthlyDashboardGroups(monthRows, dayRows, 'expense', { excludeRow: row => recurringMatcher(row) || isBookkeepingPlatformFee(row), accrualItems }),
-          '平台费用', '第三方平台费用', Number(resolvedSalesByDate.get(period.cutoff)?.fees || 0), Number(resolvedSalesTotals.fees || 0)
-        );
+    const displayedOfflineFees = isCashierView ? cashFeeByDate : offlinePayment.byDate;
+    const offlineCumulativeFee = [...displayedOfflineFees.values()].reduce((n, v) => n + Math.round(v*100), 0)/100;
+    const offlineDailyFee = displayedOfflineFees.get(period.cutoff) || 0;
+    const offlineLedgerAdjusted = isCashierView && offlineFees.adjustLedgerIncome(incomeRows, offlineDailyFee, offlineCumulativeFee);
+    let expenseRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'expense', { excludeRow: row=>recurringMatcher(row)||platformMatcher(row), accrualItems });
+    if(manualPlatform){const field=isCashierView?'cashier':'real';expenseRows=appendDashboardVirtualGroup(expenseRows,'人工确认平台费用',isCashierView?'第三方及推广／霸王餐':'霸王餐费用',manualPlatform.costs.get(period.cutoff)?.[field]||0,[...manualPlatform.costs.values()].reduce((n,r)=>n+r[field],0));}
+    expenseRows=expenseRows.map(row=>({...row,expense_type:row.is_group?null:(row.category==='人工确认平台费用'?'platform':manualTag(row)),expense_tag:row.is_group?'':tagLabels[row.category==='人工确认平台费用'?'platform':manualTag(row)]}));
     const storedValueRows = buildStoredValueComposition(monthRows, dayRows);
     const totals = (rows, key) => rows.filter(row => row.is_group).reduce((sum, row) => sum + Number(row[key] || 0), 0);
     const dailyIncome = totals(incomeRows, 'daily_amount');
@@ -5691,6 +5578,10 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
     }
     const laborEfficiency = buildLaborEfficiency({
       period,
+      revenueDailyRows: isCashierView
+        ? dailyProfitSeries.map(row=>({biz_date:row.date,amount:row.income}))
+        : [...resolvedSalesByDate].map(([date,row])=>({biz_date:date,amount:row.settled})),
+      revenueView: revenueDataView,
       store: laborEfficiencyStore,
       storeId: scopedStoreIds.length === 1 ? scopedStoreIds[0] : null,
       region: laborEfficiencyRegion(loadConfig()),
@@ -5699,14 +5590,16 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       ok: true,
       store_name: storeName,
       labor_efficiency: laborEfficiency,
+      offline_payment_fee: { daily_amount: offlineDailyFee, cumulative_amount: offlineCumulativeFee, actual_days: offlinePayment.actual_days, order_days:offlinePayment.order_days, estimated_days: offlinePayment.estimated_days, ledger_adjusted: Boolean(offlineLedgerAdjusted) },
+      fee_policy:{enabled:feeRules.enabled,revision:feeRules.revision,ready:manualPlatform?.ready??true,warnings:manualPlatform?.warnings||[]},
       period,
       view,
       revenue_source: {
         view: revenueDataView,
         overrides: isCashierView ? {} : resolvedRevenue.policy.overrides,
         gross_amount: isCashierView ? Math.round(ledgerIncomeTotal * 100) / 100 : resolvedSalesTotals.gross,
-        income_amount: isCashierView ? Math.round(ledgerIncomeTotal * 100) / 100 : resolvedSalesTotals.income,
-        settled_amount: isCashierView ? Math.round(ledgerIncomeTotal * 100) / 100 : resolvedSalesTotals.settled,
+        income_amount: isCashierView ? Math.round((ledgerIncomeTotal - (offlineLedgerAdjusted ? offlineCumulativeFee : 0)) * 100) / 100 : resolvedSalesTotals.income,
+        settled_amount: isCashierView ? Math.round((ledgerIncomeTotal - (offlineLedgerAdjusted ? offlineCumulativeFee : 0)) * 100) / 100 : resolvedSalesTotals.settled,
         platform_fee_amount: isCashierView ? Math.round(ledgerFeeTotal * 100) / 100 : resolvedSalesTotals.fees,
         order_count: isCashierView ? 0 : resolvedSalesTotals.orders,
       },
@@ -5723,11 +5616,11 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       totals: {
         daily_income: dailyIncome,
         daily_expense: dailyExpense,
-        daily_net: dailyIncome - dailyExpense,
+        daily_net: ((manualPlatform&&!manualPlatform.ready)||!offlinePayment.ready)?null:dailyIncome - dailyExpense,
         daily_stored_value: storedValue(dayRows),
         cumulative_income: cumulativeIncome,
         cumulative_expense: cumulativeExpense,
-        cumulative_net: cumulativeIncome - cumulativeExpense,
+        cumulative_net: ((manualPlatform&&!manualPlatform.ready)||!offlinePayment.ready)?null:cumulativeIncome - cumulativeExpense,
         cumulative_stored_value: storedValue(monthRows),
       },
     });
@@ -5748,7 +5641,7 @@ app.get('/api/analysis-agents/config', (req, res) => {
   res.json({ ok: true, ai_enabled: publicAi.aiEnabled, active_profile_id: publicAi.activeAiProfileId,
     profiles: publicAi.aiProfiles.map(({ id, name, model }) => ({ id, name, model })),
     route: analysisAgents.STEPS.map(([key, name]) => ({ key, name })),
-    data_policy: '模型模式只发送当前门店所选日期的聚合经营数据给已配置模型；不发送原始文件或凭证。' });
+    data_policy: '模型模式只发送当前门店本期及前一同长度期间的聚合经营数据给已配置模型；不发送原始文件或凭证。' });
 });
 app.get('/api/analysis-agents/runs', (req, res) => {
   const storeId = Number(req.query.store_id);
@@ -5930,6 +5823,9 @@ app.put('/api/business-analytics/group-buy/daily-summary', (req, res) => {
 // ===== 可维护推送通道 =====
 // 机器人统一登记，具体发什么由消息路由决定；GET 不回传 Webhook 凭证。
 app.use('/api/enterprise-settings/wecom-routing', wecomRouting.createRouter({ db, loadConfig, saveConfig }));
+app.use('/api/enterprise-settings/store-finance-daily', require('./lib/store-finance-daily-routes').createRouter({db, httpPost}));
+app.use('/api/enterprise-settings/delivery-fee-rules',require('./lib/delivery-fee-rules').router(db));
+app.use('/api/bookkeeping/expense-tags',require('./lib/delivery-fee-rules').router(db,'ledger'));
 app.get('/api/enterprise-settings/pos-daily/preview', (req, res) => {
   try {
     const data = posDailyPush.preview(db, String(req.query.business_date || ''));
@@ -6070,6 +5966,12 @@ app.post('/api/push/group-buy-daily/send', async (req, res) => {
 
 // 美团外卖经营指标（曝光/入店/下单/转化率）：求和字段直接合计，转化率按加权口径重算
 require('./lib/meituan-delivery-sync').mount({ app, express, db, audit: syncJobAudit, businessAnalytics });
+require('./lib/meituan-group-sync').mount({ app, express, db, audit: syncJobAudit, businessAnalytics });
+require('./lib/meituan-operation-sync').mount({ app, express, db, audit: syncJobAudit, businessAnalytics });
+require('./lib/douyin-group-sync').mount({ app, express, db, audit: syncJobAudit, businessAnalytics });
+require('./lib/douyin-operation-sync').mount({ app, express, db, audit: syncJobAudit });
+require('./lib/douyin-reviews').mount({app,db});
+require('./lib/meituan-reviews').mount({app,db});
 app.get('/api/business-analytics/meituan-operation', (req, res) => {
   try {
     res.json(businessAnalytics.getMeituanOperation(db, req.query));
@@ -6774,6 +6676,7 @@ try {
 try {
   const { mountItemSalesCoverage } = require('./lib/syncbot-item-coverage');
   mountItemSalesCoverage({ app, express, db, audit: syncJobAudit });
+  require('./lib/syncbot-order-coverage').mountOrderDetailCoverage({app,express,db,audit:syncJobAudit});
 } catch (e) {
   console.error('[syncbot-item-coverage] mount failed:', e.message);
 }
@@ -6901,6 +6804,27 @@ app.post('/api/internal/syncbot/test-cleanup', express.raw({ type: () => true, l
 });
 
 /** 概览：最近一次运行 / 最近成功时间 / 今日成功失败等待人工数 / 待处理异常数 */
+app.use('/api/knowledge', require('./lib/knowledge-router').createRouter({db,authenticate:(req,res,next)=>{const user=getAuthUserById(req.user?.id);if(!user)return res.status(401).json({error:'请先登录'});req.knowledgeUser=user;next()}}));
+app.use('/api/store-operations',require('./lib/store-operations-router').createRouter({db,authenticate:(req,res,next)=>{const user=getAuthUserById(req.user?.id);if(!user)return res.status(401).json({error:'请先登录'});req.operationUser=user;next()}}));
+app.use('/api/store-tasks', require('./lib/store-task-router').createRouter({
+  db,
+  authenticate: (req, res, next) => {
+    const user = getAuthUserById(req.user?.id);
+    if (!user) return res.status(401).json({ error: '请先登录' });
+    req.taskUser = user; next();
+  },
+  scopeFor: (user,permission)=>require('./lib/mp/auth').storeScope(user,permission,'web'),
+}));
+
+app.get('/api/business-analytics/sync-runs/bookkeeping-review', (req, res) => {
+  const user = getAuthUserById(req.user?.id);
+  if (!positionPermissions.can(user?.position_permissions, 'data-import.manage') && !positionPermissions.can(user?.position_permissions, 'analysis.view')) {
+    return res.status(403).json({ error: '没有查看复核看板的权限' });
+  }
+  try { res.json(require('./lib/bookkeeping-review-dashboard').dashboard(db)); }
+  catch { res.status(503).json({ error: '记账本复核记录暂时不可读取' }); }
+});
+
 app.get('/api/business-analytics/sync-runs/overview', (req, res) => {
   try { res.json({ ok: true, ...syncJobAudit.overview(db) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -7109,8 +7033,15 @@ app.get('/api/bot/status', (_req, res) => {
   if (process.env.DISABLE_WECOM_BOT !== '1') wecomBot.start().catch(err => console.error('[wecom-bot] 启动失败:', err.message));
   setupConsoleEncoding();
   await db.init();
+  const hqTick=()=>{try{require('./lib/headquarter-staff-workflow').tick(db)}catch(e){console.warn('[hq-workflow] '+e.message)}};
+  const offboardTick=()=>{try{require('./lib/staff-offboarding').tick(db)}catch(e){console.warn('[offboarding] '+e.message)}};offboardTick();const offboardTimer=setInterval(offboardTick,60000);offboardTimer.unref();
+  hqTick();const hqTimer=setInterval(hqTick,60000);hqTimer.unref();
+  const taskPlanTick=()=>{try{require('./lib/store-tasks').generateScheduled(db)}catch(e){console.warn('[store-tasks] 长期任务生成失败：'+e.message)}};
+  taskPlanTick();
+  const taskPlanTimer=setInterval(taskPlanTick,60000);taskPlanTimer.unref();
   payrollWorkflow.initialize(db);
   dingScheduleModule.initialize(db);
+  require('./lib/dingtalk-approvals').initialize(db);
   staffRoster.initialize(db);
   dingSchedule.start();
   // Replay balances after midnight and after punch corrections; unchanged accounts do not write.

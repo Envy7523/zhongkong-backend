@@ -1,11 +1,69 @@
 import axios from 'axios'
+import {uploadTaskPhotoSource,readTaskPhoto} from '../../../miniprogram/src/common/cloud-photo-transfer.mjs'
 
 const TOKEN_KEY = 'etaigong_token'
+export const customWorkflowApi={definitions:()=>http.get('/api/store-operations/custom-workflows/definitions'),save:data=>http.post('/api/store-operations/custom-workflows/definitions',data),publish:(id,data)=>http.post(`/api/store-operations/custom-workflows/definitions/${id}/publish`,data),disable:(id,data)=>http.post(`/api/store-operations/custom-workflows/definitions/${id}/disable`,data),versions:id=>http.get(`/api/store-operations/custom-workflows/definitions/${id}/versions`),options:()=>http.get('/api/store-operations/custom-workflows/options'),requests:()=>http.get('/api/store-operations/custom-workflows/requests'),start:data=>http.post('/api/store-operations/custom-workflows/requests',data),decision:(id,data)=>http.post(`/api/store-operations/custom-workflows/requests/${id}/decision`,data),fileStart:data=>http.post('/api/store-operations/custom-workflows/files/start',data),fileChunk:(id,data)=>http.post(`/api/store-operations/custom-workflows/files/${id}/chunk`,data),fileFinish:id=>http.post(`/api/store-operations/custom-workflows/files/${id}/finish`),file:(id,chunk)=>http.get(`/api/store-operations/custom-workflows/files/${id}`,{params:{chunk}})}
+export const workflowApi={hqOptions:()=>http.get('/api/store-operations/workflow/hq-options'),hqStart:data=>http.post('/api/store-operations/workflow/hq-requests',data),config:business=>http.get('/api/store-operations/workflow/config',{params:{business}}),templates:data=>http.post('/api/store-operations/workflow/templates',data),requests:business=>http.get('/api/store-operations/workflow/requests',{params:{business}}),decision:(id,data)=>http.post(`/api/store-operations/workflow/requests/${id}/decision`,data)}
+export const knowledgeApi={
+ banners:()=>http.get('/api/knowledge/banners'),saveBanner:data=>http.post('/api/knowledge/banners',data),
+ config:()=>http.get('/api/knowledge/config'),list:()=>http.get('/api/knowledge/entries'),save:data=>http.post('/api/knowledge/entries',data),
+ publish:(id,data)=>http.post(`/api/knowledge/entries/${id}/publish`,data),hide:(id,data)=>http.post(`/api/knowledge/entries/${id}/hide`,data),
+ report:id=>http.get(`/api/knowledge/entries/${id}/report`),versions:id=>http.get(`/api/knowledge/entries/${id}/versions`),category:data=>http.post('/api/knowledge/categories',data),
+ upload:(file,onProgress)=>http.post('/api/knowledge/files',file,{params:{name:file.name},headers:{'Content-Type':'application/octet-stream'},timeout:180000,onUploadProgress:e=>onProgress(Math.round(e.loaded/e.total*100))}),
+ preview:(id,page=0)=>http.get(`/api/knowledge/files/${id}/preview`,{params:{page}}),
+ chunk:(id,index=0,media)=>http.get(`/api/knowledge/files/${id}/chunk`,{params:{index,media}}),
+}
+export const storeOperationsApi={
+ onboardingRecords:()=>http.get('/api/store-operations/onboarding/records'),onboardingConfig:()=>http.get('/api/store-operations/onboarding/config'),saveOnboardingConfig:data=>http.put('/api/store-operations/onboarding/config',data),
+ offboardingConfig:()=>http.get('/api/store-operations/offboarding/config'),saveOffboardingConfig:data=>http.put('/api/store-operations/offboarding/config',data),offboardingRecords:()=>http.get('/api/store-operations/offboarding/records'),completeOffboarding:(id,data)=>http.post('/api/store-operations/offboarding/records/'+id+'/complete',data),
+  supportRequests: () => http.get('/api/store-operations/support/requests'),config:()=>http.get('/api/store-operations/config'),transfers:params=>http.get('/api/store-operations/transfers',{params}),exportTransfers:params=>http.get('/api/store-operations/transfers/export',{params,responseType:'blob'}),announcements:()=>http.get('/api/store-operations/announcements'),saveAnnouncement:data=>http.post('/api/store-operations/announcements',data),report:id=>http.get(`/api/store-operations/announcements/${id}/report`),saveRules:data=>http.put('/api/store-operations/rules',data)}
+export const storeReportApi={createType:data=>http.post('/api/store-operations/reports/types',data),config:()=>http.get('/api/store-operations/reports/config'),save:data=>http.post('/api/store-operations/reports/templates',data),list:()=>http.get('/api/store-operations/reports/entries'),detail:id=>http.get(`/api/store-operations/reports/entries/${id}`),action:(id,data)=>http.post(`/api/store-operations/reports/entries/${id}/action`,data),photo:(path,variant,chunk)=>http.get('/api/store-operations/reports/photo',{params:{path,variant,chunk}})}
 
 const http = axios.create({
   baseURL: '',
   timeout: 30000,
 })
+
+export const personnelAccessApi = {
+ preview:data=>http.post('/api/access/preview',data),
+ profile:(id,data)=>http.put('/api/access/users/'+id+'/profile',data),
+ catalog:()=>http.get('/api/access/permission-catalog'),
+ policy:(id,data)=>http.put('/api/access/positions/'+id+'/policy',data),
+ config:()=>http.get('/api/access/config'),
+ save:(id,data)=>http.put('/api/access/users/'+id,data),
+ create:data=>http.post('/api/access/users',data),
+ position:(id,data)=>http.put('/api/access/positions/'+id,data),
+ report:(id,channel)=>http.get('/api/access/users/'+id+'/effective',{params:{channel}}),
+ logs:id=>http.get('/api/access/logs',{params:{user_id:id}}),
+ members:params=>http.get('/api/access/store-members',{params}),
+}
+export const storeTaskApi = {
+  config: () => http.get('/api/store-tasks/config'),
+  templates: () => http.get('/api/store-tasks/templates'),
+  save: data => http.post('/api/store-tasks/templates', data),
+  dispatch: data => http.post('/api/store-tasks/dispatch', data),
+  schedules: () => http.get('/api/store-tasks/schedules'),
+  storeSummary: () => http.get('/api/store-tasks/templates/store-summary'),
+  stores: id => http.get(`/api/store-tasks/templates/${id}/stores`),
+  removeStore: (id,storeId) => http.post(`/api/store-tasks/templates/${id}/stores/${storeId}/remove`),
+  stopSchedule: id => http.post(`/api/store-tasks/schedules/${id}/stop`),
+  list: params => http.get('/api/store-tasks/instances', {params}),
+  submissions: params => http.get('/api/store-tasks/submissions', {params}),
+  submission: id => http.get(`/api/store-tasks/submissions/${id}`),
+  detail: id => http.get(`/api/store-tasks/instances/${id}`),
+  answer: (id,data) => http.post(`/api/store-tasks/instances/${id}/answer`,data),
+  submit: (id,data) => http.post(`/api/store-tasks/instances/${id}/submit`,data),
+  review: (id,data) => http.post(`/api/store-tasks/instances/${id}/review`,data),
+  reopen: (id,data) => http.post(`/api/store-tasks/instances/${id}/reopen`,data),
+  upload: (id,data) => http.post(`/api/store-tasks/instances/${id}/photo`,{data}),
+  guideUpload: data => http.post('/api/store-tasks/guide-images',{data}),
+  photo: async(path,variant='original')=>{
+    const parts=[];const info=await readTaskPhoto(taskPhotoCall,path,variant,async r=>{const raw=atob(r.chunk),bytes=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);parts.push(bytes)},()=>{},'/api/store-tasks');
+    return {data:URL.createObjectURL(new Blob(parts,{type:'image/'+info.mime}))};
+  },
+  uploadFile: (id,file,onProgress)=>uploadTaskPhotoSource(taskPhotoCall,id,{size:file.size,mime:file.type.replace('image/',''),read:(offset,length)=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file.slice(offset,offset+length))})},onProgress,'/api/store-tasks'),
+}
+const taskPhotoCall=options=>http.request({url:options.url,method:options.method||'GET',data:options.data,timeout:options.timeout||30000})
 
 // 请求拦截：自动带 token
 http.interceptors.request.use((config) => {
@@ -27,6 +85,7 @@ http.interceptors.response.use(
     const payload = err.response?.data
     const msg = payload?.error || err.message || '请求失败'
     const error = new Error(msg)
+    error.status=err.response?.status
     // 把响应体的其余字段（如闭店接口返回的 pending_employees）一并挂到 error 上，
     // 需要结构化信息时不必再去翻 err.response。已有字段仍以 message 为准，不影响既有调用方。
     if (payload && typeof payload === 'object') Object.assign(error, payload)
@@ -36,7 +95,13 @@ http.interceptors.response.use(
 
 // ===== 认证 =====
 export const login = (username, password) => http.post('/api/auth/login', { username, password })
+export const getDeliveryFeeRules = () => http.get('/api/enterprise-settings/delivery-fee-rules')
+export const saveDeliveryFeeRules = body => http.put('/api/enterprise-settings/delivery-fee-rules',body)
+export const getBookkeepingExpenseTags = () => http.get('/api/bookkeeping/expense-tags')
+export const saveBookkeepingExpenseTags = body => http.put('/api/bookkeeping/expense-tags',body)
 export const getMe = () => http.get('/api/auth/me')
+export const getWechatBindings = () => http.get('/api/users/wechat-bindings')
+export const reviewWechatBinding = (id, data) => http.post(`/api/users/wechat-bindings/${id}/review`, data)
 export const getMeituanOperatingSource = (params) => http.get('/api/business-analytics/meituan-operating-source', { params })
 export const updateMyProfile = (data) => http.put('/api/auth/profile', data)
 
@@ -60,6 +125,11 @@ export const updateWecomBot = (id, data) => http.put(`/api/enterprise-settings/w
 export const bindWecomRoute = (code, data) => http.put(`/api/enterprise-settings/wecom-routing/routes/${code}`, data)
 export const activateWecomRoute = (code, data) => http.post(`/api/enterprise-settings/wecom-routing/routes/${code}/activation`, data)
 export const previewPosDaily = (businessDate) => http.get('/api/enterprise-settings/pos-daily/preview', { params: { business_date: businessDate } })
+export const getStoreFinanceDailyOptions = () => http.get('/api/enterprise-settings/store-finance-daily/options')
+export const getStoreFinanceCostSources = (storeId) => http.get('/api/enterprise-settings/store-finance-daily/cost-sources', { params: { store_id: storeId } })
+export const saveStoreFinanceCostSources = (data) => http.post('/api/enterprise-settings/store-finance-daily/cost-sources', data)
+export const previewStoreFinanceDaily = (storeId, businessDate, costSources) => http.get('/api/enterprise-settings/store-finance-daily/preview', { params: { store_id: storeId, business_date: businessDate, cost_sources:costSources?JSON.stringify(costSources):undefined } })
+export const sendStoreFinanceDailyTest = (data) => http.post('/api/enterprise-settings/store-finance-daily/test-send', data, { timeout: 30000 })
 export const sendPosDailyTest = (data) => http.post('/api/enterprise-settings/pos-daily/test-send', data, { timeout: 30000 })
 
 // ===== 企业微信 Token =====
@@ -135,7 +205,7 @@ export const setStoreRegionMembership = (storeId, regionId) => http.put(`/api/st
 export const getStoreStats = () => http.get('/api/db/stores/stats')
 
 // ===== 门店生命周期：闭店 / 迁址 / 重开 / 履历 =====
-// 口径见后端 lib/store-lifecycle.js：状态只有三态，迁址=老店闭店+新建门店+双向关联，闭店前员工必须全部处置。
+// 口径见后端 lib/store-lifecycle.js：状态只有三态，迁址可先停业待定，确定新址后新建门店并双向关联；员工须逐人确认安排。
 export const getStoreLifecycleMeta = () => http.get('/api/store-lifecycle/meta')
 export const getStoreLifecycle = (id) => http.get(`/api/db/stores/${id}/lifecycle`)
 export const closeStore = (id, data) => http.post(`/api/db/stores/${id}/close`, data)
@@ -305,6 +375,7 @@ export const getBusinessTemplate = (sourceType) => http.get('/api/business-analy
 
 // ===== AI 自动导报表运行审计（结构化事件；不从普通日志解析）=====
 export const getSyncRunsOverview = () => http.get('/api/business-analytics/sync-runs/overview')
+export const getBookkeepingReviewDashboard = () => http.get('/api/business-analytics/sync-runs/bookkeeping-review')
 export const getSyncRuns = (params) => http.get('/api/business-analytics/sync-runs', { params })
 export const getSyncRunDetail = (id) => http.get(`/api/business-analytics/sync-runs/${id}`)
 
@@ -377,6 +448,7 @@ export const getBookkeepingSubcategories = (params) => http.get('/api/bookkeepin
 export const createBookkeepingSubcategory = (data) => http.post('/api/bookkeeping/subcategories', data)
 export const updateBookkeepingSubcategory = (id, data) => http.put(`/api/bookkeeping/subcategories/${id}`, data)
 export const deleteBookkeepingSubcategory = (id) => http.delete(`/api/bookkeeping/subcategories/${id}`)
+export const exportBookkeepingEntries = params => http.get('/api/bookkeeping/entries/export', { params, responseType:'blob' })
 export const getBookkeepingEntries = (params) => http.get('/api/bookkeeping/entries', { params })
 export const createBookkeepingEntry = (data) => http.post('/api/bookkeeping/entries', data)
 export const deleteBookkeepingEntry = (id) => http.delete(`/api/bookkeeping/entries/${id}`)
@@ -468,3 +540,8 @@ export const saveRosterException=(id,date,data)=>http.put(`/api/staff-roster/emp
 
 export const previewRosterPayroll=id=>http.get(`/api/staff-roster/payroll/${id}/preview`)
 export const applyRosterPayroll=(id,data)=>http.post(`/api/staff-roster/payroll/${id}/apply`,data)
+
+export const getDouyinReviews = params => http.get('/api/business-analytics/douyin-reviews', { params })
+export const getMeituanReviews = params => http.get('/api/business-analytics/meituan-reviews', { params })
+
+export const getDouyinReviewMedia = name => http.get(`/api/business-analytics/douyin-review-media/${encodeURIComponent(name)}`, {responseType:'blob'})
