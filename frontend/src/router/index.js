@@ -6,6 +6,10 @@ import LoginView from '@/views/LoginView.vue'
 import ProductBinding from '@/views/analysis/ProductBinding.vue'
 
 const routes = [
+  {path:'/store-operations',name:'store-operations',component:()=>import('@/views/StoreOperations.vue'),meta:{requiredPermission:['staff.transfers.view','staff.support.view','staff.offboarding.view','staff.onboarding.view','workflow.manage','store-notices.manage'],pageTitle:'门店流程与通知'}},
+  {path:'/workflows',name:'workflows',component:()=>import('@/views/Workflows.vue'),meta:{requiredPermission:['workflow.start','store-reports.view','workflow.manage','workflow.view','workflow.execute','staff.hq.manage'],pageTitle:'审批流程'}},
+  {path:'/knowledge-base',name:'knowledge-base',component:()=>import('@/views/KnowledgeBase.vue'),meta:{requiredPermission:'knowledge.edit',pageTitle:'知识库管理'}},
+  { path: '/store-tasks', name: 'store-tasks', component: () => import('@/views/StoreTasks.vue'), meta: { requiredPermission: ['store-tasks.manage','store-tasks.execute','store-tasks.review'], pageTitle: '门店日常任务' } },
   {
     path: '/login',
     name: 'login',
@@ -85,6 +89,7 @@ const routes = [
     component: () => import('@/views/analysis/MonthlyOperatingDashboard.vue'),
     meta: { analysisKey: 'analysis-total-monthly-dashboard', analysisTitle: '总数据视角 · 月经营数据看板', analysisScope: 'total', analysisMode: 'monthly-dashboard' },
   },
+  { path: '/analysis/delivery/fee-rules', name: 'analysis-delivery-fees', component: () => import('@/views/analysis/DeliveryFeeRules.vue'), meta: { analysisKey:'analysis-delivery-fees', analysisTitle:'外卖视角 · 字段分类', requiredPermission:'analysis.view' } },
   {
     path: '/analysis/total/binding',
     name: 'analysis-total-binding',
@@ -221,6 +226,7 @@ const routes = [
   { path: '/pipeline/pos-daily', name: 'workspace-pipeline-pos', component: { render: () => null }, meta: { pushSection: 'pos', requiredPermission: 'enterprise-settings.manage' } },
   { path: '/pipeline/pos-daily/schedule', name: 'workspace-pipeline-pos-schedule', component: { render: () => null }, meta: { pushSection: 'pos-schedule', requiredPermission: 'enterprise-settings.manage' } },
   { path: '/pipeline/pos-store-daily', name: 'workspace-pipeline-pos-store', component: { render: () => null }, meta: { pushSection: 'pos-store', requiredPermission: 'enterprise-settings.manage' } },
+  { path: '/pipeline/store-finance-daily', name: 'workspace-pipeline-store-finance', component: { render: () => null }, meta: { pushSection: 'finance', requiredPermission: 'enterprise-settings.manage' } },
   { path: '/ai-assistant', name: 'workspace-ai-assistant', component: { render: () => null } },
   { path: '/user-management', name: 'workspace-user-management', component: { render: () => null } },
   { path: '/position-settings', name: 'workspace-position-settings', component: { render: () => null } },
@@ -348,7 +354,7 @@ const ROUTE_PERMISSION_RULES = [
   ['staff-management-salary', ['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review']],
   ['staff-management-roster', ['staff.store.edit','payroll.attendance']],
   ['staff-management-attendance', 'payroll.attendance'],
-  ['staff-management-review', 'payroll.review'],
+  ['staff-management-review', ['payroll.review','payroll.attendance']],
   ['staff-management-payslips', ['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review']],
   ['staff-management-', 'staff.view'],
   ['workspace-position-settings', 'positions.manage'],
