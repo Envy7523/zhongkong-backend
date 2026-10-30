@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "鹅太公外卖采集",
+  "version": "0.5.0",
+  "description": "通过原有Chrome连接外卖平台，本机下载并核验报表。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsBw9ei9vzAmEl4V8waTLdhqo++hCMCJFtjb4kkFxpy77gIR9r8nc+2101Gws4ULBGuanauh6qhVFAIXsSKUW44ugy4IYEYObcwjAaAywkQVItG9xUbNr7xTDW7rCk5UgCwtz+m0CWryQtjUL+i+vhpeICItbOQLSKNJ210us1QFl6BM3IzxH0tY7nJWDMr6EOgihYJ6d5Ih1jV2UfqEKzWWXeKav6XXRpRHXZuFFJXO5ICerpSBL9t5MeJhFIAOZ0XCHMMsa6Yn03nIaakpAy2uWJwRTNvpHDlwXLGWvDUX7jhcII5sRgr0EcEoDosZ5EswwDvVkRu3xC6T06rmlJQIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "webNavigation",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://waimaie.meituan.com/*",
+    "https://waimaieapp.meituan.com/*",
+    "https://melody.shop.ele.me/*",
+    "https://store.jddj.com/*",
+    "https://kunce-store.jddj.com/*",
+    "https://melody-stats-next.ele.me/*",
+    "https://napos-bill-pc.faas.ele.me/*"
+  ],
+  "background": {
+    "service_worker": "worker.js"
+  },
+  "action": {
+    "default_title": "连接鹅太公采集客户端"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://waimaie.meituan.com/*",
+        "https://waimaieapp.meituan.com/*",
+        "https://melody.shop.ele.me/*",
+        "https://store.jddj.com/*",
+        "https://kunce-store.jddj.com/*",
+        "https://melody-stats-next.ele.me/*",
+        "https://napos-bill-pc.faas.ele.me/*"
+      ],
+      "js": [
+        "reads.js",
+        "dom.js",
+        "content.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}

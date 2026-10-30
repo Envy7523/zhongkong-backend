@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>鹅太公 · 外卖采集客户端</title><link rel="stylesheet" href="/ui.css"><script src="/ui.js" defer></script></head>
+<body><main>
+<header><div class="brand"><span class="brand-mark">鹅</span><div><p class="eyebrow">鹅太公中控 · 本地采集</p><h1>外卖采集客户端</h1></div></div><span class="environment">本机 Google Chrome</span></header>
+<div class="stage-note"><span class="stage-dot"></span><div><strong>当前接入：美团外卖经营、商品及结算报表</strong><p id="cloud-stage-note">第一阶段仅下载与校验，不会上传云端。平台账号密码、短信及验证码由你在 Chrome 中手动输入。</p></div></div>
+<div id="feedback" class="feedback" role="status" aria-live="polite" hidden></div>
+<div class="workspace"><section class="card configuration"><div class="section-heading"><span class="number">01</span><div><h2>连接与范围</h2><p>复用你已经登录的 Chrome 标签页，不创建另一份平台登录。</p></div></div>
+<form id="settings-form"><label for="browserMode">浏览器运行方式</label><select id="browserMode"><option value="extension">原有 Chrome · 采集扩展（待实机验收）</option><option value="existing">原有 Chrome · 调试连接（排障用）</option><option value="managed">独立 Chrome 窗口（平台验收未通过）</option></select><p class="help">采集扩展使用原有Chrome登录资料，无需逐次远程调试授权。首次需安装扩展和本机通信组件。</p><label for="account">美团账号标识</label><input id="account" autocomplete="off" placeholder="与品牌后台显示及导出文件中的账号标识一致" maxlength="100"><p class="help">此处不是登录密码；用于核对导出文件属于哪个账号。</p>
+<label for="storeIds">应采集的美团外卖门店 ID</label><textarea id="storeIds" rows="5" placeholder="每行一个门店 ID，也可用逗号分隔" spellcheck="false"></textarea><p class="help">按平台 ID 核对，不按相似店名猜测。营业表必须覆盖所选门店；商品无明细门店另行提示核对。</p>
+<label for="downloadDirectory">Chrome 下载目录</label><input id="downloadDirectory" placeholder="留空自动识别Windows下载目录；Chrome另设目录时填写完整路径" autocomplete="off"><details><summary>Chrome 路径（通常自动识别）</summary><label for="chromePath" class="sr-only">Chrome 完整路径</label><input id="chromePath" placeholder="自动查找 Google Chrome，可留空" autocomplete="off"></details>
+<div class="schedule-line"><label class="switch-label"><input id="scheduleEnabled" type="checkbox">每天采集昨日营业表</label><label class="sr-only" for="scheduleTime">北京时间</label><input id="scheduleTime" type="time" value="08:00"><span>北京时间</span></div><p id="schedule-help" class="help">客户端运行时生效；每个北京时间日期自动尝试一次。失败后保留记录，请检查并手动重试。</p>
+<button class="secondary action" id="save" type="submit">保存设置</button><span id="dirty-note" class="help" hidden>设置尚未保存</span></form></section>
+<section class="card run"><div class="section-heading"><span class="number">02</span><div><h2>连接并采集</h2><p>在现有 Chrome 打开美团品牌后台，授权连接后选择营业日。</p></div></div>
+<p id="browser-help" class="help">现有 Chrome 测试需手动允许调试；专用采集模式由程序管理浏览器。</p><div class="connection"><span id="browser-dot" class="connection-dot"></span><div><strong id="browser-state">正在读取客户端状态</strong><p id="connection-help">连接现有的目标美团标签页，不创建新登录窗口。</p></div><button class="secondary action" id="login">连接现有 Chrome</button></div>
+<label for="reportType">报表类型</label><select id="reportType"><option value="operating">门店经营日报</option><option value="product">商品销量明细</option><option value="settlement">结算与费用明细（全部门店）</option></select><label for="businessDate">营业日期</label><div class="collect-controls"><input id="businessDate" type="date"><button class="primary action" id="collect">下载并校验</button></div><p class="help">支持补采今天之前的日期。同一账号、日期恢复原导出任务；不会因为等待超时反复创建导出。</p>
+<div class="run-status"><span>当前进度</span><strong id="phase">待开始</strong><p id="phase-help">完成下载和文件校验后，才会显示本地结果。</p></div>
+<div class="boundaries"><span>已启用</span><p>三类报表的日期、字段、门店 ID、原件校验及结算金额对账</p><span>未启用</span><p>云端上传与入库；其他外卖平台；自动处理验证码</p></div></section></div>
+<section class="card records"><div class="section-heading"><span class="number">03</span><div><h2>采集记录</h2><p>下载通过不等于云端更新。失败、等待人工和指标空值都会保留提示。</p></div><button class="text-button" id="refresh">刷新</button></div><div class="table-scroll"><table><thead><tr><th>营业日期 / 触发方式</th><th>状态</th><th>文件核验结果</th><th>完成时间</th></tr></thead><tbody id="history"></tbody></table></div></section>
+<section class="card logs"><div class="section-heading"><h2>运行日志</h2></div><div id="events"></div></section>
+<footer><div>本机资料目录：<span id="data-root"></span><p>原件及记录保存于本机；现有 Chrome 的登录资料不复制进此目录或安装包。关闭本窗口后客户端继续运行；点击“退出客户端”才停止。</p></div><button id="quit" class="text-button action">退出客户端</button></footer>
+</main></body></html>
