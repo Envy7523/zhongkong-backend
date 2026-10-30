@@ -7,8 +7,18 @@ function driver(raw,failing=false){
  const io=source.slice(source.indexOf('function save()'),source.indexOf('/** 关闭数据库'));
  const tx=source.slice(source.indexOf('function transaction(action)'),source.indexOf('module.exports ='));
  const fakeFs={writeFileSync(){},renameSync(){if(failing)throw new Error('disk-write-failure')},existsSync:()=>false,unlinkSync(){}};
- return new Function('db','fs','DB_PATH','sleepSync',state+io+tx+';return {save,run,queryAll,transaction,available:()=>!persistenceFault}')(raw,fakeFs,'fixture.sqlite',()=>{});
+ return new Function('db','fs','DB_PATH','sleepSync',state+io+tx+';return {save,exec,run,queryOne,queryAll,transaction,available:()=>!persistenceFault}')(raw,fakeFs,'fixture.sqlite',()=>{});
 }
+
+test('真实生产exec在空库完成整批财务建表，重复初始化及参数绑定均正常',()=>{
+ const raw=new SQL.Database(),db=driver(raw);
+ require('../lib/business-ledger').initialize(db);
+ for(const name of ['operation_audit','finance_requests','finance_payments','published_payslips','finance_approval_summaries','finance_approval_proofs','finance_approval_store_mappings'])assert(db.queryOne("SELECT name FROM sqlite_master WHERE type='table' AND name=?",[name]),name);
+ require('../lib/business-ledger').initialize(db);
+ db.exec('CREATE TABLE bound_test(value TEXT);CREATE TABLE batch_tail(id INTEGER)');
+ db.exec('INSERT INTO bound_test(value) VALUES(?)',["x'); DROP TABLE batch_tail; --"]);
+ assert.equal(db.queryOne('SELECT COUNT(*) n FROM bound_test').n,1);assert.equal(db.queryOne('SELECT COUNT(*) n FROM batch_tail').n,0);raw.close();
+});
 test('生产同版本sql.js重复保存后外键持续开启并执行级联',()=>{
  const raw=new SQL.Database(),db=driver(raw);
  raw.run('PRAGMA foreign_keys=ON;CREATE TABLE parent(id INTEGER PRIMARY KEY);CREATE TABLE child(id INTEGER,parent_id INTEGER REFERENCES parent(id) ON DELETE CASCADE);INSERT INTO parent VALUES(1);INSERT INTO child VALUES(1,1)');
