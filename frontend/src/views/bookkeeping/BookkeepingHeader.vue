@@ -9,6 +9,7 @@
       <button :class="{ active: active === 'entry' }" @click="navigate('entry')">门店记账</button>
       <button v-if="isAdmin" :class="{ active: active === 'categories' }" @click="navigate('categories')">记账分类</button>
       <button :class="{ active: active === 'records' }" @click="navigate('records')">门店账本</button>
+      <button :class="{ active: active === 'expense-tags' }" @click="navigate('expense-tags')">字段分配</button>
     </nav>
   </section>
 </template>

@@ -1,5 +1,9 @@
 // 后端阶段与审计字段维持稳定英文代码；业务页面只展示中文。
 export const STAGE_LABELS = Object.freeze({
+  CANCELLED: '计划变更，已取消',
+  COVERAGE_VERIFIED: '已有入库数据核验完成',
+  QUEUED: '等待串行采集',
+  COLLECTION_SUCCEEDED: '评价采集同步完成',
   PRECHECK: '开始前检查',
   QUERY_DONE: '报表查询完成',
   EXPORT_SUBMITTED: '已提交导出申请',
@@ -30,6 +34,23 @@ const FIELD_LABELS = Object.freeze({
 })
 
 const VALUE_LABELS = Object.freeze({
+  operation_data_not_ready:'平台交易及流量指标尚未完整生成，等待重试',
+  group_worker_start_failed:'云端采集服务未启动，等待调度重试',
+  finance_api_transport_unknown:'同步接口连接超时，等待重试及回读核验',
+  douyin_operation_generation_timeout:'抖音平台生成报表超时，等待重试',
+  operation_store_count_mismatch:'报表门店数与所选范围不一致，待核对',
+  douyin_business_date_unavailable:'平台尚未开放该日经营报表，等待重试',
+  douyin_calendar_day_ambiguous:'报表日期暂不可选或日历定位异常',
+  stage_douyin_group_report2_cjs_failed:'抖音经营报表采集失败',
+  operation_no_records:'平台导出的报表暂无数据，等待重试',
+  group_filesystem_permission_denied:'采集目录权限不足',
+  group_worker_interrupted:'采集服务中断，等待重试',
+  group_result_unverified:'采集结果未通过完整性核验',
+  group_collection_failed:'采集失败，需检查运行日志',
+  meituan_review_coverage_unverified:'美团评价门店范围或正文完整性未通过核验',
+  douyin_review_snapshot_unverified:'抖音评价更新未通过核验',
+  stage_meituan_group_report1_cjs_failed:'美团收益报表采集失败',
+  stage_meituan_group_report2_cjs_failed:'美团经营报表采集失败',
   gates_passed: '导入前校验已通过',
   verify_failed: '校验失败',
   amount_missing: '金额数据缺失',

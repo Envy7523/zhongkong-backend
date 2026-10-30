@@ -49,28 +49,22 @@
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="status" label="状态" width="100"><template #default="{ row }"><el-tag :type="statusTag(row.status)" effect="plain" size="small">{{ row.status || '—' }}</el-tag></template></el-table-column>
-        <el-table-column prop="store_type" label="店型" width="94" />
+        <el-table-column prop="status" label="状态" width="100" align="center"><template #default="{ row }"><el-tag :type="statusTag(row.status)" effect="plain" size="small">{{ pendingRelocation(row) ? '迁址中' : row.status || '—' }}</el-tag></template></el-table-column>
+        <el-table-column prop="store_type" label="店型" width="94" align="center" />
         <el-table-column prop="legal_person" label="法人" width="108" show-overflow-tooltip />
-        <el-table-column label="所在地区" min-width="150"><template #default="{ row }">{{ [row.province, row.city, row.district].filter(Boolean).join(' / ') || '—' }}</template></el-table-column>
+        <el-table-column label="所在地区" min-width="190" show-overflow-tooltip><template #default="{ row }">{{ [row.province, row.city, row.district].filter(Boolean).join(' / ') || '—' }}</template></el-table-column>
         <el-table-column prop="address" label="详细地址" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="opening_date" label="开业日期" width="112" />
-        <el-table-column label="闭店" width="150">
+        <el-table-column prop="opening_date" label="开业日期" width="112" align="center" />
+        <el-table-column label="操作" width="150" fixed="right" align="center">
           <template #default="{ row }">
-            <span v-if="row.closed_date">{{ row.closed_date }}</span>
-            <el-tag v-if="row.closed_type" size="small" :type="row.closed_type === '迁址' ? 'warning' : 'info'" effect="plain" class="mini-tag">{{ row.closed_type }}</el-tag>
-            <span v-if="!row.closed_date && !row.closed_type">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
-          <template #default="{ row }">
+            <div class="store-actions">
             <el-button type="primary" link @click="openEdit(row)">编辑</el-button>
             <el-dropdown trigger="click" @command="cmd => onAction(cmd, row)">
               <el-button type="primary" link>更多<el-icon class="el-icon--right"><arrow-down /></el-icon></el-button>
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="lifecycle">门店履历</el-dropdown-item>
-                  <el-dropdown-item v-if="isClosed(row)" command="reopen" divided>重开</el-dropdown-item>
+                  <el-dropdown-item v-if="pendingRelocation(row)" command="relocate" divided>补录新址</el-dropdown-item><el-dropdown-item v-if="isClosed(row)" command="reopen" divided>重开</el-dropdown-item>
                   <template v-else>
                     <el-dropdown-item command="relocate" divided>发起迁址</el-dropdown-item>
                     <el-dropdown-item command="close">闭店</el-dropdown-item>
@@ -78,6 +72,7 @@
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -129,15 +124,16 @@
     <!-- ===== 闭店 / 发起迁址（共用员工处置表） ===== -->
     <!-- 弹窗内容较长（迁址时有新店资料 + 员工处置表），必须让正文可滚动：
          否则内容超出视口时底部内容（尤其是员工表的后几行）会被裁掉、够不到。 -->
-    <el-dialog v-model="closeVisible" :title="closeMode === 'relocate' ? `发起迁址 · ${closingStore?.store_name || ''}` : `闭店 · ${closingStore?.store_name || ''}`" width="min(960px, calc(100vw - 32px))" top="5vh" destroy-on-close class="close-dialog">
+    <el-dialog v-model="closeVisible" :title="closeMode === 'relocate' ? `${completingRelocation ? '补录新址' : '发起迁址'} · ${closingStore?.store_name || ''}` : `闭店 · ${closingStore?.store_name || ''}`" width="min(960px, calc(100vw - 32px))" top="5vh" destroy-on-close class="close-dialog">
       <el-alert v-if="closeMode === 'relocate'" type="warning" :closable="false" show-icon class="mb"
-        title="迁址 = 老店闭店 + 新建门店 + 双向关联"
-        description="老店按「已闭店(迁址)」结束并移入闭店门店分组；新店单独建档、只记自己的数据。两家店的履历会自动互相指向，便于日后查证。收银编码可沿用，需填写新店启用日期且晚于老店最后营业日。" />
+        :title="completingRelocation ? '补录新址，建立新旧门店关联' : '迁址分两步：先停业登记，再补录新址'"
+        description="新址未定时只登记旧店停业，不需要填写新店资料。确定新址后，从旧店「更多 → 补录新址」继续；新旧店分别记账，保留历史。" />
       <div class="dialog-scroll">
       <el-form label-position="top">
+        <el-form-item v-if="closeMode === 'relocate' && !completingRelocation" label="迁址阶段"><el-radio-group v-model="relocationStage" @change="changeRelocationStage"><el-radio-button value="awaiting">新址未定，先登记停业</el-radio-button><el-radio-button value="complete">新址已定，同时建新店</el-radio-button></el-radio-group></el-form-item>
         <div class="form-grid two">
           <el-form-item :label="closeMode === 'relocate' ? '老店最后营业日' : '闭店日期'" required>
-            <el-date-picker v-model="closeForm.closed_date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width:100%" />
+            <el-date-picker v-model="closeForm.closed_date" :disabled="completingRelocation" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width:100%" />
           </el-form-item>
           <el-form-item label="闭店类型" required>
             <el-select v-model="closeForm.closed_type" :disabled="closeMode === 'relocate'" style="width:100%">
@@ -156,7 +152,7 @@
           </span>
         </el-form-item>
 
-        <template v-if="closeMode === 'relocate'">
+        <template v-if="closeMode === 'relocate' && !awaitingRelocation">
           <div class="section-h4"><h4>新门店资料</h4><span class="hint">默认继承老店的店型 / 法人 / 收款性质 / 区域归属，可自行调整</span></div>
           <div class="form-grid three">
             <el-form-item label="新门店名称" required><el-input v-model="newStore.store_name" placeholder="例如：鹅太公烧鹅（龙岗大运店）" /></el-form-item>
@@ -192,13 +188,11 @@
             <el-button size="small" text @click="clearEmpSelection" :disabled="!selectedEmpIds.length">清空选择</el-button>
             <div class="batch-apply">
               <el-select v-model="batchAction" size="small" style="width:132px">
-                <el-option v-if="closeMode === 'relocate'" label="随迁到新店" value="transfer_new" />
-                <el-option label="调往其他门店" value="transfer" />
+                <el-option v-if="closeMode === 'relocate' && !awaitingRelocation" label="随迁到新店" value="transfer_new" />
+                <el-option v-if="awaitingRelocation" label="待迁址安排（保持在职）" value="await_relocation" /><el-option label="调往其他门店" value="transfer" />
                 <el-option label="离职" value="resign" />
               </el-select>
-              <el-select v-if="batchAction === 'transfer'" v-model="batchTargetStoreId" size="small" filterable placeholder="选择目标门店" style="width:200px">
-                <el-option v-for="s in targetStoreOptions" :key="s.id" :label="`${s.store_name}（${s.status}）`" :value="s.id" />
-              </el-select>
+              <StoreRegionSelect v-if="batchAction === 'transfer'" v-model="batchTargetStoreId" size="small" placeholder="选择目标门店" style="width:200px" :stores="targetStoreOptions" restrict-to-stores />
               <el-button size="small" type="primary" plain :disabled="!selectedEmpIds.length" @click="applyBatch">应用到选中</el-button>
             </div>
           </div>
@@ -209,19 +203,17 @@
             <el-table-column label="去向" min-width="180">
               <template #default="{ row }">
                 <el-select v-model="empActions[row.id].action" size="small" style="width:100%">
-                  <el-option v-if="closeMode === 'relocate'" label="随迁到新店" value="transfer_new" />
-                  <el-option label="调往其他门店" value="transfer" />
+                  <el-option v-if="closeMode === 'relocate' && !awaitingRelocation" label="随迁到新店" value="transfer_new" />
+                  <el-option v-if="awaitingRelocation" label="待迁址安排（保持在职）" value="await_relocation" /><el-option label="调往其他门店" value="transfer" />
                   <el-option label="离职" value="resign" />
                 </el-select>
               </template>
             </el-table-column>
             <el-table-column label="目标门店" min-width="190">
               <template #default="{ row }">
-                <el-select v-if="empActions[row.id].action === 'transfer'" v-model="empActions[row.id].target_store_id" size="small" filterable placeholder="选择去向门店" style="width:100%">
-                  <el-option v-for="s in targetStoreOptions" :key="s.id" :label="`${s.store_name}（${s.status}）`" :value="s.id" />
-                </el-select>
+                <StoreRegionSelect v-if="empActions[row.id].action === 'transfer'" v-model="empActions[row.id].target_store_id" size="small" placeholder="选择去向门店" style="width:100%" :stores="targetStoreOptions" restrict-to-stores />
                 <span v-else-if="empActions[row.id].action === 'transfer_new'" class="muted">→ {{ newStore.store_name || '新门店（待填名称）' }}</span>
-                <span v-else class="muted">离职日期取闭店日期</span>
+                <span v-else-if="empActions[row.id].action === 'await_relocation'" class="muted">保留当前归属，确定去向后再安排</span><span v-else class="muted">离职日期取操作日期</span>
               </template>
             </el-table-column>
           </el-table>
@@ -230,7 +222,7 @@
       </div>
       <template #footer>
         <el-button @click="closeVisible = false">取消</el-button>
-        <el-button type="primary" :loading="closing" @click="submitClose">{{ closeMode === 'relocate' ? '确认迁址' : '确认闭店' }}</el-button>
+        <el-button type="primary" :loading="closing" @click="submitClose">{{ closeMode === 'relocate' ? (awaitingRelocation ? '登记迁址停业' : completingRelocation ? '完成新址登记' : '确认迁址') : '确认闭店' }}</el-button>
       </template>
     </el-dialog>
 
@@ -288,6 +280,7 @@
 </template>
 
 <script setup>
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
@@ -341,6 +334,11 @@ const empTableRef = ref(null)
 const selectedEmpIds = ref([])
 const batchAction = ref('transfer_new')
 const batchTargetStoreId = ref(null)
+const relocationStage = ref('awaiting')
+const pendingRelocation = store => isClosed(store) && store.closed_type === '迁址' && !store.relocated_to_store_id
+const completingRelocation = computed(() => closeMode.value === 'relocate' && closingStore.value && pendingRelocation(closingStore.value))
+const awaitingRelocation = computed(() => closeMode.value === 'relocate' && !completingRelocation.value && relocationStage.value === 'awaiting')
+function changeRelocationStage() { const action = awaitingRelocation.value ? 'await_relocation' : 'transfer_new'; batchAction.value = action; closingEmployees.value.forEach(e => { if (['transfer_new','await_relocation'].includes(empActions[e.id]?.action)) empActions[e.id].action = action }) }
 const closeForm = reactive({ closed_date: '', closed_type: '', closed_reason: '', attachment_url: '', attachment_name: '' })
 const newStore = reactive({ store_name: '', status: '筹建中', pos_store_code: '', pos_code_start_date: '', province: '', city: '', district: '', address: '', phone: '', opening_date: null, store_size: '' })
 const reopenVisible = ref(false)
@@ -435,29 +433,32 @@ function applyBatch() {
     empActions[id].action = batchAction.value
     empActions[id].target_store_id = batchAction.value === 'transfer' ? batchTargetStoreId.value : null
   })
-  ElMessage.success(`已把 ${ids.length} 人设为「${{ transfer_new: '随迁到新店', transfer: '调往其他门店', resign: '离职' }[batchAction.value]}」`)
+  ElMessage.success(`已把 ${ids.length} 人设为「${{ transfer_new: '随迁到新店', await_relocation: '待迁址安排', transfer: '调往其他门店', resign: '离职' }[batchAction.value]}」`)
 }
 async function openClose(store, mode) {
+  closingEmployees.value = []
   closingStore.value = store
   closeMode.value = mode
-  Object.assign(closeForm, { closed_date: '', closed_type: mode === 'relocate' ? '迁址' : '', closed_reason: '', attachment_url: '', attachment_name: '' })
+  relocationStage.value = pendingRelocation(store) ? 'complete' : 'awaiting'
+  Object.assign(closeForm, { closed_date: pendingRelocation(store) ? store.closed_date : '', closed_type: mode === 'relocate' ? '迁址' : '', closed_reason: pendingRelocation(store) ? store.closed_reason || '' : '', attachment_url: '', attachment_name: '' })
   Object.assign(newStore, { store_name: '', status: '筹建中', pos_store_code: store.pos_store_code || '', pos_code_start_date: '', province: '', city: '', district: '', address: '', phone: '', opening_date: null, store_size: '' })
   Object.keys(empActions).forEach(k => delete empActions[k])
   selectedEmpIds.value = []
-  batchAction.value = mode === 'relocate' ? 'transfer_new' : 'resign'
+  batchAction.value = mode === 'relocate' ? (awaitingRelocation.value ? 'await_relocation' : 'transfer_new') : 'resign'
   batchTargetStoreId.value = null
   closeVisible.value = true
   try {
     const data = await getStoreById(store.id)
     // 只需处置在职员工（离职的人当初就在这家店离职，属历史事实）
     closingEmployees.value = (data.employees || []).filter(e => !e.leave_date)
-    closingEmployees.value.forEach(e => { empActions[e.id] = { action: mode === 'relocate' ? 'transfer_new' : 'resign', target_store_id: null } })
+    closingEmployees.value.forEach(e => { empActions[e.id] = { action: mode === 'relocate' ? (awaitingRelocation.value ? 'await_relocation' : 'transfer_new') : 'resign', target_store_id: null } })
   } catch (error) { ElMessage.error('读取门店员工失败：' + error.message); closingEmployees.value = [] }
   await loadTargetStores(store.id)
 }
 function buildEmployeeActions() {
   return closingEmployees.value.map(e => {
     const a = empActions[e.id] || {}
+    if (a.action === 'await_relocation') return { employee_id: e.id, action: 'await_relocation' }
     if (a.action === 'transfer_new') return { employee_id: e.id, action: 'transfer' }   // 后端默认落到新店
     if (a.action === 'transfer') return { employee_id: e.id, action: 'transfer', target_store_id: a.target_store_id || undefined }
     return { employee_id: e.id, action: 'resign' }
@@ -466,7 +467,7 @@ function buildEmployeeActions() {
 function validateBeforeSubmit() {
   if (!closeForm.closed_date) return '请选择日期'
   if (closeMode.value === 'close' && !closeForm.closed_type) return '请选择闭店类型'
-  if (closeMode.value === 'relocate' && !newStore.store_name.trim()) return '请填写新门店名称'
+  if (closeMode.value === 'relocate' && !awaitingRelocation.value && !newStore.store_name.trim()) return '请填写新门店名称'
   for (const e of closingEmployees.value) {
     const a = empActions[e.id] || {}
     if (a.action === 'transfer' && !a.target_store_id) return `员工「${e.name}」选择调往其他门店，但还没选目标门店`
@@ -500,9 +501,11 @@ async function submitClose() {
   closing.value = true
   try {
     if (closeMode.value === 'relocate') {
-      payload.new_store = { ...newStore, store_name: newStore.store_name.trim() }
+      payload.relocation_stage = awaitingRelocation.value ? 'awaiting' : 'complete'
+      if (!awaitingRelocation.value) payload.new_store = { ...newStore, store_name: newStore.store_name.trim() }
       const data = await relocateStore(closingStore.value.id, payload)
-      ElMessage.success(`已迁址：${data.old_store_name} → ${data.new_store_name}（新店已建档，请在「门店区域管理」确认归属）`)
+      if (data.relocation_stage === 'awaiting') ElMessage.success('已登记迁址停业；新址确定后可从旧店补录')
+      else ElMessage.success(`已迁址：${data.old_store_name} → ${data.new_store_name}（新店已建档，请在「门店区域管理」确认归属）`)
     } else {
       payload.closed_type = closeForm.closed_type
       await closeStore(closingStore.value.id, payload)
@@ -571,7 +574,14 @@ onMounted(async () => {
 .directory-header h3 { margin:5px 0; color:#273f62; font-size:20px; }
 .directory-header p { margin:0; color:#8b99aa; font-size:12px; }
 .filters { display:grid; grid-template-columns:minmax(190px,1.35fr) minmax(130px,.75fr) minmax(130px,.75fr) minmax(160px,1fr) auto; gap:11px; padding:17px 0; }
+.filters { align-items:center; }
+.filters :deep(.el-input), .filters :deep(.el-select) { width:100%; min-width:0; }
+.filters :deep(.el-input__wrapper), .filters :deep(.el-select__wrapper) { height:34px; min-height:34px; box-sizing:border-box; }
+.filters > .el-button { height:34px; margin:0; }
 .store-table { width:100%; overflow:hidden; border:1px solid #e4eaf2; border-radius:8px; }
+.store-table :deep(.el-table__cell) { vertical-align:middle; }
+.store-actions { display:flex; align-items:center; justify-content:center; gap:12px; min-height:24px; }
+.store-actions :deep(.el-button) { margin:0; }
 .store-table :deep(.row-closed) { background:#f7f8fa; }
 .store-table :deep(.row-closed td) { color:#93a0b2; }
 .name-closed { color:#8b98aa; }

@@ -1,5 +1,5 @@
 <template>
-  <div class="menu-module-page">
+  <div class="menu-module-page menu-overview-page">
     <MenuModuleHeader
       title="菜品档案库"
       description="统一维护菜品、规格与销售价格；每一条规格档案都是平台绑定和经营分析的唯一依据。"
@@ -38,7 +38,7 @@
           <div class="menu-panel-title menu-archive-title">
             <div>
               <h3>{{ categoryFilter || '全部菜品' }}</h3>
-              <span>共 {{ filteredItems.length }} 条规格档案 · 在售 {{ filteredActiveCount }} · 套餐 {{ filteredComboCount }}</span>
+              <span>{{ groupedItems.length }} 道菜品 · {{ filteredItems.length }} 条规格档案 · 在售 {{ filteredActiveCount }}</span>
             </div>
           </div>
           <div class="menu-filters">
@@ -50,64 +50,22 @@
           </div>
         </header>
 
-        <el-table v-loading="loading" :data="paginatedItems" class="menu-data-table archive-flat-table" row-key="id">
-          <el-table-column label="序号" width="54" align="center">
-            <template #default="{ $index }">{{ rowNumber($index) }}</template>
-          </el-table-column>
-          <el-table-column label="菜品名称" min-width="200">
-            <template #default="{ row }">
-              <div class="archive-name-cell">
-                <b>{{ row.name }}</b>
-                <span v-if="row.item_type !== 'combo' && rowVariants(row).length > 1" class="spec-chip-list">
-                  <span v-for="variant in rowVariants(row).slice(0, 3)" :key="variant.id" class="spec-chip">{{ specification(variant) }}</span>
-                  <span v-if="rowVariants(row).length > 3" class="spec-chip muted">+{{ rowVariants(row).length - 3 }}</span>
-                </span>
-                <span v-else-if="row.item_type !== 'combo' && specification(row) !== '标准规格'" class="spec-chip">{{ specification(row) }}</span>
-                <span v-else-if="row.item_type === 'combo'" class="spec-chip soft">套餐</span>
-                <small v-if="row.method && row.method !== '/'">{{ row.method }}</small>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="菜品分类" min-width="96">
-            <template #default="{ row }"><span class="menu-category">{{ row.category || '未分类' }}</span></template>
-          </el-table-column>
-          <el-table-column label="菜品类型" width="84" align="center">
-            <template #default="{ row }"><span :class="['type-pill', row.item_type === 'combo' ? 'combo' : 'dish']">{{ row.item_type === 'combo' ? '套餐' : '普通菜' }}</span></template>
-          </el-table-column>
-          <el-table-column label="价格" width="106" align="right">
-            <template #default="{ row }"><span class="menu-price">{{ groupPrice(row) }}</span></template>
-          </el-table-column>
-          <el-table-column label="系统菜品编码" width="124">
-            <template #default="{ row }"><span class="code-cell">{{ row.spuid || '—' }}</span></template>
-          </el-table-column>
-          <el-table-column label="系统菜品规格编码" width="126">
-            <template #default="{ row }"><span class="code-cell" :title="groupSkuCodeTitle(row)">{{ groupSkuCode(row) }}</span></template>
-          </el-table-column>
-          <el-table-column label="会员价" width="96" align="right">
-            <template #default="{ row }"><span class="menu-price muted">{{ groupPrice(row, 'member') }}</span></template>
-          </el-table-column>
-          <el-table-column label="菜品状态" width="96" align="center">
-            <template #default="{ row }"><span :class="['status-pill', statusLabel(row) === '停售' ? 'off' : (statusLabel(row) === '部分停售' ? 'part' : 'on')]">{{ statusLabel(row) }}</span></template>
-          </el-table-column>
-          <el-table-column label="操作" width="168" fixed="right" align="right">
-            <template #default="{ row }">
-              <div class="row-actions">
-                <el-button link type="primary" @click="openEditDialog(row)">编辑</el-button>
-                <el-button link :type="statusLabel(row) === '停售' ? 'success' : 'warning'" @click="toggleStatus(row)">{{ statusLabel(row) === '停售' ? '开售' : '停售' }}</el-button>
-                <el-dropdown trigger="click" @command="command => handleRowCommand(command, row)">
-                  <el-button link type="primary">更多<el-icon class="more-caret"><ArrowDown /></el-icon></el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item v-if="row.item_type === 'combo'" command="combo">查看套餐内容</el-dropdown-item>
-                      <el-dropdown-item v-else-if="rowVariants(row).length > 1" command="specs">查看全部规格（{{ rowVariants(row).length }}）</el-dropdown-item>
-                      <el-dropdown-item divided command="delete">删除{{ rowVariants(row).length > 1 ? '整个菜品' : '' }}</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
+        <div class="archive-table-scroll" v-loading="loading">
+          <table class="archive-table" aria-label="菜品档案列表">
+            <colgroup><col style="width:48px"><col style="width:23%"><col style="width:110px"><col style="width:80px"><col style="width:110px"><col style="width:160px"><col style="width:92px"><col style="width:174px"></colgroup>
+            <thead><tr><th class="center">序号</th><th class="archive-dish-column">菜品名称 / 规格</th><th>菜品分类</th><th class="center">类型</th><th class="numeric">销售价格</th><th>系统编码</th><th class="center">状态</th><th>操作</th></tr></thead>
+            <tbody><tr v-for="(row, index) in paginatedItems" :key="row.groupKey || row.id">
+              <td class="center muted">{{ rowNumber(index) }}</td>
+              <td class="archive-dish-column"><div class="archive-name-cell"><button class="archive-dish-link" @click="openEditDialog(row, 'recipe')">{{ row.name }}</button><span v-if="row.item_type !== 'combo' && rowVariants(row).length > 1" class="spec-chip-list"><span v-for="variant in rowVariants(row).slice(0, 3)" :key="variant.id" class="spec-chip">{{ specification(variant) }}</span><span v-if="rowVariants(row).length > 3" class="spec-chip muted">+{{ rowVariants(row).length - 3 }}</span></span><span v-else-if="row.item_type !== 'combo' && specification(row) !== '标准规格'" class="spec-chip">{{ specification(row) }}</span><small v-if="row.method && row.method !== '/'">{{ row.method }}</small></div></td>
+              <td><span class="menu-category">{{ row.category || '未分类' }}</span></td>
+              <td class="center"><span :class="['type-pill', row.item_type === 'combo' ? 'combo' : 'dish']">{{ row.item_type === 'combo' ? '套餐' : '普通菜' }}</span></td>
+              <td class="numeric"><b class="archive-price">{{ groupPrice(row) }}</b><small v-if="groupPrice(row, 'member') !== '—'">会员 {{ groupPrice(row, 'member') }}</small></td>
+              <td><div class="archive-codes"><span :title="groupSkuCodeTitle(row)">SKU {{ groupSkuCode(row) }}</span><small>SPU {{ row.spuid || '—' }}</small></div></td>
+              <td class="center"><span :class="['status-pill', statusLabel(row) === '停售' ? 'off' : (statusLabel(row) === '部分停售' ? 'part' : 'on')]">{{ statusLabel(row) }}</span></td>
+              <td><div class="archive-actions"><el-button link type="primary" @click="openEditDialog(row, 'recipe')">详情</el-button><el-button link type="primary" @click="openEditDialog(row)">编辑</el-button><el-dropdown trigger="click" @command="command => handleRowCommand(command, row)"><el-button link>更多<el-icon class="more-caret"><ArrowDown /></el-icon></el-button><template #dropdown><el-dropdown-menu><el-dropdown-item v-if="row.item_type === 'combo'" command="combo">查看套餐内容</el-dropdown-item><el-dropdown-item v-else-if="rowVariants(row).length > 1" command="specs">查看全部规格（{{ rowVariants(row).length }}）</el-dropdown-item><el-dropdown-item command="status">{{ statusLabel(row) === '停售' ? '开售' : '停售' }}</el-dropdown-item><el-dropdown-item divided command="delete">删除{{ rowVariants(row).length > 1 ? '整个菜品' : '' }}</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></td>
+            </tr></tbody>
+          </table>
+        </div>
         <div v-if="!loading && filteredItems.length === 0" class="menu-empty">没有符合条件的菜品</div>
         <footer class="menu-pagination-footer">
           <span>共 {{ filteredItems.length }} 条记录</span>
@@ -152,8 +110,9 @@
       <template #footer><el-button @click="peekVisible = false">关闭</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑菜品档案' : '新增菜品档案'" width="min(820px, calc(100vw - 32px))" align-center class="menu-dialog menu-item-dialog">
-      <el-form label-position="top">
+    <el-dialog v-model="dialogVisible" :title="editingId ? '菜品档案 · ' + form.name : '新增菜品档案'" width="min(1220px, calc(100vw - 32px))" align-center destroy-on-close class="menu-dialog menu-item-dialog" :before-close="closeMenuDialog">
+      <el-tabs v-if="editingId && form.item_type === 'dish'" v-model="menuDetailTab" class="menu-detail-tabs"><el-tab-pane label="配方与成本" name="recipe" /><el-tab-pane label="基础信息与价格" name="basic" /></el-tabs>
+      <el-form v-show="!editingId || form.item_type === 'combo' || menuDetailTab === 'basic'" label-position="top">
         <div class="form-section-label">基础档案</div>
         <div class="form-grid">
           <el-form-item label="菜品名称" required><el-input v-model="form.name" maxlength="50" placeholder="例如：招牌烧鹅、烧鹅濑粉" /></el-form-item>
@@ -171,8 +130,8 @@
           <div v-for="(variant, index) in form.variants" :key="variant.localKey" class="variant-row">
             <el-input v-model="variant.spec" maxlength="40" :placeholder="index === 0 ? '例如：上庄、烧鹅濑粉' : '规格名称'" />
             <el-input v-model="variant.skuid" placeholder="选填" />
-            <el-input-number v-model="variant.dine_in_price" :min="0" :precision="2" :controls="false" />
-            <el-input-number v-model="variant.member_price" :min="0" :precision="2" :controls="false" />
+            <el-input-number :model-value="moneyNumber(variant.dine_in_price)" @update:model-value="v => variant.dine_in_price=moneyNumber(v)" :min="0" inputmode="decimal" :controls="false" />
+            <el-input-number :model-value="moneyNumber(variant.member_price)" @update:model-value="v => variant.member_price=moneyNumber(v)" :min="0" inputmode="decimal" :controls="false" />
             <el-button link type="danger" :disabled="form.variants.length === 1" @click="removeVariant(index)">移除</el-button>
           </div>
           <p class="variant-builder-note">例如：招牌烧鹅可录入“上庄”和“下庄”；烧鹅濑粉可录入“烧鹅濑粉”和“烧鹅面”。保存后分别作为独立规格参与绑定与成本核算。</p>
@@ -204,10 +163,11 @@
         </section>
 
         <div v-if="form.item_type === 'combo'" class="form-section-label">套餐销售价格</div>
-        <div v-if="form.item_type === 'combo'" class="form-grid price-form-grid"><el-form-item label="堂食价"><el-input-number v-model="form.dine_in_price" :min="0" :precision="2" :controls="false" style="width:100%;" /></el-form-item><el-form-item label="会员价"><el-input-number v-model="form.member_price" :min="0" :precision="2" :controls="false" style="width:100%;" /></el-form-item></div>
+        <div v-if="form.item_type === 'combo'" class="form-grid price-form-grid"><el-form-item label="堂食价"><el-input-number :model-value="moneyNumber(form.dine_in_price)" @update:model-value="v => form.dine_in_price=moneyNumber(v)" :min="0" inputmode="decimal" :controls="false" style="width:100%;" /></el-form-item><el-form-item label="会员价"><el-input-number :model-value="moneyNumber(form.member_price)" @update:model-value="v => form.member_price=moneyNumber(v)" :min="0" inputmode="decimal" :controls="false" style="width:100%;" /></el-form-item></div>
         <p v-if="form.item_type === 'combo'" class="cost-edit-note">外卖价格由平台商品绑定和平台数据管理；成本请在「成本分析」维护。</p>
       </el-form>
-      <template #footer><el-button @click="dialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveItem">{{ form.item_type === 'combo' ? '保存套餐' : '保存菜品' }}</el-button></template>
+      <MenuItemRecipePanel v-if="editingId && form.item_type === 'dish'" v-show="menuDetailTab === 'recipe'" :key="editingId" ref="recipePanel" :variants="form.variants" />
+      <template #footer><el-button @click="closeMenuDialog()">关闭</el-button><el-button v-if="!editingId || form.item_type === 'combo' || menuDetailTab === 'basic'" type="primary" :loading="saving" @click="saveItem">{{ form.item_type === 'combo' ? '保存套餐' : '保存菜品' }}</el-button></template>
     </el-dialog>
   </div>
 </template>
@@ -228,7 +188,9 @@ import {
 } from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MenuModuleHeader from './MenuModuleHeader.vue'
+import MenuItemRecipePanel from './MenuItemRecipePanel.vue'
 import { useMenuPagination } from './useMenuPagination'
+import { moneyText, moneyNumber } from './moneyDisplay'
 import './menu-theme.css'
 
 const route = useRoute()
@@ -242,6 +204,9 @@ const categoryFilter = ref('')
 const statusFilter = ref('')
 const dialogVisible = ref(false)
 const editingId = ref(null)
+const menuDetailTab = ref('basic')
+const recipePanel = ref(null)
+async function closeMenuDialog(done) { if (!recipePanel.value || await recipePanel.value.canLeave()) { if (typeof done === 'function') done(); else dialogVisible.value = false } }
 const hadComponents = ref(false)
 const comboExpansion = ref({})
 const peekVisible = ref(false)
@@ -390,6 +355,7 @@ async function toggleStatus(row) {
 }
 function handleRowCommand(command, row) {
   if (command === 'delete') return removeItem(row)
+  if (command === 'status') return toggleStatus(row)
   if (command === 'combo') return openComboPeek(row)
   if (command === 'specs') { peekKind.value = 'specs'; peekRow.value = row; peekVisible.value = true }
 }
@@ -418,7 +384,7 @@ function resetFilters() {
   statusFilter.value = ''
   currentPage.value = 1
 }
-function formatPrice(value) { return (Number(value) || 0).toFixed(2) }
+function formatPrice(value) { return moneyText(value, '0') }
 function specification(row) {
   const spec = String(row.spec || '').trim()
   if (spec && !['标准', '常规', '份'].includes(spec)) return spec
@@ -556,9 +522,10 @@ async function loadComponents(itemId) {
     ElMessage.error('套餐构成加载失败：' + error.message)
   }
 }
-function openEditDialog(row) {
+function openEditDialog(row, detail = 'recipe') {
   const source = row.representative || row
   const isCombo = source.item_type === 'combo'
+  menuDetailTab.value = isCombo ? 'basic' : detail
   const sameDishVariants = isCombo ? [] : items.value.filter(item =>
     item.item_type !== 'combo' && item.name === source.name && item.category === source.category
   )
@@ -707,7 +674,7 @@ function openRequestedMenuItem() {
   categoryFilter.value = item.category || ''
   statusFilter.value = ''
   currentPage.value = 1
-  openEditDialog(item)
+  openEditDialog(item, 'recipe')
 }
 const refreshMenuCategoryOrder = () => loadData()
 onMounted(() => {
@@ -859,6 +826,41 @@ onBeforeUnmount(() => window.removeEventListener('menu-category-order-changed', 
 .more-caret { margin-left: 2px; }
 .peek-body { min-height: 60px; }
 .peek-spec-hint { margin-bottom: 10px; color: #6b7a90; font-size: 13px; }
+.menu-overview-page{min-width:0;width:100%}
+.menu-overview-page .menu-archive-layout{grid-template-columns:192px minmax(0,1fr);gap:20px}
+.menu-overview-page .menu-category-rail{border-radius:8px;box-shadow:none;padding:14px 10px}
+.menu-overview-page .menu-panel{border-radius:8px}
+.menu-overview-page .menu-panel-header{align-items:flex-start;flex-direction:column;gap:14px;padding:20px;min-height:0}
+.menu-overview-page .menu-archive-title h3{font-size:17px;font-weight:600}
+.menu-overview-page .menu-filters{width:100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.menu-overview-page .menu-filters .wide-filter{width:250px;margin-right:auto}
+.archive-table-scroll{max-width:100%;overflow:auto}
+.archive-table{width:100%;min-width:1040px;table-layout:fixed;border-collapse:collapse;font-size:13px;color:#46576e}
+.archive-table th{height:44px;padding:0 14px;text-align:center;font-weight:500;font-size:12px;color:#7c8ba0;background:#f6f8fb;border-bottom:1px solid #e3e9f1;white-space:nowrap}
+.archive-table td{height:70px;padding:10px 14px;text-align:center;vertical-align:middle;border-bottom:1px solid #edf0f5;line-height:1.6}
+.archive-table tbody tr:hover{background:#f8fafd}
+.archive-table .numeric{font-variant-numeric:tabular-nums}
+.archive-table .center{text-align:center}
+.archive-table .archive-dish-column{text-align:left}
+.archive-table .muted{color:#9aa5b5}
+.archive-table td>small{display:block;color:#8d99ac;font-size:11px;margin-top:5px;white-space:nowrap}
+.archive-dish-link{display:block;border:0;background:none;color:#2c476d;font-size:14px;font-weight:600;line-height:1.6;padding:0;text-align:left;cursor:pointer}
+.archive-dish-link:hover{color:#2468d6}
+.archive-name-cell{display:flex;align-items:flex-start;flex-direction:column;gap:5px}
+.archive-name-cell .spec-chip{padding:1px 5px;font-size:11px;background:#f1f4f8;color:#8492a7}
+.archive-price{font-size:13px;font-weight:600;color:#334c6c;white-space:nowrap}
+.archive-codes{display:flex;flex-direction:column;align-items:center;font-size:11px;color:#5b7190;font-variant-numeric:tabular-nums;line-height:1.7;white-space:nowrap}
+.archive-codes small{display:block;color:#94a0b2;font-size:10px;margin-top:3px}
+.archive-actions{display:flex;align-items:center;justify-content:center;gap:14px;white-space:nowrap}
+.archive-actions .el-button{padding:0;margin:0;font-size:12px;line-height:1.5;height:auto}
+.archive-actions .el-dropdown{display:flex;align-items:center}
+.menu-overview-page .type-pill{font-weight:500;font-size:11px;border-radius:5px;padding:3px 7px}
+.menu-overview-page .status-pill{font-weight:500;font-size:11px;padding:3px 7px;border-radius:5px}
+.menu-overview-page .menu-category{display:inline-flex;align-items:center;justify-content:center;max-width:100%;box-sizing:border-box;background:#eef4ff;padding:3px 7px;border-radius:5px;font-size:11px;font-weight:500;color:#3164c8;line-height:1.6}
+.menu-detail-tabs{margin-bottom:18px}
+.menu-item-dialog :deep(.el-dialog__body){max-height:70vh;overflow:auto}
+.menu-item-dialog :deep(.el-form-item){margin-bottom:18px}
+@media(max-width:950px){.menu-overview-page .menu-archive-layout{grid-template-columns:1fr}.menu-overview-page .menu-category-rail{position:static;display:flex;gap:6px;flex-wrap:wrap;max-height:210px}.menu-overview-page .rail-head{width:100%}.menu-overview-page .rail-item{width:auto}.menu-overview-page .rail-foot{display:none}.menu-overview-page .menu-filters .wide-filter{width:100%}}
 @media (max-width: 900px) {
   .menu-archive-layout { grid-template-columns: 1fr; }
   .menu-category-rail { position: static; max-height: none; }

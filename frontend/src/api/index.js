@@ -1,12 +1,16 @@
 import axios from 'axios'
 import {uploadTaskPhotoSource,readTaskPhoto} from '../../../miniprogram/src/common/cloud-photo-transfer.mjs'
 
+export const deliveryClientUpdatesApi={get:()=>http.get('/api/admin/delivery-client-updates'),set:(id,data)=>http.post('/api/admin/delivery-client-updates/'+encodeURIComponent(id),data)}
 const TOKEN_KEY = 'etaigong_token'
+export const dailyUpdateHealthApi={get:()=>http.get('/api/admin/daily-update-health',{timeout:60000}),ack:data=>http.post('/api/admin/daily-update-health/ack',data,{timeout:60000})}
+export const inspectionApi={options:()=>http.get('/api/store-operations/inspections/options'),config:()=>http.get('/api/store-operations/inspections/config'),saveConfig:data=>http.put('/api/store-operations/inspections/config',data),list:()=>http.get('/api/store-operations/inspections/reports'),create:data=>http.post('/api/store-operations/inspections/reports',data),detail:id=>http.get(`/api/store-operations/inspections/reports/${id}`),change:(id,action,data)=>http.post(`/api/store-operations/inspections/reports/${id}/${action}`,data,{timeout:120000}),photo:(path,variant='thumb',chunk)=>http.get('/api/store-operations/inspections/photo',{params:{path,variant,chunk}}),upload:(id,source)=>uploadTaskPhotoSource(o=>http.post(o.url.replace('/api/mp/store-tasks','/api/store-operations/inspections'),o.data,{timeout:o.timeout||60000}),id,source)}
 export const customWorkflowApi={definitions:()=>http.get('/api/store-operations/custom-workflows/definitions'),save:data=>http.post('/api/store-operations/custom-workflows/definitions',data),publish:(id,data)=>http.post(`/api/store-operations/custom-workflows/definitions/${id}/publish`,data),disable:(id,data)=>http.post(`/api/store-operations/custom-workflows/definitions/${id}/disable`,data),versions:id=>http.get(`/api/store-operations/custom-workflows/definitions/${id}/versions`),options:()=>http.get('/api/store-operations/custom-workflows/options'),requests:()=>http.get('/api/store-operations/custom-workflows/requests'),start:data=>http.post('/api/store-operations/custom-workflows/requests',data),decision:(id,data)=>http.post(`/api/store-operations/custom-workflows/requests/${id}/decision`,data),fileStart:data=>http.post('/api/store-operations/custom-workflows/files/start',data),fileChunk:(id,data)=>http.post(`/api/store-operations/custom-workflows/files/${id}/chunk`,data),fileFinish:id=>http.post(`/api/store-operations/custom-workflows/files/${id}/finish`),file:(id,chunk)=>http.get(`/api/store-operations/custom-workflows/files/${id}`,{params:{chunk}})}
 export const workflowApi={hqOptions:()=>http.get('/api/store-operations/workflow/hq-options'),hqStart:data=>http.post('/api/store-operations/workflow/hq-requests',data),config:business=>http.get('/api/store-operations/workflow/config',{params:{business}}),templates:data=>http.post('/api/store-operations/workflow/templates',data),requests:business=>http.get('/api/store-operations/workflow/requests',{params:{business}}),decision:(id,data)=>http.post(`/api/store-operations/workflow/requests/${id}/decision`,data)}
 export const knowledgeApi={
  banners:()=>http.get('/api/knowledge/banners'),saveBanner:data=>http.post('/api/knowledge/banners',data),
  config:()=>http.get('/api/knowledge/config'),list:()=>http.get('/api/knowledge/entries'),save:data=>http.post('/api/knowledge/entries',data),
+ archive:(id,data)=>http.post(`/api/knowledge/entries/${id}/archive`,data),restore:(id,data)=>http.post(`/api/knowledge/entries/${id}/restore`,data),deleteCategory:id=>http.post(`/api/knowledge/categories/${id}/delete`),
  publish:(id,data)=>http.post(`/api/knowledge/entries/${id}/publish`,data),hide:(id,data)=>http.post(`/api/knowledge/entries/${id}/hide`,data),
  report:id=>http.get(`/api/knowledge/entries/${id}/report`),versions:id=>http.get(`/api/knowledge/entries/${id}/versions`),category:data=>http.post('/api/knowledge/categories',data),
  upload:(file,onProgress)=>http.post('/api/knowledge/files',file,{params:{name:file.name},headers:{'Content-Type':'application/octet-stream'},timeout:180000,onUploadProgress:e=>onProgress(Math.round(e.loaded/e.total*100))}),
@@ -271,6 +275,23 @@ export const reorderMenuCategories = (ids) => http.put('/api/menu-category/order
 export const deleteMenuCategory = (id) => http.delete(`/api/menu-category/${id}`)
 export const adoptMenuCategory = (name) => http.post('/api/menu-category/adopt', { name })
 export const getMenuCostComponents = (id) => http.get(`/api/menu/${id}/cost-components`)
+export const menuCostRecipesApi = {
+  dishes: () => http.get('/api/menu/cost-recipes/dishes'),
+  dish: id => http.get(`/api/menu/cost-recipes/dishes/${id}`),
+  saveDish: (id, data) => http.put(`/api/menu/cost-recipes/dishes/${id}`, data),
+  quoteDish: (id, data) => http.post(`/api/menu/cost-recipes/dishes/${id}/quote`, data),
+  saveScheme: data => http.post('/api/menu/cost-recipes/schemes', data),
+  importPackaging: file => http.post('/api/menu/cost-recipes/packaging-import', file, { params: { filename: file.name }, headers: { 'Content-Type': 'application/octet-stream' }, timeout: 60000 }),
+  get: () => http.get('/api/menu/cost-recipes'),
+  save: (id, data) => http.put(`/api/menu/cost-recipes/recipes/${id}`, data),
+  saveMaterial: data => http.post('/api/menu/cost-recipes/packaging', data),
+  saveIngredient: data => http.post('/api/menu/cost-recipes/ingredients', data),
+  mergeIngredient: (id, data) => http.post(`/api/menu/cost-recipes/ingredients/${id}/merge`, data),
+  forMenu: id => http.get(`/api/menu/cost-recipes/for-menu/${id}`),
+  bindMenu: (id, data) => http.post(`/api/menu/cost-recipes/for-menu/${id}`, data),
+  quote: data => http.post('/api/menu/cost-recipes/quote', data),
+  import: file => http.post('/api/menu/cost-recipes/import', file, { params: { filename: file.name }, headers: { 'Content-Type': 'application/octet-stream' }, timeout: 60000 }),
+}
 export const saveMenuCostComponents = (id, components) => http.put(`/api/menu/${id}/cost-components`, { components })
 export const deleteMenuCostComponents = (id) => http.delete(`/api/menu/${id}/cost-components`)
 
@@ -528,7 +549,7 @@ export const getPayrollAttendanceSettings = () => http.get('/api/payroll-attenda
 
 export const getPayrollReview = (period) => http.get(`/api/payroll-review/${period}`)
 export const getPayrollReviewSheet = (period, id) => http.get(`/api/payroll-review/${period}/sheets/${id}`)
-export const getEmployeePayslips = (period, view = 'submitted') => http.get(`/api/employee-payslips/${period}`, { params: { view } })
+export const getEmployeePayslips = (period, view = 'submitted', storeName = '') => http.get(`/api/employee-payslips/${period}`, { params: { view, store_name: storeName || undefined } })
 
 // 周排班与个人调休库存：独立于员工资料编辑。
 export const syncRosterWeek=data=>http.post('/api/staff-roster/sync',data,{timeout:120000})
@@ -545,3 +566,24 @@ export const getDouyinReviews = params => http.get('/api/business-analytics/douy
 export const getMeituanReviews = params => http.get('/api/business-analytics/meituan-reviews', { params })
 
 export const getDouyinReviewMedia = name => http.get(`/api/business-analytics/douyin-review-media/${encodeURIComponent(name)}`, {responseType:'blob'})
+
+// 企业平台与API注册库，密钥只写入且不会返回。
+export const getApiRegistry = () => http.get("/api/enterprise-settings/api-registry")
+export const mutateApiRegistry = (method, path, data) => http.request({method,url:"/api/enterprise-settings/api-registry"+path,data})
+
+export const getRobotConfig = () => http.get("/api/enterprise-settings/robot/config")
+export const saveRobotConfig = data => http.post("/api/enterprise-settings/robot/config",data)
+
+// 集团组织与通讯录（员工档案仍沿用原有分档权限）
+export const getOrganizationOptions = () => http.get('/api/organization-options')
+export const organizationApi = {
+ list: () => http.get('/api/staff/organizations'),
+ create: data => http.post('/api/staff/organizations', data),
+ update: (id,data) => http.put(`/api/staff/organizations/${id}`, data),
+ saveDepartment: (id,data) => id ? http.put(`/api/staff/organizations/departments/${id}`,data) : http.post('/api/staff/organizations/departments',data),
+ directory: params => http.get('/api/staff/organizations/directory',{params}),
+ saveEntry: (id,data) => http.put(`/api/staff/organizations/directory/${id}`,data),
+}
+export const getAttendanceDailyTask = () => http.get('/api/staff/dingtalk/auto-sync')
+
+export const staffTrainingApi={attendance:(id,params)=>http.get('/api/store-operations/training/records/'+id+'/attendance',{params}),options:()=>http.get('/api/store-operations/training/options'),list:()=>http.get('/api/store-operations/training/records'),mentors:store_id=>http.get('/api/store-operations/training/mentors',{params:{store_id}}),setup:(id,data)=>http.put('/api/store-operations/training/employees/'+id,data),start:data=>http.post('/api/store-operations/training/records',data),change:(id,data)=>http.post('/api/store-operations/training/records/'+id+'/action',data)}

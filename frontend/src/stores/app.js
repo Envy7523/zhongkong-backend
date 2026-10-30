@@ -1,7 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { STAFF_GROUPS, staffWorkspaceId } from '@/navigation/staff.mjs'
 
 const PAGE_TITLES = {
+  'knowledge-base': '知识库管理',
+  workflows:'审批流程',
+  'store-operations':'门店流程与通知',
+  'inspections':'巡检与整改',
+  'store-tasks': '门店日常任务',
   dashboard: '数据概括',
   collab: '协同事项',
   'enterprise-settings': '企业设置',
@@ -19,15 +25,14 @@ const PAGE_TITLES = {
   analysis: '数据分析',
   'store-management': '门店管理',
   'menu-management': '菜品管理',
-  'cost-accounting': '成本核算',
   'staff-management': '人事专区',
   bookkeeping: '记账本',
   'store-preparation': '筹建门店',
-  'db-viewer': '数据库查看',
 }
 
 const SUB_LABELS = {
   analysis: {
+    'delivery-fees': '外卖字段分类',
     agents: 'AI 经营分析',
     'total-brand': '总数据 · 品牌视角', 'total-store': '总数据 · 门店视角', 'total-custom': '总数据 · 门店视角', 'total-monthly-dashboard': '总数据 · 月经营数据看板', 'total-binding': '堂食菜品绑定',
     'group-platform': '团购 · 平台视角', 'group-brand': '团购 · 品牌视角', 'group-store': '团购 · 门店视角', 'group-daily-summary': '团购 · 每日总结', 'group-binding': '团购菜品绑定', 'group-meituan': '团购 · 平台视角', 'group-douyin': '团购 · 平台视角', 'group-free-trial': '团购 · 平台视角',
@@ -36,10 +41,9 @@ const SUB_LABELS = {
     'delivery-meituan': '外卖 · 平台视角', 'delivery-taobao': '外卖 · 平台视角', 'delivery-jd': '外卖 · 平台视角',
   },
   'store-management': { 'info-basic': '门店基本信息', 'info-circle': '门店商圈', 'info-platform': '第三方平台', 'info-config': '门店配置', map: '全国地图', fixed: '固定成本', operating: '运营成本' },
-  'menu-management': { overview: '菜品总览', category: '菜品分类', template: '菜品模板', cost: '菜品成本', expiry: '效期管理', accounting: '菜品核算' },
-  'cost-accounting': { daily: '日成本核算', weekly: '周成本核算', monthly: '月成本核算' },
-  'staff-management': { manager: '店长管理', clerk: '店员管理', test: '测试数据', employees: '员工管理', store: '门店管理', salary: '工资表制作', attendance: '月出勤管理', roster: '员工考勤', review: '工资审核', payslips: '员工工资条查询', dispatch: '员工调岗' },
-  bookkeeping: { entry: '门店记账', categories: '记账分类', records: '门店账本' },
+  'menu-management': { overview: '菜品总览', category: '菜品分类', cost: '菜品成本', expiry: '效期管理', accounting: '菜品核算' },
+  'staff-management': { manager: '店长管理', clerk: '店员管理', test: '测试数据', employees: '员工管理', organizations:'组织与通讯录', 'daily-tasks':'每日任务', store: '店长分配', salary: '工资表制作', attendance: '月出勤管理', roster: '员工考勤', review: '工资审核', payslips: '员工工资条查询', dispatch: '员工调岗' },
+  bookkeeping: { entry: '门店记账', categories: '记账分类', records: '门店账本', 'expense-tags':'字段分配' },
   'store-preparation': { '3d': '门店渲染' },
   'data-import': { pos: '收银系统数据', 'pos-automation': '收银系统 · 自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' },
 }
@@ -66,6 +70,8 @@ export const useAppStore = defineStore('app', () => {
   const activeTabId = ref('')
 
   function getTabTitle(id) {
+    const staffGroup = STAFF_GROUPS.find(group => group.id === id)
+    if (staffGroup) return staffGroup.label
     const info = INDEX_TO_PAGE_SUB[id]
     if (!info) return id
     if (info.sub && SUB_LABELS[info.page]?.[info.sub]) {
@@ -76,6 +82,9 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function openTabFromId(id) {
+    id = staffWorkspaceId(id)
+    if (id === 'menu-management-template') id = 'menu-management-overview'
+    if (id === 'db-viewer' || id.startsWith('cost-accounting')) return
     const existing = tabs.value.find((t) => t.id === id)
     if (existing) {
       existing.title = getTabTitle(id)
@@ -111,6 +120,15 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function syncTabTitles() {
+    tabs.value = tabs.value.filter(tab => tab.id !== 'menu-management-template')
+    if (activeTabId.value === 'menu-management-template') openTabFromId('menu-management-overview')
+    const seen = new Set()
+    tabs.value = tabs.value.map(tab => ({ ...tab, id: staffWorkspaceId(tab.id) })).filter(tab => {
+      if (seen.has(tab.id)) return false
+      seen.add(tab.id)
+      return true
+    })
+    activeTabId.value = staffWorkspaceId(activeTabId.value)
     tabs.value.forEach((tab) => { tab.title = getTabTitle(tab.id) })
   }
 

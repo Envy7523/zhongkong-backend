@@ -91,7 +91,7 @@
     <el-empty v-else :description="emptyText" :image-size="110" />
 
     <!-- 新建/修改通知：人选人、可多选接收者、通知时间可精确到分钟 -->
-    <el-dialog v-model="composeVisible" :title="compose.id ? '修改通知（未发布）' : '新建通知'" width="620px" class="compose-dialog" destroy-on-close>
+    <NotificationDialog v-model="composeVisible" subtitle="填写通知内容、接收人员和发送时间。" tone="info" :title="compose.id ? '修改通知（未发布）' : '新建通知'" width="min(680px,96vw)" class="compose-dialog" destroy-on-close>
       <el-form label-position="top">
         <el-form-item label="通知标题" required>
           <el-input v-model="compose.title" maxlength="80" show-word-limit placeholder="例如：9 月门店例会时间调整" />
@@ -113,12 +113,13 @@
         <el-button @click="composeVisible = false">取消</el-button>
         <el-button type="primary" :loading="composing" @click="submitCompose">{{ compose.id ? '保存修改' : (compose.publish_at ? '定时发出' : '立即发出') }}</el-button>
       </template>
-    </el-dialog>
+    </NotificationDialog>
 
   </main>
 </template>
 
 <script setup>
+import NotificationDialog from '@/components/NotificationDialog.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
@@ -185,7 +186,7 @@ async function openEditCreated(item) {
 // 撤回转未发布的定时通知
 async function withdrawCreated(item) {
   try {
-    await ElMessageBox.confirm(`确定撤回「${item.title}」吗？撤回后接收人将看不到这条通知。`, '撤回通知', { type: 'warning', confirmButtonText: '撤回', cancelButtonText: '取消' })
+    await ElMessageBox.confirm(`确定撤回「${item.title}」吗？撤回后接收人将看不到这条通知。`, '撤回通知', { customClass:'app-notification-messagebox', type: 'warning', confirmButtonText: '撤回', cancelButtonText: '取消' })
   } catch { return }
   try {
     const data = await withdrawNotification(item.id)

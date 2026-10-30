@@ -290,6 +290,24 @@
 .menu-dialog .el-dialog__header { margin-right: 0; padding: 18px 22px 14px; border-bottom: 1px solid #edf1f7; }
 .menu-dialog .el-dialog__body { padding: 18px 22px 10px; }
 .menu-dialog .el-dialog__footer { padding: 14px 22px 18px; border-top: 1px solid #edf1f7; }
+.menu-item-dialog,
+.cost-dish-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 40px);
+  margin: 20px auto !important;
+}
+.menu-item-dialog .el-dialog__header,
+.menu-item-dialog .el-dialog__footer,
+.cost-dish-dialog .el-dialog__header,
+.cost-dish-dialog .el-dialog__footer { flex-shrink: 0; }
+.menu-item-dialog .el-dialog__body,
+.cost-dish-dialog .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
 /* 菜品档案总览 */
 .menu-archive-title { display: flex; align-items: center; gap: 15px; }

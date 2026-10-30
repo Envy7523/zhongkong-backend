@@ -1,7 +1,8 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getMe } from '@/api'
+import { getMe, inspectionApi } from '@/api'
 import LoginView from '@/views/LoginView.vue'
+import { staffPageForPath } from '@/navigation/staff.mjs'
 // 菜品绑定是高频关键页。直接随入口加载，避免旧标签页请求已失效的异步分包后只剩页面外壳。
 import ProductBinding from '@/views/analysis/ProductBinding.vue'
 
@@ -9,6 +10,7 @@ const routes = [
   {path:'/store-operations',name:'store-operations',component:()=>import('@/views/StoreOperations.vue'),meta:{requiredPermission:['staff.transfers.view','staff.support.view','staff.offboarding.view','staff.onboarding.view','workflow.manage','store-notices.manage'],pageTitle:'门店流程与通知'}},
   {path:'/workflows',name:'workflows',component:()=>import('@/views/Workflows.vue'),meta:{requiredPermission:['workflow.start','store-reports.view','workflow.manage','workflow.view','workflow.execute','staff.hq.manage'],pageTitle:'审批流程'}},
   {path:'/knowledge-base',name:'knowledge-base',component:()=>import('@/views/KnowledgeBase.vue'),meta:{requiredPermission:'knowledge.edit',pageTitle:'知识库管理'}},
+  {path:'/inspections',name:'inspections',component:()=>import('@/views/Inspections.vue'),meta:{requiredPermission:['inspections.view','inspections.submit','inspections.assign','inspections.execute','inspections.review'],pageTitle:'巡检与整改'}},
   { path: '/store-tasks', name: 'store-tasks', component: () => import('@/views/StoreTasks.vue'), meta: { requiredPermission: ['store-tasks.manage','store-tasks.execute','store-tasks.review'], pageTitle: '门店日常任务' } },
   {
     path: '/login',
@@ -29,12 +31,7 @@ const routes = [
     component: () => import('@/views/store3d/index.vue'),
     meta: { pageKey: 'store-3d', pageTitle: '筹建门店 · 门店渲染' },
   },
-  {
-    path: '/db-viewer',
-    name: 'db-viewer',
-    component: () => import('@/views/devtools/DatabaseViewer.vue'),
-    meta: { pageKey: 'db-viewer', pageTitle: '数据库查看' },
-  },
+  { path: '/db-viewer/:pathMatch(.*)*', redirect: '/dashboard' },
   {
     path: '/analysis',
     redirect: '/analysis/total/brand',
@@ -202,6 +199,7 @@ const routes = [
     path: '/menu-management',
     redirect: '/menu-management/overview',
   },
+  { path: '/menu-management/template', redirect: '/menu-management/overview' },
   { path: '/menu-management/:section', name: 'workspace-menu-management', component: { render: () => null } },
   {
     path: '/menu-management/category',
@@ -214,11 +212,7 @@ const routes = [
     name: 'menu-management-accounting',
     component: () => import('@/views/menu/MenuAccounting.vue'),
   },
-  {
-    path: '/cost-accounting',
-    redirect: '/cost-accounting/daily',
-  },
-  { path: '/cost-accounting/:section', name: 'workspace-cost-accounting', component: { render: () => null } },
+  { path: '/cost-accounting/:pathMatch(.*)*', redirect: '/dashboard' },
   { path: '/bookkeeping', redirect: '/bookkeeping/entry' },
   { path: '/bookkeeping/:section', name: 'workspace-bookkeeping', component: { render: () => null } },
   { path: '/pipeline', redirect: '/pipeline/group-buy-daily' },
@@ -235,6 +229,9 @@ const routes = [
     path: '/staff-management',
     redirect: '/staff-management/employees',
   },
+  { path:'/staff-management/organizations', name:'staff-management-organizations', component:()=>import('@/views/staff/StaffOrganizations.vue') },
+  { path:'/staff-management/training',name:'staff-management-training',component:()=>import('@/views/staff/StaffTraining.vue'),meta:{requiredPermission:['staff.training.manage','staff.training.configure','staff.training.view']} },
+  { path:'/staff-management/daily-tasks', name:'staff-management-daily-tasks', component:()=>import('@/views/staff/StaffDailyTasks.vue') },
   {
     path: '/staff-management/store-management',
     name: 'staff-management-store',
@@ -362,12 +359,13 @@ const ROUTE_PERMISSION_RULES = [
   ['workspace-settings', 'settings.manage'],
   ['enterprise-settings-', 'enterprise-settings.manage'],
   ['notifications', 'notifications.view'],
-  ['db-viewer', 'db-viewer.view'],
   ['analysis-', 'analysis.view'],
 ]
 
 function permissionFor(route) {
   if (route.meta.requiredPermission) return route.meta.requiredPermission
+  const staffPage = staffPageForPath(route.path)
+  if (staffPage) return staffPage.permissions
   const name = String(route.name || '')
   for (const [prefix, code] of ROUTE_PERMISSION_RULES) {
     if (name === prefix || name.startsWith(prefix)) return code
@@ -386,12 +384,18 @@ router.beforeEach((to, from, next) => {
   if (!required) return next()
 
   // 权限以服务端岗位表为准，每次导航都取最新，避免旧缓存让已改权限的账号继续放行。
-  getMe().then(res => {
+  getMe().then(async res => {
     const permissions = res?.user?.position_permissions || []
     if (to.path === '/dashboard' && !permissions.some(p=>['*','staff.view','payroll.attendance','payroll.review'].includes(p)) && permissions.includes('staff.store.edit')) return next('/staff-management/employees')
     if (to.name === 'staff-management-payslips' && !permissions.some(p=>['*','staff.view','payroll.attendance','payroll.review'].includes(p)) && permissions.includes('staff.store.edit')) { ElMessage.warning('跨店工资查询仅开放给人事及上级'); return next('/staff-management/salary') }
     const allowed = permissions.includes('*') || (Array.isArray(required) ? required.some(code => permissions.includes(code)) : permissions.includes(required))
     if (allowed) return next()
+    if (to.name === 'inspections') {
+      try {
+        if (to.query.id) { await inspectionApi.detail(Number(to.query.id)); return next() }
+        if ((await inspectionApi.options()).has_copied_reports) return next()
+      } catch { /* Per-report authorization failed; keep the signed-in session. */ }
+    }
     if (to.path === '/dashboard') return next() // 无任何权限时仍允许落到首页，避免死循环
     ElMessage.warning('当前岗位没有该模块权限，已跳回首页')
     return next('/dashboard')

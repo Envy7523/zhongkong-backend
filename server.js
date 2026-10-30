@@ -48,7 +48,10 @@ const JWT_EXPIRES = '24h';
 
 const app = express();
 const PORT = process.env.PORT || 3456;
+const LOCAL_WEB_PREVIEW = process.env.LOCAL_WEB_PREVIEW === '1';
 const CONFIG_PATH = path.join(__dirname, 'config.json');
+const integrationRegistry = require('./lib/integration-registry');
+const apiRegistry = integrationRegistry.create({ db, loadConfig, saveConfig });
 const AVATAR_DIR = path.join(__dirname, 'data', 'avatars');
 if (!fs.existsSync(AVATAR_DIR)) fs.mkdirSync(AVATAR_DIR, { recursive: true });
 const businessAssistant = createBusinessAssistant({ db, businessAnalytics, getAiConfig: getActiveAiConfig });
@@ -122,6 +125,7 @@ app.use(require('./lib/staff-profile-policy').middleware(db));
 app.use(personnelAccess.webGuard(db));
 app.use(payrollWorkflow.scopeGuard(db));
 app.use(require('./lib/headquarter-staff-guard').middleware(db));
+app.use(require('./lib/staff-training').guard(db));
 
 // 岗位权限强制校验（只对 /api/* 且映射到权限码的接口生效，其余请求零开销）
 const positionGuard = positionPermissions.createGuard({
@@ -152,7 +156,7 @@ app.use('/uploads/mp', express.static(mpUploadDir, { maxAge: '7d', fallthrough: 
 app.use('/api/mp', require('./lib/mp/router'));
 
 // ===== 数据库查看器（开发辅助工具，只读 + 标识符白名单）=====
-app.use('/api/db-viewer', require('./lib/db-viewer').router);
+app.use(['/api/db-viewer', '/api/cost-accounting'], (_req, res) => res.status(410).json({ error: '此功能入口已停用' }));
 
 // 静态文件：优先使用 Vue 前端构建产物，回退到旧版静态文件
 // 即使回退到旧版根目录静态服务，任务照片也只能通过鉴权接口读取。
@@ -187,7 +191,8 @@ if (fs.existsSync(vueDist)) {
     res.sendFile(path.join(vueDist, 'index.html'));
   });
 } else {
-  app.use(express.static(__dirname));
+  // Never expose source/config/database files when a frontend build is absent.
+  app.get(/^(?!\/api).*/, (_req,res)=>res.status(503).send('前端尚未构建，请先运行 npm run build:frontend'));
 }
 
 // ===== 工具函数 =====
@@ -204,7 +209,15 @@ function loadConfig() {
   }
   catch { return { corpid: '', corpsecret: '', webhook: '', webhookName: '' }; }
 }
-function saveConfig(config) { fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8'); }
+function saveConfig(config) {
+  // Releases may link config.json to shared storage; replace its real target.
+  const destination = fs.existsSync(CONFIG_PATH) ? fs.realpathSync(CONFIG_PATH) : CONFIG_PATH;
+  const temporary = `${destination}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(config, null, 2), { encoding:'utf-8', mode:0o600 });
+    fs.renameSync(temporary, destination);
+  } finally { if(fs.existsSync(temporary))fs.unlinkSync(temporary); }
+}
 // 前端只需要知道"身份证核对是否强制"，凭据绝不能下发。这里只回传开关与是否已配置。
 function idCardOcrPublicConfig(cfg) {
   const section = cfg?.idCardOcr || {};
@@ -215,26 +228,27 @@ function idCardOcrPublicConfig(cfg) {
   };
 }
 function getAiProfiles(cfg) {
-  const profiles = Array.isArray(cfg.aiProfiles) ? cfg.aiProfiles.filter(item => item && item.id && item.baseUrl && item.model && item.apiKey) : [];
-  if (!profiles.length && cfg.aiBaseUrl && cfg.aiModel && cfg.aiApiKey) {
-    return [{ id: 'legacy-default', name: '原有模型配置', baseUrl: cfg.aiBaseUrl, model: cfg.aiModel, apiKey: cfg.aiApiKey, createdAt: '' }];
-  }
-  return profiles;
+  const managed = apiRegistry.profiles();
+  const migrated = new Set(apiRegistry.snapshot().apis.map(a => a.id));
+  let legacy = Array.isArray(cfg.aiProfiles) ? cfg.aiProfiles.filter(p => p && p.apiKey && p.baseUrl && p.model && !migrated.has(p.id)) : [];
+  if (!legacy.length && !migrated.has('legacy-default') && cfg.aiBaseUrl && cfg.aiModel && cfg.aiApiKey)
+    legacy = [{id:'legacy-default', name:'原有模型配置',baseUrl:cfg.aiBaseUrl,model:cfg.aiModel,apiKey:cfg.aiApiKey}];
+  return [...managed,...legacy];
 }
 function getActiveAiConfig() {
   const cfg = loadConfig();
   const activeId = cfg.activeAiProfileId || '';
   if (activeId === 'local-simulation') return { aiEnabled: Boolean(cfg.aiEnabled), aiMode: 'local-simulation', aiProfileName: '本地模拟解读' };
   const profiles = getAiProfiles(cfg);
-  const profile = profiles.find(item => item.id === activeId) || profiles[0];
-  return profile ? { aiEnabled: Boolean(cfg.aiEnabled), aiMode: 'api', aiProfileName: profile.name, aiBaseUrl: profile.baseUrl, aiModel: profile.model, aiApiKey: profile.apiKey } : { aiEnabled: false };
+  const profile = activeId ? profiles.find(item => item.id === activeId) : profiles[0];
+  return profile ? { aiEnabled: Boolean(cfg.aiEnabled), aiMode: 'api', aiProfileName: profile.name, aiBaseUrl: profile.baseUrl, aiModel: profile.model, aiApiKey: profile.apiKey, aiAuth: profile.auth, aiHeader: profile.header } : { aiEnabled: false };
 }
 function getPublicAiConfig(cfg) {
   const profiles = getAiProfiles(cfg);
   const activeId = cfg.activeAiProfileId || (profiles[0]?.id || '');
   const active = activeId === 'local-simulation' ? { id: activeId, name: '本地模拟解读', model: '本地模拟解读', local: true } : profiles.find(item => item.id === activeId);
   return {
-    aiProfiles: profiles.map(item => ({ id: item.id, name: item.name || item.model, baseUrl: item.baseUrl, model: item.model, apiKeyMasked: item.apiKey ? item.apiKey.slice(0, 6) + '****' + item.apiKey.slice(-4) : '', createdAt: item.createdAt || '' })),
+    aiProfiles: profiles.map(item => ({ id: item.id, name: item.name || item.model, baseUrl: (()=>{try{const u=new URL(item.baseUrl);return u.origin+u.pathname;}catch{return '地址待核对';}})(), model: item.model, apiKeyMasked: item.apiKey ? '已配置（不回显）' : '', createdAt: item.createdAt || '' })),
     activeAiProfileId: activeId,
     activeAiProfileName: active?.name || '',
     aiConfigured: Boolean(active || activeId === 'local-simulation'),
@@ -284,11 +298,12 @@ function applyStoreUpdate(id, body) {
 }
 
 // ===== 配置 API =====
-app.get('/api/config', (_req, res) => {
+app.get(['/api/config','/api/enterprise-settings/robot/config'], (_req, res) => {
+  res.set('Cache-Control','no-store');
   const cfg = loadConfig();
   res.json({
     corpid: cfg.corpid || '',
-    corpsecret_masked: cfg.corpsecret ? cfg.corpsecret.slice(0, 6) + '****' + cfg.corpsecret.slice(-4) : '',
+    corpsecret_masked: cfg.corpsecret ? '已配置（不回显）' : '',
     webhookName: cfg.webhookName || '',
     configured: !!(cfg.corpid && cfg.corpsecret),
     webhookConfigured: !!cfg.webhook,
@@ -299,7 +314,8 @@ app.get('/api/config', (_req, res) => {
     ...getPublicAiConfig(cfg),
   });
 });
-app.post('/api/config', async (req, res) => {
+app.post(['/api/config','/api/enterprise-settings/robot/config'], async (req, res) => {
+  res.set('Cache-Control','no-store');
   if (Object.hasOwn(req.body || {}, 'webhook') || Object.hasOwn(req.body || {}, 'webhookName'))
     return res.status(400).json({ error: '群机器人请在「企业设置 → 机器人管理」统一维护' });
   const { corpid, corpsecret, botId, botSecret, activeAiProfileId, aiEnabled } = req.body;
@@ -315,7 +331,11 @@ app.post('/api/config', async (req, res) => {
     cfg.botSecret = botSecret.trim();
     botCredentialsChanged = true;
   }
-  if (activeAiProfileId !== undefined) cfg.activeAiProfileId = String(activeAiProfileId || '').trim();
+  if (activeAiProfileId !== undefined) {
+    const selected=String(activeAiProfileId||'').trim();
+    if(selected !== 'local-simulation' && !getAiProfiles(cfg).some(p=>p.id===selected)) return res.status(400).json({error:'所选模型API不可用'});
+    cfg.activeAiProfileId=selected;
+  }
   if (aiEnabled !== undefined) cfg.aiEnabled = Boolean(aiEnabled);
   saveConfig(cfg);
   // Existing default Webhook is an assignable robot too. A changed target closes
@@ -332,47 +352,9 @@ app.post('/api/config', async (req, res) => {
   });
 });
 
-// AI 模型配置库：新增条目，不覆盖历史配置；密钥只写入后端 config.json。
-app.post('/api/enterprise-settings/ai-profiles', (req, res) => {
-  try {
-    const name = String(req.body?.name || '').trim();
-    const baseUrl = String(req.body?.baseUrl || '').trim().replace(/\/$/, '');
-    const model = String(req.body?.model || '').trim();
-    const apiKey = String(req.body?.apiKey || '').trim();
-    if (!name || !baseUrl || !model || !apiKey) return res.status(400).json({ error: '请完整填写配置名称、Base URL、模型名称和 API Key' });
-    if (!/^https?:\/\//i.test(baseUrl)) return res.status(400).json({ error: 'Base URL 必须以 http:// 或 https:// 开头' });
-    const cfg = loadConfig();
-    const profiles = Array.isArray(cfg.aiProfiles) ? cfg.aiProfiles : [];
-    const profile = { id: crypto.randomUUID(), name, baseUrl, model, apiKey, createdAt: new Date().toISOString() };
-    profiles.push(profile);
-    cfg.aiProfiles = profiles;
-    if (!cfg.activeAiProfileId) cfg.activeAiProfileId = profile.id;
-    saveConfig(cfg);
-    res.status(201).json({ ok: true, profile: { id: profile.id, name: profile.name, baseUrl: profile.baseUrl, model: profile.model }, ...getPublicAiConfig(cfg) });
-  } catch (e) { res.status(500).json({ error: `新增模型配置失败：${e.message}` }); }
-});
-
-// 编辑已有模型档案。API Key 留空时保留已保存的密钥，避免因修改模型名而覆盖密钥。
-app.put('/api/enterprise-settings/ai-profiles/:profileId', (req, res) => {
-  try {
-    const profileId = String(req.params.profileId || '').trim();
-    const cfg = loadConfig();
-    const profiles = Array.isArray(cfg.aiProfiles) ? cfg.aiProfiles : [];
-    const index = profiles.findIndex(item => item?.id === profileId);
-    if (index < 0) return res.status(404).json({ error: '未找到该模型配置' });
-    const current = profiles[index];
-    const name = String(req.body?.name || current.name || '').trim();
-    const baseUrl = String(req.body?.baseUrl || current.baseUrl || '').trim().replace(/\/$/, '');
-    const model = String(req.body?.model || current.model || '').trim();
-    const apiKey = String(req.body?.apiKey || '').trim() || current.apiKey;
-    if (!name || !baseUrl || !model || !apiKey) return res.status(400).json({ error: '请完整填写配置名称、Base URL、模型名称和 API Key' });
-    if (!/^https?:\/\//i.test(baseUrl)) return res.status(400).json({ error: 'Base URL 必须以 http:// 或 https:// 开头' });
-    profiles[index] = { ...current, name, baseUrl, model, apiKey, updatedAt: new Date().toISOString() };
-    cfg.aiProfiles = profiles;
-    saveConfig(cfg);
-    res.json({ ok: true, profile: { id: profileId, name, baseUrl, model }, ...getPublicAiConfig(cfg) });
-  } catch (e) { res.status(500).json({ error: `更新模型配置失败：${e.message}` }); }
-});
+// 平台/API注册库：仅企业设置授权者可维护；凭据加密、版本校验、元数据审计。
+app.use('/api/enterprise-settings/api-registry', integrationRegistry.router(apiRegistry));
+app.all('/api/enterprise-settings/ai-profiles{/:profileId}', (_req,res)=>res.status(410).json({error:'请使用平台与API管理维护模型引用'}));
 
 // ===== 企业设置 · 机器人设置 =====
 // 主动重连仅重启机器人 WebSocket，不影响当前的经营数据服务。
@@ -395,15 +377,16 @@ app.post('/api/enterprise-settings/robot/preview-query', async (req, res) => {
 
 // ===== 企业微信 Token =====
 app.get('/api/wechat/token', async (_req, res) => {
+  res.set('Cache-Control','no-store');
   const cfg = loadConfig();
   if (!cfg.corpid || !cfg.corpsecret) return res.status(400).json({ error: '请先配置 corpid 和 corpsecret' });
   if (tokenCache.token && Date.now() < tokenCache.expiresAt)
-    return res.json({ ok: true, access_token: tokenCache.token, cached: true, expires_in: Math.floor((tokenCache.expiresAt - Date.now()) / 1000) });
+    return res.json({ ok: true, cached: true, expires_in: Math.floor((tokenCache.expiresAt - Date.now()) / 1000) });
   try {
     const data = await httpGet(`https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${cfg.corpid}&corpsecret=${cfg.corpsecret}`);
     if (data.errcode === 0) {
       tokenCache = { token: data.access_token, expiresAt: Date.now() + (data.expires_in - 300) * 1000 };
-      res.json({ ok: true, access_token: data.access_token, cached: false, expires_in: data.expires_in });
+      res.json({ ok: true, cached: false, expires_in: data.expires_in });
     } else res.status(400).json({ error: `获取 token 失败: [${data.errcode}] ${data.errmsg}` });
   } catch (err) { res.status(500).json({ error: `网络错误: ${err.message}` }); }
 });
@@ -1609,20 +1592,31 @@ function normalizePlatformRecord(value) {
 }
 function upsertStorePlatform(storeId, storeName, raw) {
   const item = normalizePlatformRecord(raw);
+  if(Object.hasOwn(raw,'exclude_source_names'))require('./lib/platform-source-exclusions').add(db,item.platform_name,raw.exclude_source_names);
+  if (item.platform_id && db.queryOne('SELECT id FROM store_platforms WHERE platform_name=? AND platform_id=? AND store_id<>? LIMIT 1', [item.platform_name,item.platform_id,storeId])) throw Error('该平台ID已绑定其他门店，未保存');
   const rows = db.queryAll('SELECT id FROM store_platforms WHERE store_id=? AND platform_name=? ORDER BY id DESC', [storeId, item.platform_name]);
   if (rows.length) {
     db.run("UPDATE store_platforms SET platform_id=?, setup_status=?, online_date=?, updated_at=datetime('now','localtime') WHERE id=?", [item.platform_id, item.setup_status, item.online_date, rows[0].id]);
     rows.slice(1).forEach(row => db.run('DELETE FROM store_platforms WHERE id=?', [row.id]));
+    reconcileBinding();
     return rows[0].id;
   }
-  return db.insert('INSERT INTO store_platforms (store_id,platform_name,platform_id,setup_status,online_date) VALUES (?,?,?,?,?)', [storeId, item.platform_name, item.platform_id, item.setup_status, item.online_date]);
+  const id = db.insert('INSERT INTO store_platforms (store_id,platform_name,platform_id,setup_status,online_date) VALUES (?,?,?,?,?)', [storeId, item.platform_name, item.platform_id, item.setup_status, item.online_date]);
+  reconcileBinding();
+  return id;
+  function reconcileBinding() { return require("./lib/platform-binding-reconcile").reconcile(db,{storeId,storeName,platformName:item.platform_name,platformId:item.platform_id}); }
+}
+function platformTransaction(action) {
+  db.run("BEGIN");
+  try { const result=action(); db.run("COMMIT"); db.save(); return result; }
+  catch(error) { db.run("ROLLBACK"); throw error; }
 }
 app.get('/api/store-platforms', (req, res) => { try { const rows = db.queryAll('SELECT p.*, s.store_name FROM store_platforms p JOIN stores s ON s.id=p.store_id ORDER BY s.store_name, p.id'); res.json({ ok: true, platforms: rows }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/store-platforms/resolve', (req, res) => { try { const platform_name = String(req.query.platform_name || '').trim(); const platform_id = String(req.query.platform_id || '').trim(); if (!PLATFORM_NAMES.includes(platform_name) || !platform_id) return res.status(400).json({ error: '请提供平台名称和平台 ID' }); const row = db.queryOne('SELECT p.*, s.store_name, s.status AS store_status FROM store_platforms p JOIN stores s ON s.id=p.store_id WHERE p.platform_name=? AND p.platform_id=?', [platform_name, platform_id]); if (!row) return res.status(404).json({ error: '未找到对应门店的平台绑定' }); res.json({ ok: true, store: row }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/stores/:id/platforms', (req, res) => { try { res.json({ ok: true, platforms: db.queryAll('SELECT * FROM store_platforms WHERE store_id=? ORDER BY id', [req.params.id]) }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post('/api/stores/:id/platforms', (req, res) => { try { const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const id = upsertStorePlatform(Number(req.params.id), store.store_name, req.body); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.put('/api/stores/:id/platforms', (req, res) => { try { const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const platforms = Array.isArray(req.body.platforms) ? req.body.platforms : []; if (!platforms.length) return res.status(400).json({ error: '请至少提交一个平台' }); platforms.forEach(item => upsertStorePlatform(Number(req.params.id), store.store_name, item)); db.save(); res.json({ ok: true, platforms: db.queryAll('SELECT * FROM store_platforms WHERE store_id=? ORDER BY id', [req.params.id]) }); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.put('/api/platforms/:id', (req, res) => { try { const current = db.queryOne('SELECT p.*, s.store_name FROM store_platforms p JOIN stores s ON s.id=p.store_id WHERE p.id=?', [req.params.id]); if (!current) return res.status(404).json({ error: '平台记录不存在' }); upsertStorePlatform(current.store_id, current.store_name, { ...current, ...req.body }); db.save(); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.post('/api/stores/:id/platforms', (req, res) => { try { const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const id = platformTransaction(()=>upsertStorePlatform(Number(req.params.id), store.store_name, req.body)); res.json({ ok: true, id }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/stores/:id/platforms', (req, res) => { try { const store = db.queryOne('SELECT store_name FROM stores WHERE id=?', [req.params.id]); if (!store) return res.status(404).json({ error: '门店不存在' }); const platforms = Array.isArray(req.body.platforms) ? req.body.platforms : []; if (!platforms.length) return res.status(400).json({ error: '请至少提交一个平台' }); platformTransaction(()=>platforms.forEach(item => upsertStorePlatform(Number(req.params.id), store.store_name, item))); res.json({ ok: true, platforms: db.queryAll('SELECT * FROM store_platforms WHERE store_id=? ORDER BY id', [req.params.id]) }); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.put('/api/platforms/:id', (req, res) => { try { const current = db.queryOne('SELECT p.*, s.store_name FROM store_platforms p JOIN stores s ON s.id=p.store_id WHERE p.id=?', [req.params.id]); if (!current) return res.status(404).json({ error: '平台记录不存在' }); platformTransaction(()=>upsertStorePlatform(current.store_id, current.store_name, { ...current, ...req.body })); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.delete('/api/platforms/:id', (req, res) => { try { db.run('DELETE FROM store_platforms WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 员工 =====
@@ -1742,6 +1736,8 @@ app.get('/api/stores/:id/employees', (req, res) => {
 app.post('/api/stores/:id/employees', (req, res) => { try { const { name, status, hire_date, hire_type, position, salary } = req.body; if (!name) return res.status(400).json({ error: '员工姓名不能为空' }); const id = db.insert('INSERT INTO employees (store_id,name,status,hire_date,hire_type,position,salary) VALUES (?,?,?,?,?,?,?)', [req.params.id, name, status||'在职', hire_date||null, hire_type||'全职', position||'', salary||0]); db.save(); res.json({ ok: true, id }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.put('/api/employees/:id', (req, res) => { try { const fields = ['store_id','name','status','hire_date','hire_type','position','salary','leave_date']; const sets = [], params = []; fields.forEach(f => { if (req.body[f] !== undefined) { sets.push(`${f}=?`); params.push(req.body[f]); } }); if (!sets.length) return res.status(400).json({ error: '没有要更新的字段' }); params.push(req.params.id); db.run(`UPDATE employees SET ${sets.join(',')} WHERE id=?`, params); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.delete('/api/employees/:id', (req,res)=>res.status(400).json({error:'员工档案需保留，请通过离职日期办理离职，历史记录不删除'}));
+
+require('./lib/staff-organizations').mount({app,db,getUser:getAuthUserById});
 
 // ===== 员工管理（店长 + 店员）=====
 // GET /api/staff — 列表（分页、搜索、角色筛选）
@@ -1920,6 +1916,7 @@ app.post('/api/staff/sync-wecom', async (req, res) => {
 
 // 员工同步到企微智能表格的辅助函数
 async function syncStaffToSmartsheet(employee, cfg) {
+  if (LOCAL_WEB_PREVIEW) return {synced:false,reason:'本地预览不向企微写入'};
   // 优先使用 access_token API (支持 update_records)，回退到 webhook
   const hasApiConfig = cfg.staffSmartSheetDocId && cfg.staffSmartSheetSheetId;
   const hasWebhook = cfg.staffSmartSheetUrl;
@@ -2702,7 +2699,7 @@ async function runDingTalkAttendanceSync({ dateFrom, dateTo, employeeIds = [] })
   return { date_from: from, date_to: to, employee_count: mapped.length, record_count: records.length, matched_count: matchedCount, unmatched_count: unmatchedCount, message };
 }
 
-// 只在管理员主动点击“同步”后访问钉钉。默认同步单天，以免意外拉取大范围个人考勤数据。
+// 人工补录接口保留；每日自动任务共用相同导入核心，员工页展示任务状态。
 app.post('/api/staff/dingtalk/sync', async (req, res) => {
   const dateFrom = normalizeAttendanceDate(req.body?.date_from) || new Date().toISOString().slice(0, 10);
   const dateTo = normalizeAttendanceDate(req.body?.date_to) || dateFrom;
@@ -2721,7 +2718,6 @@ app.post('/api/staff/dingtalk/sync', async (req, res) => {
 // 回扫窗口默认 30 天：员工漏打卡后补卡会改到历史日期，只同步"上一天"会漏掉这些补卡，
 // 所以每天把最近 N 天整段重拉一遍（幂等 upsert，不会产生重复）。
 const ATTENDANCE_AUTO_DEFAULTS = { enabled: true, hour: 1, minute: 0, lookbackDays: 30 };
-let attendanceAutoLastRun = '';     // 记录已自动同步的目标日期，防止一天内重复跑
 function attendanceAutoSettings() {
   const section = loadConfig().dingtalkAttendance || {};
   const fromEnvEnabled = String(process.env.ATTENDANCE_AUTO_SYNC || '').trim();
@@ -2745,41 +2741,11 @@ function shiftLocalDate(dateText, days) {
   return localDateText(base);
 }
 // 到点检查：只在「已过当天设定时刻」且「该回扫窗口还没自动跑过」时执行
-async function checkAttendanceAutoSync(now = new Date()) {
-  const settings = attendanceAutoSettings();
-  if (!settings.enabled) return { ran: false, reason: 'disabled' };
-  const today = localDateText(now);
-  const target = shiftLocalDate(today, -1);                                   // 回扫窗口的结束日 = 昨天
-  const windowStart = shiftLocalDate(target, -(settings.lookbackDays - 1));   // 起始日 = 昨天往前 N-1 天
-  const dueMinutes = settings.hour * 60 + settings.minute;
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  if (nowMinutes < dueMinutes) return { ran: false, reason: 'not_due', next_at: `${today} ${String(settings.hour).padStart(2, '0')}:${String(settings.minute).padStart(2, '0')}` };
-  if (attendanceAutoLastRun === target) return { ran: false, reason: 'already_ran', target };
-  // 重启补跑保护：上次成功批次已覆盖到目标日（且窗口够长）就不重复拉钉钉
-  const lastSuccess = db.queryOne("SELECT date_from,date_to FROM dingtalk_attendance_sync_runs WHERE status='success' ORDER BY id DESC LIMIT 1");
-  if (lastSuccess?.date_to && String(lastSuccess.date_to) >= target
-    && (!lastSuccess.date_from || String(lastSuccess.date_from) <= windowStart)) {
-    attendanceAutoLastRun = target;
-    return { ran: false, reason: 'already_synced', target, covered: `${lastSuccess.date_from}~${lastSuccess.date_to}` };
-  }
-  const configured = dingtalkAttendance.getDingTalkConfig();
-  if (!configured?.configured) {
-    // 未配置钉钉凭据时不打扰，也不写失败批次
-    return { ran: false, reason: 'not_configured' };
-  }
-  try {
-    const started = Date.now();
-    const result = await runDingTalkAttendanceSync({ dateFrom: windowStart, dateTo: target });
-    attendanceAutoLastRun = target;
-    console.log(`[attendance-auto] 已自动回扫 ${windowStart}~${target}（${Math.round((Date.now() - started) / 1000)}s）：${result.message}`);
-    return { ran: true, target, window_start: windowStart, lookback_days: settings.lookbackDays, elapsed_ms: Date.now() - started, ...result };
-  } catch (error) {
-    attendanceAutoLastRun = target;   // 失败也记账，避免同一目标日期反复重试刷日志
-    console.warn(`[attendance-auto] 自动回扫 ${windowStart}~${target} 失败：${error.message}`);
-    return { ran: false, reason: 'failed', target, window_start: windowStart, error: error.message };
-  }
-}
+let attendanceDailyTask;
+function getAttendanceDailyTask(){if(!attendanceDailyTask)attendanceDailyTask=require('./lib/dingtalk-attendance-task').create({db,settings:attendanceAutoSettings,configured:()=>dingtalkAttendance.getDingTalkConfig().configured,run:runDingTalkAttendanceSync});return attendanceDailyTask}
+async function checkAttendanceAutoSync(now=new Date()){return getAttendanceDailyTask().tick(now)}
 function startAttendanceAutoSync() {
+  if (LOCAL_WEB_PREVIEW) return null;
   const settings = attendanceAutoSettings();
   if (!settings.enabled) { console.log('⏰ 钉钉考勤自动同步：已停用'); return null; }
   const at = `${String(settings.hour).padStart(2, '0')}:${String(settings.minute).padStart(2, '0')}`;
@@ -2810,9 +2776,10 @@ app.get('/api/staff/dingtalk/auto-sync', (req, res) => {
       ...settings,
       configured: Boolean(dingtalkAttendance.getDingTalkConfig().configured),
       mapped_employees: mappedEmployees,
-      last_auto_target: attendanceAutoLastRun || '',
+      ...getAttendanceDailyTask().status(),
+      mapped_employees: mappedEmployees,
       server_time: localDateText() + ' ' + new Date().toTimeString().slice(0, 8),
-      next_run_at: `${localDateText()} ${String(settings.hour).padStart(2, '0')}:${String(settings.minute).padStart(2, '0')}`,
+      next_run_at: getAttendanceDailyTask().status().next_run_at,
       latest_run: latest ? { ...latest, employee_count: attendanceRunEmployeeCount(latest) } : null,
       recent_runs: recent,
       coverage: {
@@ -3030,6 +2997,7 @@ app.put('/api/stores/:id/monthly-operating-cost', (req, res) => {
 app.delete('/api/operating-costs/:id', (req, res) => { try { db.run('DELETE FROM store_operating_costs WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
 
 // ===== 菜品管理 =====
+app.use('/api/menu/cost-recipes', require('./lib/menu-cost-recipes').createRouter({ db }));
 app.get('/api/menu', (req, res) => {
   try {
     const { store_id, category, status } = req.query;
@@ -4265,6 +4233,7 @@ function getAuthUserById(id) {
   return enriched ? {...enriched,permissions_json:undefined} : null;
 }
 personnelAccess.mount(app,db,getAuthUserById);
+require('./lib/daily-update-health').mount({app,db,getUser:getAuthUserById,attendanceStatus:()=>getAttendanceDailyTask().status()});
 function issueAuthToken(user) {
   return jwt.sign({
     id: user.id, username: user.username, role: user.role,
@@ -4726,6 +4695,7 @@ function normalizePositionPayload(body = {}) {
   const permissions = Array.isArray(body.permissions) ? [...new Set(body.permissions.map(item => String(item || '').trim()).filter(Boolean))] : [];
   if (!name || name.length > 40) throw new Error('岗位名称不能为空且不能超过 40 个字符');
   if (description.length > 200) throw new Error('岗位说明不能超过 200 个字符');
+  require('./lib/channel-permissions').assertWritableProfileCodes(permissions);
   return { name, description, permissions };
 }
 function positionResponse(row) {
@@ -4763,6 +4733,7 @@ app.post('/api/positions', (req, res) => {
   try {
     if (!requireAdmin(req, res)) return;
     const { name, description, permissions } = normalizePositionPayload(req.body);
+    require('./lib/staff-role-presets').assertCanonicalName(db,name);
     const id = db.insert('INSERT INTO position_settings (name,description,permissions_json) VALUES (?,?,?)', [name, description, JSON.stringify(permissions)]);
     db.save();
     res.status(201).json({ ok: true, position: positionResponse(db.queryOne('SELECT p.*,0 AS member_count FROM position_settings p WHERE id=?', [id])) });
@@ -4774,6 +4745,7 @@ app.put('/api/positions/:id', (req, res) => {
     const id = Number(req.params.id); const current = db.queryOne('SELECT * FROM position_settings WHERE id=?', [id]);
     if (!current) return res.status(404).json({ error: '岗位不存在' });
     const { name, description, permissions } = normalizePositionPayload(req.body);
+    require('./lib/staff-role-presets').assertCanonicalName(db,name,id);
     require('./lib/store-manager-uniqueness').protect(db,()=>db.run("UPDATE position_settings SET name=?,description=?,permissions_json=?,updated_at=datetime('now','localtime') WHERE id=?", [name, description, JSON.stringify(permissions), id]));
     db.run('UPDATE users SET role=? WHERE position_id=?', [name, id]);
     db.save(); res.json({ ok: true });
@@ -5244,123 +5216,19 @@ function appendDashboardVirtualGroup(rows, category, subcategory, dailyAmount, c
   return [group, child, ...rows];
 }
 
-// 收入构成不能只显示一个“真实数据销售收入”汇总。这里保留记账本口径下
-// 用户关心的收入字段，并以当前选择的收银机/第三方来源填充对应金额。
-const SALES_COMPOSITION_CHANNELS = [
-  { key: 'store_sales', label: '店内销售', note: '收银机' },
-  { key: 'pickup', label: '自提销售', note: '收银机' },
-  { key: 'meituan_delivery', label: '美团外卖' },
-  { key: 'taobao_flash', label: '淘宝闪购' },
-  { key: 'jd_delivery', label: '京东秒送' },
-  { key: 'douyin_group', label: '抖音团购' },
-  { key: 'meituan_group', label: '美团/大众点评团购' },
-];
-const GROUP_BUY_COMPOSITION_CHANNELS = new Set(['douyin_group', 'meituan_group']);
-
-function revenueSourceLabel(source) {
-  if (source === 'platform') return '第三方数据';
-  if (source === 'mixed') return '混合来源';
-  return '收银机数据';
-}
-
-function buildResolvedIncomeComposition(monthRows, dayRows, resolvedRows, cutoff, revenuePolicy) {
-  // 非销售类收入仍然完全来自记账本，避免真实数据视角吞掉其他经营收入。
+// Split embedded group payments per store/day without changing the selected
+// monthly income basis, fee deductions, non-sales income or stored-value rules.
+function buildResolvedIncomeComposition(monthRows, dayRows, resolvedRows, cutoff, revenuePolicy, manualPlatform, memberPolicy) {
   const otherIncomeRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'income', { excludeRow: isBookkeepingSalesRevenue });
-  const amounts = new Map(SALES_COMPOSITION_CHANNELS.map(item => [item.key, {
-    daily_amount: 0, cumulative_amount: 0, sources: new Set(),
-  }]));
-  const groupStates = new Map([...GROUP_BUY_COMPOSITION_CHANNELS].map(key => [key, {
-    requested_platform: revenuePolicy.sourceFor(key) === 'platform', platform_applied: false, fallback_to_pos: false,
-  }]));
-  // 由店内销售行的标记汇总而来：是否真的用平台团购值替换过、是否发生过回退。
-  let storeSalesSplitApplied = false;
-  let storeSalesSplitFallback = false;
-  // 只有“该团购选择第三方且第三方记录实际可用”时，解析器才会从店内销售
-  // 扣掉对应收银机团购金额并加入第三方金额。收银机来源或回退收银机时都不拆分。
-  resolvedRows.forEach(row => {
-    const state = groupStates.get(row.channel);
-    if (state) {
-      if (row.source_used === 'platform' && !row.exclude_from_sales) state.platform_applied = true;
-      if (state.requested_platform && row.source_used !== 'platform') state.fallback_to_pos = true;
-      return;
-    }
-    // 店内销售行携带解析器打的拆分标记：团购值已按平台值替换进店内销售。
-    // 团购行自身始终带 exclude_from_sales（避免重复计入），不能用它判断，
-    // 否则状态会永远是“待拆分”。
-    if (row.channel === 'store_sales') {
-      if (row.group_platform_applied) storeSalesSplitApplied = true;
-      if (row.group_platform_fallback) storeSalesSplitFallback = true;
-    }
-  });
-  resolvedRows.filter(row => !row.exclude_from_sales).forEach(row => {
-    const item = amounts.get(row.channel);
-    if (!item) return;
-    const income = Number(row.income || 0);
-    item.cumulative_amount += income;
-    if (row.biz_date === cutoff) item.daily_amount += income;
-    item.sources.add(row.source_used === 'platform' ? 'platform' : 'pos');
-  });
-  const activeGroupStates = SALES_COMPOSITION_CHANNELS
-    .filter(meta => GROUP_BUY_COMPOSITION_CHANNELS.has(meta.key))
-    .map(meta => {
-      const state = { ...meta, ...groupStates.get(meta.key) };
-      // 拆分标记来自店内销售行：只要真的用平台值替换过，就算已拆分成功；
-      // 同时出现回退说明只有部分门店/日期有平台记录。
-      const applied = state.platform_applied || (storeSalesSplitApplied && state.requested_platform);
-      return {
-        ...state,
-        platform_applied: applied,
-        fallback_to_pos: applied ? storeSalesSplitFallback : state.fallback_to_pos,
-      };
-    });
-  const removedGroups = activeGroupStates.filter(item => item.platform_applied && !item.fallback_to_pos);
-  const partiallyReplacedGroups = activeGroupStates.filter(item => item.platform_applied && item.fallback_to_pos);
-  const retainedGroups = activeGroupStates.filter(item => !item.platform_applied || item.fallback_to_pos);
-  // 每次请求单独生成店内销售标签，不能改写全局渠道配置。
-  const storeSalesMeta = { ...SALES_COMPOSITION_CHANNELS[0] };
-  if (removedGroups.length && !retainedGroups.length) {
-    storeSalesMeta.label = '纯堂食外带';
-    storeSalesMeta.note = '已剔除第三方团购';
-  } else if (removedGroups.length || partiallyReplacedGroups.length) {
-    // 命名要点：没有任何团购值来自收银机时才走上面的「纯堂食外带」；
-    // 到这里说明至少还有一个渠道完全回退到收银机，因此标成「团购仅部分替换」。
-    // 不能写成「团购部分替换」——那会被读成"替换了团购的一部分"，与事实不符。
-    storeSalesMeta.label = '店内销售（团购仅部分替换）';
-    const removedNames = [...removedGroups, ...partiallyReplacedGroups].map(item => item.label).join('、');
-    const retainedNames = retainedGroups.map(item => item.label).join('、');
-    storeSalesMeta.note = retainedNames ? `已替换${removedNames}；仍含${retainedNames}` : `已替换${removedNames}`;
-  } else if (activeGroupStates.some(item => item.requested_platform)) {
-    // 口径是「第三方」，但一条第三方团购记录都没用上，店内销售仍是收银机值（未替换）。
-    storeSalesMeta.label = '店内销售（团购未替换）';
-    storeSalesMeta.note = '未取得第三方团购记录，暂用收银机值';
-  } else {
-    storeSalesMeta.label = '店内销售（含收银机团购）';
-    storeSalesMeta.note = '收银机数据';
-  }
-  const displayChannels = SALES_COMPOSITION_CHANNELS
-    .filter(meta => !GROUP_BUY_COMPOSITION_CHANNELS.has(meta.key) || groupStates.get(meta.key).platform_applied)
-    .map(meta => meta.key === 'store_sales' ? storeSalesMeta : meta);
-  const children = displayChannels.map(meta => {
-    const amount = amounts.get(meta.key);
-    const source = amount.sources.size > 1 ? 'mixed' : (amount.sources.values().next().value || 'pos');
-    return {
-      category: '销售收入',
-      subcategory: meta.label,
-      daily_amount: amount.daily_amount,
-      cumulative_amount: amount.cumulative_amount,
-      source_label: meta.note || revenueSourceLabel(source),
-      source_used: source,
-      is_group: false,
-      virtual: true,
-    };
-  });
-  const dailyAmount = children.reduce((sum, item) => sum + Number(item.daily_amount || 0), 0);
-  const cumulativeAmount = children.reduce((sum, item) => sum + Number(item.cumulative_amount || 0), 0);
-  const salesGroup = {
-    category: '销售收入', subcategory: '', daily_amount: dailyAmount, cumulative_amount: cumulativeAmount,
-    is_group: true, virtual: true,
-  };
-  return [salesGroup, ...children, ...otherIncomeRows];
+  return [
+    ...require('./lib/monthly-income-composition').buildSalesComposition(resolvedRows, cutoff, {
+      sourceFor: revenuePolicy.sourceFor,
+      embeddedGroupField: manualPlatform ? 'settled' : 'income',
+      showOfflineFee: true,
+      memberPolicy,
+    }),
+    ...otherIncomeRows,
+  ];
 }
 
 function buildStoredValueComposition(monthRows, dayRows) {
@@ -5403,7 +5271,11 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
     const feeRules=require('./lib/delivery-fee-rules').read(db);
     const policyIds=scopedStoreIds.length?scopedStoreIds:db.queryAll('SELECT id FROM stores').map(r=>r.id);
     const offlineFees = require('./lib/offline-payment-fees');
-    const offlinePayment = offlineFees.build(db, policyIds, period.start, period.cutoff);
+    // Cashier view follows the ledger without adding computed payment fees.
+    // Its original expense records remain intact; only real view applies fees.
+    const offlinePayment = isCashierView
+      ? { policies: new Map(), byDate: new Map(), ready: true, actual_days: 0, order_days: 0, estimated_days: 0 }
+      : offlineFees.build(db, policyIds, period.start, period.cutoff);
     const manualPlatform=feeRules.enabled?require('./lib/monthly-platform-policy').build(db,policyIds,period.start,period.cutoff,feeRules):null;
     const resolvedRevenue = businessAnalytics.getResolvedRevenueByDate(db, {
       date_from: period.start, date_to: period.cutoff, store_ids: scopedStoreIds.join(','),
@@ -5443,14 +5315,11 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       `SELECT store_id, date, category_name, subcategory_name, SUM(amount) AS amount FROM bookkeeping_entries WHERE ${where.join(' AND ')} GROUP BY store_id, date, category_name, subcategory_name ORDER BY date`,
       params
     );
-    const cashFeeKeys = new Set(profitRows.filter(r=>r.amount>0&&isBookkeepingSalesRevenue(r)).map(r=>`${r.store_id}|${r.date}`));
-    const cashFeeByDate = new Map();
-    for(const [key,fee]of offlinePayment.policies)if(cashFeeKeys.has(key))cashFeeByDate.set(fee.date,(cashFeeByDate.get(fee.date)||0)+fee.fee_cents/100);
     // Payment fees are already subtracted from income. Remove only explicitly named ledger mirrors
     // for a store/day where this same fee policy is applied; leave generic platform fees untouched.
     for(let i=profitRows.length-1;i>=0;i--){
       const row=profitRows[i];
-      if(!offlineFees.isLedgerFee(row)||!offlinePayment.policies.has(`${row.store_id}|${row.date}`)||(isCashierView&&!cashFeeKeys.has(`${row.store_id}|${row.date}`)))continue;
+      if(!offlineFees.isLedgerFee(row)||!offlinePayment.policies.has(`${row.store_id}|${row.date}`))continue;
       for(const list of [monthRows,...(row.date===period.cutoff?[dayRows]:[])]){
         const match=list.find(r=>r.category_name===row.category_name&&r.subcategory_name===row.subcategory_name);
         if(match)match.amount=Math.round((Number(match.amount)-Number(row.amount))*100)/100;
@@ -5533,7 +5402,7 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       const amount = Number(row.amount || 0);
       // 收入视角可切换，支出始终保留记账本原始项目；平台解析费用仅用于核对。
       if (amount > 0 && !isStoredValue(row) && (isCashierView || !isBookkeepingSalesRevenue(row))) target.income += amount;
-      if (amount < 0 && !recurringMatcher(row) && !platformMatcher(row)) target.expense -= amount;
+      if (amount < 0 && (isCashierView || !isBookkeepingSalesRevenue(row)) && !recurringMatcher(row) && !platformMatcher(row)) target.expense -= amount;
     });
     const dailyProfitSeries = [];
     let cumulativeProfit = 0;
@@ -5541,23 +5410,26 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       const date = `${String(month)}-${String(day).padStart(2, '0')}`;
       const row = profitByDate.get(date) || {};
       const sales = isCashierView ? {} : (resolvedSalesByDate.get(date) || {});
-      const income = Number(row.income || 0) + Number(sales.income || 0) - (isCashierView ? cashFeeByDate.get(date)||0 : 0);
+      const income = Number(row.income || 0) + Number(sales.income || 0);
       const expense = Number(row.expense || 0) + (manualPlatform?.costs.get(date)?.[isCashierView?'cashier':'real']||0) + (view === 'accrual' ? recurringCosts.reduce((sum, item) => sum + Number(item.daily_amount || 0), 0) : 0);
       const dailyNet = income - expense;
       cumulativeProfit += dailyNet;
-      dailyProfitSeries.push({ date, day, income, expense, daily_net: ((manualPlatform&&!manualPlatform.ready)||!offlinePayment.ready)?null:dailyNet, cumulative_net: ((manualPlatform&&!manualPlatform.ready)||!offlinePayment.ready)?null:cumulativeProfit });
+      dailyProfitSeries.push({ date, day, income, expense, daily_net: dailyNet, cumulative_net: cumulativeProfit });
     }
     const ledgerIncomeTotal = monthRows.reduce((sum, row) => Number(row.amount || 0) > 0 && !isStoredValue(row) ? sum + Number(row.amount) : sum, 0);
     const ledgerFeeTotal = monthRows.reduce((sum, row) => Number(row.amount || 0) < 0 && isBookkeepingPlatformFee(row) ? sum - Number(row.amount) : sum, 0);
     const incomeRows = isCashierView
       ? buildMonthlyDashboardGroups(monthRows, dayRows, 'income')
-      : buildResolvedIncomeComposition(monthRows, dayRows, resolvedRevenue.rows, period.cutoff, resolvedRevenue.policy);
-    const displayedOfflineFees = isCashierView ? cashFeeByDate : offlinePayment.byDate;
+      : buildResolvedIncomeComposition(monthRows, dayRows, resolvedRevenue.rows, period.cutoff, resolvedRevenue.policy, Boolean(manualPlatform), resolvedRevenue.member_card_consumption);
+    const displayedOfflineFees = offlinePayment.byDate;
     const offlineCumulativeFee = [...displayedOfflineFees.values()].reduce((n, v) => n + Math.round(v*100), 0)/100;
     const offlineDailyFee = displayedOfflineFees.get(period.cutoff) || 0;
-    const offlineLedgerAdjusted = isCashierView && offlineFees.adjustLedgerIncome(incomeRows, offlineDailyFee, offlineCumulativeFee);
     let expenseRows = buildMonthlyDashboardGroups(monthRows, dayRows, 'expense', { excludeRow: row=>recurringMatcher(row)||platformMatcher(row), accrualItems });
-    if(manualPlatform){const field=isCashierView?'cashier':'real';expenseRows=appendDashboardVirtualGroup(expenseRows,'人工确认平台费用',isCashierView?'第三方及推广／霸王餐':'霸王餐费用',manualPlatform.costs.get(period.cutoff)?.[field]||0,[...manualPlatform.costs.values()].reduce((n,r)=>n+r[field],0));}
+    if(manualPlatform){
+      const field=isCashierView?'cashier':'real',category='人工确认平台费用';
+      const children=[['third_party','第三方手续费'],['promotion','推广费']].map(([key,subcategory])=>({category,subcategory,daily_amount:manualPlatform.costs.get(period.cutoff)?.categories[key][field]||0,cumulative_amount:[...manualPlatform.costs.values()].reduce((n,r)=>n+r.categories[key][field],0),is_group:false,virtual:true})).filter(r=>r.daily_amount||r.cumulative_amount);
+      if(children.length)expenseRows=[{category,subcategory:'',daily_amount:children.reduce((n,r)=>n+r.daily_amount,0),cumulative_amount:children.reduce((n,r)=>n+r.cumulative_amount,0),is_group:true,virtual:true},...children,...expenseRows];
+    }
     expenseRows=expenseRows.map(row=>({...row,expense_type:row.is_group?null:(row.category==='人工确认平台费用'?'platform':manualTag(row)),expense_tag:row.is_group?'':tagLabels[row.category==='人工确认平台费用'?'platform':manualTag(row)]}));
     const storedValueRows = buildStoredValueComposition(monthRows, dayRows);
     const totals = (rows, key) => rows.filter(row => row.is_group).reduce((sum, row) => sum + Number(row[key] || 0), 0);
@@ -5590,16 +5462,17 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       ok: true,
       store_name: storeName,
       labor_efficiency: laborEfficiency,
-      offline_payment_fee: { daily_amount: offlineDailyFee, cumulative_amount: offlineCumulativeFee, actual_days: offlinePayment.actual_days, order_days:offlinePayment.order_days, estimated_days: offlinePayment.estimated_days, ledger_adjusted: Boolean(offlineLedgerAdjusted) },
-      fee_policy:{enabled:feeRules.enabled,revision:feeRules.revision,ready:manualPlatform?.ready??true,warnings:manualPlatform?.warnings||[]},
+      offline_payment_fee: { daily_amount: offlineDailyFee, cumulative_amount: offlineCumulativeFee, actual_days: offlinePayment.actual_days, order_days:offlinePayment.order_days, estimated_days: offlinePayment.estimated_days, ledger_adjusted: false },
+      member_card_consumption: isCashierView ? undefined : resolvedRevenue.member_card_consumption ? {...resolvedRevenue.member_card_consumption,daily:require('./lib/member-consumption-policy').summarize(resolvedRevenue.member_card_consumption.days,period.cutoff,period.cutoff)} : undefined,
+      fee_policy:{enabled:feeRules.enabled,revision:feeRules.revision,ready:manualPlatform?.ready??true,data_complete:manualPlatform?.data_complete??true,missing_as_zero:manualPlatform?.missing_as_zero??false,warnings:manualPlatform?.warnings||[]},
       period,
       view,
       revenue_source: {
         view: revenueDataView,
         overrides: isCashierView ? {} : resolvedRevenue.policy.overrides,
         gross_amount: isCashierView ? Math.round(ledgerIncomeTotal * 100) / 100 : resolvedSalesTotals.gross,
-        income_amount: isCashierView ? Math.round((ledgerIncomeTotal - (offlineLedgerAdjusted ? offlineCumulativeFee : 0)) * 100) / 100 : resolvedSalesTotals.income,
-        settled_amount: isCashierView ? Math.round((ledgerIncomeTotal - (offlineLedgerAdjusted ? offlineCumulativeFee : 0)) * 100) / 100 : resolvedSalesTotals.settled,
+        income_amount: isCashierView ? Math.round(ledgerIncomeTotal * 100) / 100 : resolvedSalesTotals.income,
+        settled_amount: isCashierView ? Math.round(ledgerIncomeTotal * 100) / 100 : resolvedSalesTotals.settled,
         platform_fee_amount: isCashierView ? Math.round(ledgerFeeTotal * 100) / 100 : resolvedSalesTotals.fees,
         order_count: isCashierView ? 0 : resolvedSalesTotals.orders,
       },
@@ -5616,11 +5489,11 @@ app.get('/api/analysis/monthly-operating-dashboard', (req, res) => {
       totals: {
         daily_income: dailyIncome,
         daily_expense: dailyExpense,
-        daily_net: ((manualPlatform&&!manualPlatform.ready)||!offlinePayment.ready)?null:dailyIncome - dailyExpense,
+        daily_net: dailyIncome - dailyExpense,
         daily_stored_value: storedValue(dayRows),
         cumulative_income: cumulativeIncome,
         cumulative_expense: cumulativeExpense,
-        cumulative_net: ((manualPlatform&&!manualPlatform.ready)||!offlinePayment.ready)?null:cumulativeIncome - cumulativeExpense,
+        cumulative_net: cumulativeIncome - cumulativeExpense,
         cumulative_stored_value: storedValue(monthRows),
       },
     });
@@ -5966,6 +5839,8 @@ app.post('/api/push/group-buy-daily/send', async (req, res) => {
 
 // 美团外卖经营指标（曝光/入店/下单/转化率）：求和字段直接合计，转化率按加权口径重算
 require('./lib/meituan-delivery-sync').mount({ app, express, db, audit: syncJobAudit, businessAnalytics });
+require('./lib/delivery-client-updates').mountAdmin({app,db,express,audit:syncJobAudit,getUser:getAuthUserById});
+require('./lib/delivery-client-sync').mount({app,express,db,audit:syncJobAudit,businessAnalytics});
 require('./lib/meituan-group-sync').mount({ app, express, db, audit: syncJobAudit, businessAnalytics });
 require('./lib/meituan-operation-sync').mount({ app, express, db, audit: syncJobAudit, businessAnalytics });
 require('./lib/douyin-group-sync').mount({ app, express, db, audit: syncJobAudit, businessAnalytics });
@@ -6637,6 +6512,7 @@ app.get('/api/business-analytics/template', (req, res) => {
 try {
   require('./lib/schedule-wiring').mountSchedule({
     app, express, db,
+    startReportTimer: !LOCAL_WEB_PREVIEW,
     permissions: positionPermissions,
     syncJobAudit,
     daily: { loadConfig, httpPost, ensureDailyDataLoaded, dailyStoreState, drawStoreDailyReport, toReportData, crypto },
@@ -6677,6 +6553,7 @@ try {
   const { mountItemSalesCoverage } = require('./lib/syncbot-item-coverage');
   mountItemSalesCoverage({ app, express, db, audit: syncJobAudit });
   require('./lib/syncbot-order-coverage').mountOrderDetailCoverage({app,express,db,audit:syncJobAudit});
+  require('./lib/syncbot-member-transactions').mountMemberTransactions({app,express,db,audit:syncJobAudit});
 } catch (e) {
   console.error('[syncbot-item-coverage] mount failed:', e.message);
 }
@@ -7030,22 +6907,24 @@ app.get('/api/bot/status', (_req, res) => {
 // ===== 启动 =====
 (async () => {
   // 本地调试可通过 DISABLE_WECOM_BOT=1 停用机器人长连接，避免外部连接干扰页面服务。
-  if (process.env.DISABLE_WECOM_BOT !== '1') wecomBot.start().catch(err => console.error('[wecom-bot] 启动失败:', err.message));
+  if (!LOCAL_WEB_PREVIEW && process.env.DISABLE_WECOM_BOT !== '1') wecomBot.start().catch(err => console.error('[wecom-bot] 启动失败:', err.message));
   setupConsoleEncoding();
   await db.init();
+  if (!LOCAL_WEB_PREVIEW) {
   const hqTick=()=>{try{require('./lib/headquarter-staff-workflow').tick(db)}catch(e){console.warn('[hq-workflow] '+e.message)}};
   const offboardTick=()=>{try{require('./lib/staff-offboarding').tick(db)}catch(e){console.warn('[offboarding] '+e.message)}};offboardTick();const offboardTimer=setInterval(offboardTick,60000);offboardTimer.unref();
   hqTick();const hqTimer=setInterval(hqTick,60000);hqTimer.unref();
   const taskPlanTick=()=>{try{require('./lib/store-tasks').generateScheduled(db)}catch(e){console.warn('[store-tasks] 长期任务生成失败：'+e.message)}};
   taskPlanTick();
   const taskPlanTimer=setInterval(taskPlanTick,60000);taskPlanTimer.unref();
+  }
   payrollWorkflow.initialize(db);
   dingScheduleModule.initialize(db);
   require('./lib/dingtalk-approvals').initialize(db);
   staffRoster.initialize(db);
-  dingSchedule.start();
+  if (!LOCAL_WEB_PREVIEW) dingSchedule.start();
   // Replay balances after midnight and after punch corrections; unchanged accounts do not write.
-  const rosterTick=setInterval(()=>{try{rosterEngine.runAll()}catch(error){console.warn("[staff-roster] 自动核算失败："+error.message)}},15*60*1000);rosterTick.unref();
+  if (!LOCAL_WEB_PREVIEW) { const rosterTick=setInterval(()=>{try{rosterEngine.runAll()}catch(error){console.warn("[staff-roster] 自动核算失败："+error.message)}},15*60*1000);rosterTick.unref(); }
   analysisAgents.recoverInterrupted(db);
   db.seed();
   wecomRouting.syncDefaultWebhookBot(db, loadConfig());
@@ -7063,9 +6942,10 @@ app.get('/api/bot/status', (_req, res) => {
       ['门店督导（兼任店长）', '集团发薪、兼任门店排班；可制作绑定门店工资表。', ['staff.store.edit','payroll.view','payroll.prepare']],
       ['工资审核', '查看工资表并审核他人提交的工资表。', ['payroll.view', 'payroll.review']],
       ['门店店长', '处理门店和菜品日常资料。', ['dashboard.view', 'store.manage', 'menu.manage', 'staff.view']],
-      ['财务人员', '处理成本、记账和经营数据。', ['dashboard.view', 'analysis.view', 'cost.manage', 'bookkeeping.manage']],
+      ['财务人员', '处理成本、记账和经营数据。', ['dashboard.view', 'analysis.view', 'bookkeeping.manage']],
     ];
     defaults.forEach(([name, description, permissions]) => {
+      if (require('./lib/staff-role-presets').resolvesDefault(db,name)) return;
       if (!db.queryOne('SELECT id FROM position_settings WHERE name=?', [name])) {
         db.insert('INSERT INTO position_settings (name,description,permissions_json,is_system) VALUES (?,?,?,1)', [name, description, JSON.stringify(permissions)]);
       }
@@ -7085,6 +6965,12 @@ app.get('/api/bot/status', (_req, res) => {
 
   // 确保 admin 用户存在；管理员身份完全由“系统管理员”岗位承载。
   (function ensureUsers() {
+    // Explicitly migrated roles must not recreate or re-elevate a legacy admin
+    // account after an operator has changed its access.
+    if (require('./lib/staff-role-presets').managed(db)) {
+      if (!require('./lib/staff-role-presets').hasAdmin(db)) throw new Error('岗位配置缺少可用管理员，请使用权限备份恢复');
+      return;
+    }
     const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
     const adminHash = md5('admin123');
     const admin = db.queryOne("SELECT * FROM users WHERE username='admin'");
@@ -7120,9 +7006,10 @@ app.post('/api/webhook/smartsheet', async (req, res) => {
   }
 });
 
-  const server = app.listen(PORT, () => {
+  const server = app.listen(PORT, LOCAL_WEB_PREVIEW ? '127.0.0.1' : undefined, () => {
     console.log(`🚀 中控后台已启动: http://localhost:${PORT}`);
-    console.log(`📦 数据库: data/database.sqlite`);
+    console.log(`📦 数据库: ${LOCAL_WEB_PREVIEW ? process.env.LOCAL_WEB_DB_PATH || 'data/database.sqlite' : 'data/database.sqlite'}`);
+    if (LOCAL_WEB_PREVIEW) console.log('本地试用：自动推送、考勤同步、任务生成及机器人长连接已停用');
     // 每日自动同步钉钉考勤（默认 01:00 同步上一天，可在 config.json 的 dingtalkAttendance 调整）
     startAttendanceAutoSync();
   });

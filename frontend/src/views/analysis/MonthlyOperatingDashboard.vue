@@ -12,7 +12,7 @@
     <section class="query-card">
       <div class="query-field"><span>选择月份</span><el-date-picker v-model="filters.month" :clearable="false" type="month" value-format="YYYY-MM" placeholder="选择月份" /></div>
       <div class="query-field"><span>截止日期</span><el-date-picker v-model="filters.asOf" :clearable="false" type="date" value-format="YYYY-MM-DD" placeholder="选择时间" /></div>
-      <div class="query-field store-select"><span>选择门店</span><StoreRegionSelect v-model="filters.storeIds" :stores="stores" multiple placeholder="全部门店或按区域勾选" /></div>
+      <div class="query-field store-select"><span>选择门店</span><StoreRegionSelect v-model="filters.storeIds" :stores="stores" multiple restrict-to-stores include-closed placeholder="全部门店或按区域勾选" /></div>
       <div class="query-field view-select"><span>数据口径</span><el-radio-group v-model="filters.view"><el-radio-button label="cash">现金收支</el-radio-button><el-radio-button label="accrual">经营盈亏</el-radio-button></el-radio-group></div>
       <div class="query-field revenue-view-select"><span>收入数据视角</span><el-radio-group v-model="filters.dataView"><el-radio-button label="cashier">收银机</el-radio-button><el-radio-button label="real">真实数据</el-radio-button></el-radio-group></div>
       <el-button v-if="filters.dataView === 'real'" class="platform-source-button" @click="openSourceDialog">平台来源 · {{ platformSourceSummary }}</el-button>
@@ -20,7 +20,15 @@
     </section>
 
     <template v-if="queried">
-      <section class="revenue-source-panel"><div><span>REVENUE SOURCE</span><h3>{{ board.revenue_source?.view === 'cashier' ? '收银机视角' : '真实数据视角' }}</h3><p>{{ board.revenue_source?.view === 'cashier' ? '全部销售渠道按收银机原始数据计算。' : '店内销售与自提来自收银机；第三方渠道按当前平台来源设置解析。' }}</p></div><div class="revenue-source-metrics"><article><span>销售营业额</span><b>{{ money(board.revenue_source?.gross_amount) }}</b></article><article><span>优惠后收入</span><b>{{ money(board.revenue_source?.income_amount) }}</b></article><article><span>平台费用</span><b class="fee">{{ money(board.revenue_source?.platform_fee_amount) }}</b></article><article><span>实际到账</span><b>{{ money(board.revenue_source?.settled_amount) }}</b></article></div></section>
+      <section v-if="boardNotices.missing.length || boardNotices.notes.length" class="data-missing-notice" role="status">
+        <span class="data-missing-icon" aria-hidden="true">!</span>
+        <div><strong>{{ boardNotices.missing.length ? '缺失数据：' : '注意事项：' }}</strong>
+          <dl v-if="boardNotices.missing.length"><template v-for="item in boardNotices.missing" :key="item.platform"><dt>{{ item.platform }}</dt><dd>{{ item.dates.join('、') }}</dd></template></dl>
+          <p v-for="note in boardNotices.notes" :key="note" class="data-missing-note">{{ note }}</p>
+        </div>
+      </section>
+      <p class="tag-legend">实支：按发生日　均摊：可按天分摊　总部：总部收费　平台：平台费用；人工分类启用后，真实视角取后台净额，收银机视角扣人工确认的平台费用。</p>
+      <section class="revenue-source-panel"><div><span>REVENUE SOURCE</span><h3>{{ board.revenue_source?.view === 'cashier' ? '收银机视角' : '真实数据视角' }}</h3><p>{{ board.revenue_source?.view === 'cashier' ? '全部销售渠道按收银机原始数据计算。' : '店内销售与自提来自收银机；第三方渠道按当前平台来源设置解析。' }}</p></div><div class="revenue-source-metrics"><article><span>销售营业额</span><b>{{ money(board.revenue_source?.gross_amount) }}</b></article><article><span>优惠后收入</span><b>{{ money(board.revenue_source?.income_amount) }}</b></article><article><span>平台账单费用（仅核对）</span><b class="fee">{{ money(board.revenue_source?.platform_fee_amount) }}</b></article><article><span>实际到账</span><b>{{ money(board.revenue_source?.settled_amount) }}</b></article></div></section>
       <section v-if="isAccrual" class="daily-cost-panel">
         <header>
           <div><span>DAILY ACCRUED COST</span><h3>每日均摊成本</h3><p>固定由工资、房租/物业、水电构成；每个项目可独立设置来源，按本月 {{ board.period.days_in_month }} 天均摊。</p>
@@ -45,9 +53,9 @@
 
       <section class="tables-grid">
         <article class="board-panel expense-panel">
-          <header><div><h3>{{ isAccrual ? '经营成本构成' : '现金支出构成' }}</h3><p>{{ isAccrual ? '含日应计成本；非固定类按实际记账日' : '严格按记账本实际记账日期' }}</p></div><span>{{ expenseChildCount }} 个明细</span></header>
+          <header><div><h3>{{ isAccrual ? '经营成本构成' : '现金支出构成' }}</h3><p>{{ board.fee_policy?.enabled ? (isAccrual ? '固定成本按所选来源与支出标签分摊；平台费用按人工确认规则计算' : '记账支出按实际日期；平台费用按人工确认规则计算') : (isAccrual ? '含已选来源的日应计固定成本；平台费用仅按记账本记录' : '严格按记账本实际记账日期；不自动补扣平台费用') }}</p></div><span>{{ expenseChildCount }} 个明细</span></header>
           <el-table :data="board.expense_rows" :row-class-name="tableRowClass" size="small" max-height="610" stripe>
-            <el-table-column label="支出项目" min-width="190"><template #default="{ row }"><b v-if="row.is_group">{{ row.category }}</b><span v-else class="child-name">{{ row.subcategory }}</span></template></el-table-column>
+            <el-table-column label="支出项目" min-width="230"><template #default="{ row }"><b v-if="row.is_group">{{ row.category }}</b><span v-else class="child-name expense-name"><el-tag size="small" :class="'tag-'+row.expense_type">{{ row.expense_tag }}</el-tag>{{ row.subcategory?.replace(/[\r\n]+/g,' ') }}</span></template></el-table-column>
             <el-table-column label="当日支出" min-width="112" align="right"><template #default="{ row }">{{ money(row.daily_amount) }}</template></el-table-column>
             <el-table-column label="当日占比" width="92" align="right"><template #default="{ row }">{{ percent(rate(row.daily_amount, board.totals.daily_expense)) }}</template></el-table-column>
             <el-table-column label="截至当日" min-width="120" align="right"><template #default="{ row }">{{ money(row.cumulative_amount) }}</template></el-table-column>
@@ -104,7 +112,7 @@
             <span>LABOR EFFICIENCY</span>
             <h3>人效</h3>
             <p v-if="efficiency.included">{{ efficiency.headline }}</p>
-            <p v-else>人效 = 出勤人员工资 ÷ 收银机店内销售，仅单门店口径。</p>
+            <p v-else>人效 = 出勤人员工资 ÷ 门店全渠道总实收，仅单门店口径。</p>
           </div>
           <small class="efficiency-region">统计范围：{{ efficiency.regionCities }}</small>
         </header>
@@ -117,14 +125,14 @@
               <em>{{ efficiency.day.date }} 出勤 {{ efficiency.day.people }} 人 · 工资 {{ money(efficiency.day.wage_total) }}</em>
             </article>
             <article class="efficiency-chip">
-              <span>当日店内销售</span>
-              <b>{{ money(efficiency.day.store_sales) }}</b>
-              <em>收银机渠道「店内销售」当日值</em>
+              <span>当日门店总实收</span>
+              <b>{{ money(efficiency.day.total_receipts) }}</b>
+              <em>当前收入视角下的全渠道当日实收</em>
             </article>
             <article class="efficiency-chip">
               <span>期间累计人效</span>
               <b :class="efficiency.rangeTone">{{ efficiency.rangeDisplay }}</b>
-              <em>月初至 {{ efficiency.board.range.date_to }}：工资 {{ money(efficiency.range.wage_total) }} ÷ 店内销售 {{ money(efficiency.range.store_sales) }}</em>
+              <em>月初至 {{ efficiency.board.range.date_to }}：工资 {{ money(efficiency.range.wage_total) }} ÷ 门店总实收 {{ money(efficiency.range.total_receipts) }}</em>
             </article>
             <article class="efficiency-chip">
               <span>期间出勤人数</span>
@@ -224,6 +232,7 @@
 </template>
 
 <script setup>
+import {monthlyBoardNotices} from '../../utils/monthly-board-notices.mjs'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
@@ -250,6 +259,7 @@ const costSourceTarget = ref('wage')
 const dailyProfitChartRef = ref()
 const cumulativeProfitChartRef = ref()
 const board = reactive({ store_name: '', period: {}, view: 'cash', cost_sources: {}, wage: {}, accrual_costs: [], income_rows: [], expense_rows: [], stored_value_rows: [], daily_profit_series: [], totals: {}, labor_efficiency: null })
+const boardNotices = computed(() => monthlyBoardNotices(board.fee_policy?.warnings, Boolean(board.offline_payment_fee?.estimated_days)))
 const isAccrual = computed(() => board.view === 'accrual')
 // 人效：仅单门店查询时展示。当日口径 = 截止日当天出勤人员的当天工资；期间口径 = 月初至截止日期间出勤过的所有人。
 const efficiencyScope = ref('day')
@@ -270,7 +280,7 @@ const efficiency = computed(() => {
   const names = info.data_gap?.day_names || []
   const missingDay = day.missing_basis_count || 0
   const gapHint = missingDay
-    ? `注意：${day.date} 出勤的 ${missingDay} 人没有工资依据（全职月工资构成为 0 或兼职时薪未录入），工时为 0 计：${names.join('、')}。`
+    ? `注意：${day.date} 出勤的 ${missingDay} 人缺少工资依据、已确认排班或完整打卡，人效暂不计算：${names.join('、')}。`
     : ''
   return {
     ...emptyBase,
@@ -283,7 +293,7 @@ const efficiency = computed(() => {
     rangeTone: tone(range.ratio),
     gapHint,
     headline: `${day.date} 当日人效 ${day.ratio === null || day.ratio === undefined ? '—' : percent(day.ratio)}`
-      + `（出勤 ${day.people || 0} 人 · 工资 ${money(day.wage_total)} ÷ 店内销售 ${money(day.store_sales)}）`
+      + `（出勤 ${day.people || 0} 人 · 工资 ${money(day.wage_total)} ÷ 门店总实收 ${money(day.total_receipts)}）`
       + `；月初至 ${info.range?.date_to} 期间人效 ${range.ratio === null || range.ratio === undefined ? '—' : percent(range.ratio)}`,
   }
 })
@@ -303,7 +313,7 @@ const efficiencySummaryLines = computed(() => {
     { label: '工资合计', value: money(scope.wage_total) },
     { label: '全职考勤', value: `${scope.attendance_days || 0} 天` },
     { label: '兼职工时', value: `${scope.work_hours || 0} 小时` },
-    { label: '店内销售', value: money(scope.store_sales) },
+    { label: '门店总实收', value: money(scope.total_receipts) },
     { label: '人效', value: scope.ratio === null || scope.ratio === undefined ? '—' : percent(scope.ratio) },
   ]
 })
@@ -341,11 +351,11 @@ const summaryMetrics = computed(() => {
   return [
     { key: 'daily-expense', tone: 'expense', label: isAccrual.value ? '当日经营成本' : '当日现金支出', amount: Number(board.totals.daily_expense || 0), absolute: true, footnote: day, formula: `${expenseName}各大类合计`, items: expenseRows },
     { key: 'daily-income', tone: 'income', label: '当日总收入', amount: Number(board.totals.daily_income || 0), absolute: true, footnote: day, formula: '销售收入及其他经营收入合计，不含会员储值', items: incomeRows },
-    { key: 'daily-net', tone: netClass(board.totals.daily_net), label: isAccrual.value ? '当日经营盈亏' : '当日现金收支', amount: Number(board.totals.daily_net || 0), absolute: false, footnote: '收入 - 支出', formula: `当日总收入 ${money(board.totals.daily_income)} − ${expenseName} ${money(board.totals.daily_expense)}`, items: netBreakdown('daily') },
+    { key: 'daily-net', tone: netClass(board.totals.daily_net), label: isAccrual.value ? '当日经营盈亏' : '当日现金收支', amount: board.totals.daily_net===null?null:Number(board.totals.daily_net || 0), absolute: false, footnote: '收入 - 支出', formula: `当日总收入 ${money(board.totals.daily_income)} − ${expenseName} ${money(board.totals.daily_expense)}`, items: netBreakdown('daily') },
     { key: 'daily-stored', tone: 'stored', label: '当日储值', amount: Number(board.totals.daily_stored_value || 0), absolute: true, footnote: '会员充值/储值', formula: '会员充值及储值金额，不直接计入经营收入', items: storedRows },
     { key: 'cumulative-expense', tone: 'expense', label: isAccrual.value ? '截至当日经营成本' : '截至当日现金支出', amount: Number(board.totals.cumulative_expense || 0), absolute: true, footnote: range, formula: `${expenseName}各大类累计合计`, items: totalExpenseRows },
     { key: 'cumulative-income', tone: 'income', label: '截至当日总收入', amount: Number(board.totals.cumulative_income || 0), absolute: true, footnote: range, formula: '销售收入及其他经营收入累计，不含会员储值', items: totalIncomeRows },
-    { key: 'cumulative-net', tone: netClass(board.totals.cumulative_net), label: isAccrual.value ? '截至当日经营盈亏' : '截至当日现金收支', amount: Number(board.totals.cumulative_net || 0), absolute: false, footnote: '收入 - 支出', formula: `累计总收入 ${money(board.totals.cumulative_income)} − ${expenseName} ${money(board.totals.cumulative_expense)}`, items: netBreakdown('cumulative') },
+    { key: 'cumulative-net', tone: netClass(board.totals.cumulative_net), label: isAccrual.value ? '截至当日经营盈亏' : '截至当日现金收支', amount: board.totals.cumulative_net===null?null:Number(board.totals.cumulative_net || 0), absolute: false, footnote: '收入 - 支出', formula: `累计总收入 ${money(board.totals.cumulative_income)} − ${expenseName} ${money(board.totals.cumulative_expense)}`, items: netBreakdown('cumulative') },
     { key: 'cumulative-stored', tone: 'stored', label: '当月储值', amount: Number(board.totals.cumulative_stored_value || 0), absolute: true, footnote: `截至 ${day}`, formula: '会员充值及储值累计，不直接计入经营收入', items: totalStoredRows },
   ]
 })
@@ -542,9 +552,9 @@ function netBreakdown(scope) {
 }
 function rate(value, total) { return Number(total) ? Number(value || 0) / Number(total) : 0 }
 function percent(value) { return `${(Number(value || 0) * 100).toFixed(2)}%` }
-function money(value) { return `¥${Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` }
+function money(value) { return value===null?'—':`¥${Number(value || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` }
 function num(value) { return Number(value || 0).toLocaleString('zh-CN', { maximumFractionDigits: 2 }) }
-function signedMoney(value) { const number = Number(value || 0); return `${number > 0 ? '+' : number < 0 ? '-' : ''}${money(Math.abs(number))}` }
+function signedMoney(value) { if(value===null)return '—';const number = Number(value || 0); return `${number > 0 ? '+' : number < 0 ? '-' : ''}${money(Math.abs(number))}` }
 function tableRowClass({ row }) {
   if (row.is_stored) return row.is_group ? 'dashboard-stored-group-row' : 'dashboard-stored-row'
   return row.is_group ? 'dashboard-group-row' : ''
@@ -557,6 +567,10 @@ watch(() => filters.storeIds.join(','), () => { loadDashboardSettingsForCurrentS
 </script>
 
 <style scoped>
+.data-missing-notice{display:flex;align-items:flex-start;gap:8px;box-sizing:border-box;width:fit-content;max-width:100%;padding:8px 12px;margin:10px 0;border:1px solid #f0d58b;border-radius:6px;background:#fff9e8;color:#805d1d;font-size:12px;line-height:1.5}.data-missing-icon{display:flex;align-items:center;justify-content:center;flex:0 0 16px;width:16px;height:16px;margin-top:1px;border-radius:50%;background:#dba52d;color:#fff;font-size:12px;font-weight:700}.data-missing-notice>div{display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:start;gap:2px 10px;min-width:0}.data-missing-notice strong{font-size:12px;white-space:nowrap}.data-missing-notice dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px 10px;margin:0}.data-missing-notice dt{font-weight:600;margin:0}.data-missing-notice dd{margin:0;overflow-wrap:anywhere}.data-missing-note{grid-column:1/-1;margin:2px 0 0;color:#887449}
+
+.board-tabs{display:flex;gap:8px}.tag-legend{font-size:12px;color:#657994}.expense-name{display:inline-flex;align-items:center;gap:7px;padding-left:0;white-space:nowrap}.expense-name .el-tag{flex:none}.tag-actual{color:#526579;background:#eef2f6}.tag-accrual{color:#806026;background:#fff7df}.tag-headquarters{color:#6249a0;background:#f3eeff}.tag-platform{color:#256881;background:#eaf7fc}
+
 .monthly-board-page { max-width: 1680px; margin: 0 auto; padding: 24px; color: #182230; }
 .board-hero { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; padding:26px 30px; border-radius:18px; color:#fff; background:linear-gradient(120deg,#14345b,#236cb0 68%,#4b9ee7); box-shadow:0 12px 30px rgba(24,72,123,.16); }
 .eyebrow { color:#aed8ff; font-size:11px; font-weight:700; letter-spacing:.14em; }
@@ -578,7 +592,7 @@ watch(() => filters.storeIds.join(','), () => { loadDashboardSettingsForCurrentS
 .tables-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
 .board-panel { overflow:hidden; border:1px solid #e5ebf3; border-radius:14px; background:#fff; box-shadow:0 5px 16px rgba(30,54,86,.05); }
 .board-panel header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:16px 18px 13px; border-bottom:1px solid #edf1f5; }.board-panel h3 { margin:0; color:#243d5e; font-size:16px; }.board-panel p { margin:5px 0 0; color:#8a97a7; font-size:11px; }.board-panel header > span { padding:4px 8px; border-radius:12px; color:#57789f; background:#eef5ff; font-size:11px; }
-.expense-panel :deep(.dashboard-group-row td) { color:#9a3d33; background:#fff5f3 !important; }.income-panel :deep(.dashboard-group-row td) { color:#18734f; background:#f1fbf6 !important; }.income-panel :deep(.dashboard-stored-group-row td) { color:#bf3548; background:#fff0f2 !important; }.income-panel :deep(.dashboard-stored-row td) { color:#c84c5c; background:#fff9fa !important; }.child-name { padding-left:20px; color:#68778c; }.child-name::before { content:'↳'; margin-right:7px; color:#a7b2c1; }.income-source,.stored-exclusion { display:inline-block; margin-left:7px; padding:1px 5px; border-radius:8px; font-size:10px; font-weight:500; line-height:1.4; vertical-align:1px; }.income-source { color:#5b789d; background:#edf4ff; }.stored-exclusion { color:#c83d4e; background:#ffe0e4; }
+.expense-panel :deep(.dashboard-group-row td) { color:#9a3d33; background:#fff5f3 !important; }.income-panel :deep(.dashboard-group-row td) { color:#18734f; background:#f1fbf6 !important; }.income-panel :deep(.dashboard-stored-group-row td) { color:#bf3548; background:#fff0f2 !important; }.income-panel :deep(.dashboard-stored-row td) { color:#c84c5c; background:#fff9fa !important; }.child-name { padding-left:20px; color:#68778c; }.child-name::before { content:none; }.income-source,.stored-exclusion { display:inline-block; margin-left:7px; padding:1px 5px; border-radius:8px; font-size:10px; font-weight:500; line-height:1.4; vertical-align:1px; }.income-source { color:#5b789d; background:#edf4ff; }.stored-exclusion { color:#c83d4e; background:#ffe0e4; }
 .metric-section { margin-top:20px; }.metric-section > h3 { margin:0 0 12px 3px; color:#273e5d; font-size:17px; }.metric-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }.summary-card { min-height:112px; display:flex; flex-direction:column; justify-content:center; gap:8px; padding:14px 18px; border:2px solid #f0d6b5; background:#fff; }.summary-card span { display:flex; align-items:center; gap:7px; color:#6e7d91; font-size:12px; }.summary-card span i { padding:2px 5px; border-radius:7px; color:#8b9aae; background:#f1f5f9; font-size:9px; font-style:normal; opacity:0; transition:opacity .15s ease; }.summary-card.has-breakdown { cursor:help; outline:none; transition:box-shadow .16s ease, border-color .16s ease; }.summary-card.has-breakdown:hover,.summary-card.has-breakdown:focus { border-color:#93b4df; box-shadow:0 9px 18px rgba(39,83,132,.12); }.summary-card.has-breakdown:hover span i,.summary-card.has-breakdown:focus span i { opacity:1; }.summary-card b { color:#283b57; font-size:24px; line-height:1.1; }.summary-card small { color:#98a4b2; font-size:11px; }.summary-card.expense b, .summary-card.negative-net b { color:#d9504d; }.summary-card.income b, .summary-card.positive-net b { color:#16865a; }.summary-card.stored b { color:#7561c9; }
 .metric-breakdown { width:260px; padding:2px; color:#31435b; }.metric-breakdown strong { display:block; margin-bottom:5px; color:#243e65; font-size:13px; }.metric-breakdown > p { margin:0 0 9px; color:#7d8b9d; font-size:11px; line-height:1.5; }.breakdown-line { display:flex; justify-content:space-between; gap:14px; padding:5px 0; border-top:1px dashed #e6ecf4; font-size:12px; }.breakdown-line span { overflow:hidden; color:#617289; text-overflow:ellipsis; white-space:nowrap; }.breakdown-line b { flex:none; color:#2f4669; font-variant-numeric:tabular-nums; }.breakdown-empty { padding:8px 0; color:#97a3b2; font-size:12px; }.metric-breakdown footer { display:flex; justify-content:space-between; margin-top:5px; padding-top:8px; border-top:1px solid #dbe5f0; color:#536983; font-size:12px; }.metric-breakdown footer b { color:#213d64; font-size:14px; }
 .board-empty { padding:76px 0; background:#fff; border:1px solid #edf1f5; border-radius:14px; }
@@ -625,3 +639,4 @@ watch(() => filters.storeIds.join(','), () => { loadDashboardSettingsForCurrentS
 @media (max-width:780px) { .monthly-board-page { padding:14px; }.board-hero { padding:20px; flex-direction:column; }.update-text { text-align:left; }.efficiency-panel > header { flex-direction:column; }.efficiency-body { grid-template-columns:1fr; }.efficiency-chip { border-right:0; border-bottom:1px solid #eef2f7; }.efficiency-chip:last-child { border-bottom:0; }.daily-cost-panel > header { align-items:flex-start; flex-direction:column; }.daily-cost-grid { grid-template-columns:1fr; }.daily-cost-grid article { border-right:0; border-bottom:1px solid #e9eff8; }.daily-cost-grid article:last-child { border-bottom:0; }.metric-grid { grid-template-columns:1fr; }.query-card { align-items:stretch; }.query-field { width:100%; }.store-select { min-width:0; }.revenue-source-metrics,.platform-source-grid{grid-template-columns:1fr 1fr;} }
 @media (max-width:520px){.revenue-source-metrics,.platform-source-grid{grid-template-columns:1fr}.platform-source-button{width:100%}}
 </style>
+

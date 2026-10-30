@@ -67,20 +67,13 @@
             <template #title><span>菜品管理</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
           <el-menu-item
-            v-if="canSeeNav('cost-accounting-group')"
-            index="cost-accounting-group"
-            @mouseenter="showPopup('cost-accounting', $event)"
-            @mouseleave="scheduleHidePopup"
-            :class="{ 'is-popup-open': popupMenu.group === 'cost-accounting', 'is-active': store.activeTabId?.startsWith('cost-accounting-') }"
-          >
-            <el-icon><Money /></el-icon>
-            <template #title><span>成本核算</span><span class="nav-arrow">›</span></template>
-          </el-menu-item>
-
-          <el-menu-item
             v-if="canSeeNav('staff-management-group')"
             index="staff-management-group"
+            ref="staffMenuRef"
+            aria-label="人事专区"
             @mouseenter="showPopup('staff-management', $event)"
+            @click="showStaffPopup"
+            @keydown.enter.prevent="showStaffPopup"
             @mouseleave="scheduleHidePopup"
             :class="{ 'is-popup-open': popupMenu.group === 'staff-management', 'is-active': store.activeTabId?.startsWith('staff-management-') }"
           >
@@ -93,6 +86,11 @@
             <el-icon><List /></el-icon>
             <template #title><span>协同事项</span><small class="nav-badge new">NEW</small></template>
           </el-menu-item>
+          <el-menu-item v-if="canSeeNav('knowledge-base')" index="knowledge-base"><el-icon><List /></el-icon><template #title>知识库管理</template></el-menu-item>
+          <el-menu-item v-if="canSeeNav('store-operations')" index="store-operations"><el-icon><Bell /></el-icon><template #title>门店流程与通知</template></el-menu-item>
+          <el-menu-item v-if="canSeeNav('workflows')" index="workflows"><el-icon><Bell /></el-icon><template #title>审批流程</template></el-menu-item>
+          <el-menu-item v-if="canSeeNav('inspections')" index="inspections"><el-icon><List /></el-icon><template #title>巡检与整改</template></el-menu-item>
+          <el-menu-item v-if="canSeeNav('store-tasks')" index="store-tasks"><el-icon><List /></el-icon><template #title>门店日常任务</template></el-menu-item>
           <el-menu-item v-if="canSeeNav('bookkeeping-entry')" index="bookkeeping-entry">
             <el-icon><Notebook /></el-icon>
             <template #title><span>记账本</span><small class="nav-badge new">NEW</small></template>
@@ -125,10 +123,6 @@
             <el-icon><Bell /></el-icon>
             <template #title><span>通知规则</span></template>
           </el-menu-item>
-          <el-menu-item v-if="canSeeNav('db-viewer')" index="db-viewer">
-            <el-icon><Coin /></el-icon>
-            <template #title><span>数据库查看</span><small class="nav-badge beta">DEV</small></template>
-          </el-menu-item>
           <el-menu-item v-if="canSeeNav('enterprise-settings')" index="enterprise-settings">
             <el-icon><Setting /></el-icon>
             <template #title>企业设置</template>
@@ -158,6 +152,7 @@
         :style="popupStyle"
         @mouseenter="cancelHidePopup"
         @mouseleave="scheduleHidePopup"
+        @keydown.esc.stop="popupMenu.visible = false"
       >
         <template v-if="popupMenu.group">
           <div
@@ -171,6 +166,10 @@
               :key="item.index"
               class="popup-item"
               :class="{ active: store.activeTabId === item.index }"
+              role="button"
+              tabindex="0"
+              @keydown.enter.prevent="selectPopupItem(item.index)"
+              @keydown.space.prevent="selectPopupItem(item.index)"
               @click="selectPopupItem(item.index)"
             >
               {{ item.label }}
@@ -189,6 +188,7 @@
         </el-button>
         <span class="topbar-title">{{ pageTitle }}</span>
         <span :class="['topbar-status', store.serverOnline ? 'online' : 'offline']">{{ store.serverStatusText }}</span>
+        <DailyUpdateNotice v-if="auth.isAdmin" :key="auth.user.id" :user-id="auth.user.id" />
         <el-tooltip :content="isDarkTheme ? '切换到日间模式' : '切换到夜间模式'" placement="bottom">
           <button class="theme-toggle" type="button" :aria-label="isDarkTheme ? '切换到日间模式' : '切换到夜间模式'" @click="toggleTheme">
             <span class="theme-toggle-orb"><el-icon class="theme-icon sun"><Sunny /></el-icon><el-icon class="theme-icon moon"><Moon /></el-icon></span>
@@ -257,6 +257,7 @@
       </div>
 
       <div ref="contentAreaRef" class="content-area">
+        <StaffWorkspaceNav v-if="isStaffManagementRoute" />
         <router-view v-slot="{ Component, route }">
           <KeepAlive :max="30">
             <component v-if="isSpecialRoute && Component" :is="Component" :key="route.name || route.path" />
@@ -273,6 +274,9 @@
 </template>
 
 <script setup>
+import DailyUpdateNotice from '@/components/DailyUpdateNotice.vue'
+import StaffWorkspaceNav from '@/components/StaffWorkspaceNav.vue'
+import { STAFF_GROUPS, STAFF_PAGES, staffPageForPath, staffWorkspaceId, staffRouteForId, visibleStaffGroups, canAccessStaffPage } from '@/navigation/staff.mjs'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Setting, SwitchButton, Bell } from '@element-plus/icons-vue'
@@ -308,15 +312,13 @@ import MenuCategory from '@/views/menu/MenuCategory.vue'
 import MenuCost from '@/views/menu/MenuCost.vue'
 import MenuExpiry from '@/views/menu/MenuExpiry.vue'
 import MenuAccounting from '@/views/menu/MenuAccounting.vue'
-import MenuTemplate from '@/views/menu/MenuTemplate.vue'
-import DailyCost from '@/views/cost/DailyCost.vue'
-import WeeklyCost from '@/views/cost/WeeklyCost.vue'
-import MonthlyCost from '@/views/cost/MonthlyCost.vue'
 import StaffManager from '@/views/staff/StaffManager.vue'
 import StaffClerk from '@/views/staff/StaffClerk.vue'
 import StaffTest from '@/views/staff/StaffTest.vue'
 import StaffEmployees from '@/views/staff/StaffEmployeeAccess.vue'
 import StaffStoreManagement from '@/views/staff/StaffStoreManagement.vue'
+import StaffOrganizations from '@/views/staff/StaffOrganizations.vue'
+import StaffDailyTasks from '@/views/staff/StaffDailyTasks.vue'
 import SalaryPlaceholder from '@/views/staff/SalaryPlaceholder.vue'
 import StaffRoster from '@/views/staff/StaffRoster.vue'
 import PayrollAttendance from '@/views/staff/PayrollAttendance.vue'
@@ -326,18 +328,16 @@ import StaffDispatch from '@/views/staff/StaffDispatch.vue'
 import BookkeepingEntry from '@/views/bookkeeping/BookkeepingEntry.vue'
 import BookkeepingCategories from '@/views/bookkeeping/BookkeepingCategories.vue'
 import BookkeepingRecords from '@/views/bookkeeping/BookkeepingRecords.vue'
+import BookkeepingExpenseTags from '@/views/bookkeeping/BookkeepingExpenseTags.vue'
 import { NAV_GROUP_PERMISSIONS, NAV_ITEM_PERMISSIONS } from '@/permissions'
 
 // 左侧导航按岗位权限过滤：分组标题与菜单项都由这里判断，
 // 权限来自 /api/auth/me（后端每次从岗位表读取，分配岗位后重新登录即生效）。
 const canSeePopupItem = item => {
-  if (item.index === 'staff-management-roster') return auth.canAny(['staff.store.edit','payroll.attendance'])
-  if (item.index === 'staff-management-attendance') return auth.can('payroll.attendance')
-  if (item.index === 'staff-management-payslips') return (auth.isAdmin || auth.canAny(['staff.view','payroll.attendance','payroll.review']) || !auth.permissions.includes('staff.store.edit')) && auth.canAny(['staff.view','payroll.view','payroll.prepare','payroll.attendance','payroll.review'])
-  if (item.index === 'staff-management-review') return auth.can('payroll.review')
-  if (item.index === 'staff-management-employees') return auth.canAny(['staff.view', 'staff.store.edit'])
-  if (item.index === 'staff-management-salary') return auth.canAny(['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'])
-  if (item.index.startsWith('staff-management-')) return auth.can('staff.view')
+  if (item.index.startsWith('staff-management-')) {
+    const group = STAFF_GROUPS.find(group => group.id === item.index)
+    return group ? visibleStaffGroups(auth.permissions).some(item => item.id === group.id) : canAccessStaffPage(STAFF_PAGES.find(page => page.id === item.index), auth.permissions)
+  }
   return true
 }
 const canSeeNav = index => auth.can(NAV_ITEM_PERMISSIONS[index])
@@ -369,18 +369,16 @@ const COMPONENT_MAP = {
   'store-management-operating': StoreOperatingCost,
   'menu-management-overview': MenuOverview,
   'menu-management-category': MenuCategory,
-  'menu-management-template': MenuTemplate,
   'menu-management-cost': MenuCost,
   'menu-management-expiry': MenuExpiry,
   'menu-management-accounting': MenuAccounting,
-  'cost-accounting-daily': DailyCost,
-  'cost-accounting-weekly': WeeklyCost,
-  'cost-accounting-monthly': MonthlyCost,
   'staff-management-manager': StaffManager,
   'staff-management-clerk': StaffClerk,
   'staff-management-test': StaffTest,
   'staff-management-employees': StaffEmployees,
   'staff-management-store': StaffStoreManagement,
+  'staff-management-organizations':StaffOrganizations,
+  'staff-management-daily-tasks':StaffDailyTasks,
   'staff-management-salary': SalaryPlaceholder,
   'staff-management-attendance': PayrollAttendance,
   'staff-management-roster': StaffRoster,
@@ -390,6 +388,7 @@ const COMPONENT_MAP = {
   'bookkeeping-entry': BookkeepingEntry,
   'bookkeeping-categories': BookkeepingCategories,
   'bookkeeping-records': BookkeepingRecords,
+  'bookkeeping-expense-tags': BookkeepingExpenseTags,
 }
 
 // ===== 浮动弹出菜单配置 =====
@@ -423,6 +422,7 @@ const POPUP_CONFIG = {
           { index: 'analysis-delivery-brand', label: '品牌视角' },
           { index: 'analysis-delivery-store', label: '门店视角' },
           { index: 'analysis-delivery-binding', label: '外卖菜品绑定' },
+          { index: 'analysis-delivery-fees', label: '外卖字段分类' },
         ],
       },
     ],
@@ -466,7 +466,6 @@ const POPUP_CONFIG = {
         items: [
           { index: 'menu-management-overview', label: '菜品总览' },
           { index: 'menu-management-category', label: '菜品分类' },
-          { index: 'menu-management-template', label: '菜品模板' },
           { index: 'menu-management-cost', label: '菜品成本' },
           { index: 'menu-management-expiry', label: '效期管理' },
           { index: 'menu-management-accounting', label: '菜品核算' },
@@ -474,34 +473,8 @@ const POPUP_CONFIG = {
       },
     ],
   },
-  'cost-accounting': {
-    sections: [
-      {
-        title: '成本分析',
-        items: [
-          { index: 'cost-accounting-daily', label: '日成本核算' },
-          { index: 'cost-accounting-weekly', label: '周成本核算' },
-          { index: 'cost-accounting-monthly', label: '月成本核算' },
-        ],
-      },
-    ],
-  },
   'staff-management': {
-    sections: [
-      {
-        title: '人事管理',
-        items: [
-          { index: 'staff-management-employees', label: '员工管理' },
-          { index: 'staff-management-store', label: '门店管理' },
-          { index: 'staff-management-salary', label: '工资表制作' },
-          { index: 'staff-management-roster', label: '员工考勤' },
-          { index: 'staff-management-attendance', label: '月出勤管理' },
-          { index: 'staff-management-review', label: '工资审核' },
-          { index: 'staff-management-payslips', label: '员工工资条查询' },
-          { index: 'staff-management-dispatch', label: '员工调岗' },
-        ],
-      },
-    ],
+    sections: [{ title: '人事管理', items: STAFF_GROUPS.map(group => ({ index: group.id, label: group.label })) }],
   },
   bookkeeping: {
     sections: [
@@ -511,6 +484,7 @@ const POPUP_CONFIG = {
           { index: 'bookkeeping-entry', label: '门店记账' },
           { index: 'bookkeeping-categories', label: '记账分类' },
           { index: 'bookkeeping-records', label: '门店账本' },
+          { index: 'bookkeeping-expense-tags', label: '字段分配' },
         ],
       },
     ],
@@ -521,7 +495,7 @@ const POPUP_CONFIG = {
         title: '经营数据',
         items: [
           { index: 'data-import-pos', label: '收银系统数据' },
-          { index: 'data-import-pos-automation', label: '收银系统 · 自动导报表' },
+          { index: 'data-import-pos-automation', label: '自动导报表' },
           { index: 'data-import-group-buy', label: '团购平台数据' },
           { index: 'data-import-delivery', label: '外卖平台数据' },
         ],
@@ -537,8 +511,13 @@ const POPUP_CONFIG = {
 const store = useAppStore()
 const router = useRouter()
 const contentAreaRef = ref(null)
+const staffMenuRef = ref(null)
 const auth = useAuthStore()
 const currentView = shallowRef(DashboardView)
+const pipelineLastPath = ref('/pipeline/group-buy-daily')
+watch(() => router.currentRoute.value.path, path => {
+  if (path.startsWith('/pipeline/')) pipelineLastPath.value = path
+}, { immediate: true })
 // 笔记本的可用内容宽度通常不足以同时容纳完整侧栏与数据表。
 // 默认自动收起侧栏；用户仍可通过顶部按钮临时展开查看导航。
 const responsiveCollapsed = ref(false)
@@ -564,7 +543,6 @@ const isBusinessAnalyticsRoute = computed(() => router.currentRoute.value.path =
 const isDataImportRoute = computed(() => router.currentRoute.value.path.startsWith('/data-import/'))
 const isEnterpriseSettingsRoute = computed(() => router.currentRoute.value.path.startsWith('/enterprise-settings'))
 const isStore3dRoute = computed(() => router.currentRoute.value.path === '/store-3d')
-const isDbViewerRoute = computed(() => router.currentRoute.value.path === '/db-viewer')
 const isStaffManagementRoute = computed(() => router.currentRoute.value.path.startsWith('/staff-management/'))
 const isNotificationRoute = computed(() => router.currentRoute.value.path.startsWith('/notifications'))
 const isNotificationRulesRoute = computed(() => router.currentRoute.value.path.startsWith('/notification-rules'))
@@ -574,7 +552,6 @@ const workspaceRouteTabId = computed(() => {
   const prefix = {
     'workspace-store-management': 'store-management',
     'workspace-menu-management': 'menu-management',
-    'workspace-cost-accounting': 'cost-accounting',
     'workspace-bookkeeping': 'bookkeeping',
   }[route.name]
   if (prefix && section) return `${prefix}-${section}`
@@ -583,10 +560,15 @@ const workspaceRouteTabId = computed(() => {
     'workspace-pipeline-pos': 'pipeline',
     'workspace-pipeline-pos-schedule': 'pipeline',
     'workspace-pipeline-pos-store': 'pipeline',
+    'workspace-pipeline-store-finance': 'pipeline',
     'workspace-ai-assistant': 'ai-assistant',
     'workspace-user-management': 'user-management',
     'workspace-position-settings': 'position-settings',
     'workspace-settings': 'settings',
+    'knowledge-base':'knowledge-base',
+    workflows:'workflows', 'store-operations':'store-operations',
+    'inspections':'inspections',
+    'store-tasks': 'store-tasks',
     // 挂在工作台下的独立静态路由（不是 :section 通配），刷新/直接访问时必须能反查回标签 id，
     // 否则地址栏正确但内容区落到数据概括。新增这类页面记得同步登记。
     'menu-management-category': 'menu-management-category',
@@ -594,7 +576,7 @@ const workspaceRouteTabId = computed(() => {
   }[route.name] || ''
 })
 const isWorkspaceRoute = computed(() => Boolean(workspaceRouteTabId.value))
-const isSpecialRoute = computed(() => isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value || isDbViewerRoute.value)
+const isSpecialRoute = computed(() => ['knowledge-base','workflows','store-operations','inspections'].includes(router.currentRoute.value.name) || router.currentRoute.value.name === 'store-tasks' || isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value)
 const businessRouteTabId = computed(() => router.currentRoute.value.meta.analysisKey || 'analysis-total-brand')
 const dataImportRouteTabId = computed(() => ({
   pos: 'data-import-pos',
@@ -603,38 +585,40 @@ const dataImportRouteTabId = computed(() => ({
   delivery: 'data-import-delivery',
   legacy: 'data-import-legacy',
 }[router.currentRoute.value.meta.importMode] || 'data-import-pos'))
-const staffRouteTabId = computed(() => ({
-  '/staff-management/store-management': 'staff-management-store',
-  '/staff-management/salary': 'staff-management-salary',
-  '/staff-management/roster': 'staff-management-roster',
-  '/staff-management/attendance': 'staff-management-attendance',
-  '/staff-management/review': 'staff-management-review',
-  '/staff-management/payslips': 'staff-management-payslips',
-  '/staff-management/dispatch': 'staff-management-dispatch',
-}[router.currentRoute.value.path] || 'staff-management-employees'))
+const staffCurrentPage = computed(() => staffPageForPath(router.currentRoute.value.path))
+const staffRouteTabId = computed(() => staffWorkspaceId(staffCurrentPage.value?.id || 'staff-management-employees'))
+const staffLastPaths = reactive({})
+watch(() => router.currentRoute.value.path, path => {
+  const page = staffPageForPath(path)
+  if (page) staffLastPaths[staffWorkspaceId(page.id)] = path
+}, { immediate: true })
 const pageTitle = computed(() => {
+  if (router.currentRoute.value.name === 'knowledge-base') return '知识库管理'
+  if (router.currentRoute.value.name === 'inspections') return '巡检与整改'
+  if (router.currentRoute.value.name === 'store-tasks') return '门店日常任务'
   if (isCollabRoute.value) return '协同事项'
   if (isBusinessAnalyticsRoute.value) {
     return `数据分析 · ${router.currentRoute.value.meta.analysisTitle || '总数据视角'}`
   }
   if (isDataImportRoute.value) {
-    const label = { pos: '收银系统数据', 'pos-automation': '收银系统 · 自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
+    const label = { pos: '收银系统数据', 'pos-automation': '自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
     return `数据导入 · ${label}`
   }
   if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
   if (isStore3dRoute.value) return '筹建门店 · 门店渲染'
-  if (isDbViewerRoute.value) return '数据库查看'
-  if (isStaffManagementRoute.value) return ({ 'staff-management-roster': '人事专区 · 员工考勤', 'staff-management-store': '人事专区 · 门店管理', 'staff-management-salary': '人事专区 · 工资表制作', 'staff-management-attendance': '人事专区 · 月出勤管理', 'staff-management-review': '人事专区 · 工资审核', 'staff-management-payslips': '人事专区 · 员工工资条查询', 'staff-management-dispatch': '人事专区 · 员工调岗' }[staffRouteTabId.value] || '人事专区 · 员工管理')
+  if (isStaffManagementRoute.value) return `人事专区 · ${staffCurrentPage.value?.label || '员工管理'}`
   if (isWorkspaceRoute.value) return store.activeTab?.title || '工作台'
   return store.activeTab?.title || '数据概括'
 })
 const sidebarActive = computed(() => {
+  if (router.currentRoute.value.name === 'knowledge-base') return 'knowledge-base'
+  if (router.currentRoute.value.name === 'inspections') return 'inspections'
+  if (router.currentRoute.value.name === 'store-tasks') return 'store-tasks'
   if (isCollabRoute.value) return 'collab-list'
   if (isBusinessAnalyticsRoute.value) return 'analysis-group'
   if (isDataImportRoute.value) return 'data-import-group'
   if (isEnterpriseSettingsRoute.value) return 'enterprise-settings'
   if (isStore3dRoute.value) return 'store-preparation-group'
-  if (isDbViewerRoute.value) return 'db-viewer'
   if (isStaffManagementRoute.value) return 'staff-management-group'
   return store.activeTabId
 })
@@ -784,9 +768,14 @@ function showPopup(group, event) {
   const rect = event.currentTarget.getBoundingClientRect()
   popupMenu.group = group
   popupMenu.sections = POPUP_CONFIG[group]?.sections || []
-  popupMenu.top = Math.min(rect.top - 4, window.innerHeight - 240)
-  popupMenu.left = rect.right + 10
+  popupMenu.top = Math.max(12, Math.min(rect.top - 4, window.innerHeight - (group === 'staff-management' ? 300 : 240)))
+  popupMenu.left = group === 'staff-management' ? Math.max(12, Math.min(rect.right + 10, window.innerWidth - 352)) : rect.right + 10
   popupMenu.visible = true
+}
+
+function showStaffPopup() {
+  const element = staffMenuRef.value?.$el
+  if (element) showPopup('staff-management', { currentTarget: element })
 }
 
 function scheduleHidePopup() {
@@ -806,6 +795,10 @@ async function leaveSpecialRoute() {
 }
 
 const WORKSPACE_TAB_ROUTES = {
+  workflows:'/workflows', 'store-operations':'/store-operations',
+  'knowledge-base':'/knowledge-base',
+  'inspections':'/inspections',
+  'store-tasks': '/store-tasks',
   dashboard: '/dashboard',
   pipeline: '/pipeline/group-buy-daily',
   'ai-assistant': '/ai-assistant',
@@ -824,21 +817,18 @@ const WORKSPACE_TAB_ROUTES = {
   'store-management-operating': '/store-management/operating',
   'menu-management-overview': '/menu-management/overview',
   'menu-management-category': '/menu-management/category',
-  'menu-management-template': '/menu-management/template',
   'menu-management-cost': '/menu-management/cost',
   'menu-management-expiry': '/menu-management/expiry',
   'menu-management-accounting': '/menu-management/accounting',
-  'cost-accounting-daily': '/cost-accounting/daily',
-  'cost-accounting-weekly': '/cost-accounting/weekly',
-  'cost-accounting-monthly': '/cost-accounting/monthly',
   'bookkeeping-entry': '/bookkeeping/entry',
   'bookkeeping-categories': '/bookkeeping/categories',
   'bookkeeping-records': '/bookkeeping/records',
+  'bookkeeping-expense-tags': '/bookkeeping/expense-tags',
 }
 
 async function openWorkspaceTab(id) {
   store.openTabFromId(id)
-  const routePath = WORKSPACE_TAB_ROUTES[id]
+  const routePath = id === 'pipeline' ? pipelineLastPath.value : WORKSPACE_TAB_ROUTES[id]
   if (routePath) await router.push(routePath)
   else await leaveSpecialRoute()
 }
@@ -860,6 +850,7 @@ async function selectPopupItem(index) {
       'analysis-total-store': '/analysis/total/store',
       'analysis-total-custom': '/analysis/total/custom',
       'analysis-total-monthly-dashboard': '/analysis/total/monthly-dashboard',
+      'analysis-delivery-fees': '/analysis/delivery/fee-rules',
       'analysis-total-binding': '/analysis/total/binding',
       'analysis-group-platform': '/analysis/group-buy/platform',
       'analysis-group-meituan': '/analysis/group-buy/platform',
@@ -900,9 +891,9 @@ async function selectPopupItem(index) {
     return
   }
   if (index.startsWith('staff-management-')) {
-    store.openTabFromId(index)
-    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary', 'staff-management-attendance': '/staff-management/attendance', 'staff-management-roster': '/staff-management/roster', 'staff-management-review': '/staff-management/review', 'staff-management-payslips': '/staff-management/payslips', 'staff-management-dispatch': '/staff-management/dispatch' }[index]
-    await router.push(routePath || '/staff-management/employees')
+    const routePath = staffRouteForId(index, auth.permissions, staffLastPaths)
+    if (!routePath) return
+    await router.push(routePath)
     popupMenu.visible = false
     popupMenu.group = null
     popupMenu.sections = []
@@ -918,11 +909,6 @@ async function handleMenuSelect(index) {
   if (index === 'collab-list') {
     store.openTabFromId('collab')
     await router.push('/collab/list')
-    return
-  }
-  if (index === 'db-viewer') {
-    store.openTabFromId('db-viewer')
-    await router.push('/db-viewer')
     return
   }
   if (index === 'enterprise-settings') {
@@ -946,11 +932,6 @@ async function selectTab(id) {
     await router.push('/collab/list')
     return
   }
-  if (id === 'db-viewer') {
-    store.activeTabId = id
-    await router.push('/db-viewer')
-    return
-  }
   if (id === 'enterprise-settings') {
     store.activeTabId = id
     await router.push('/enterprise-settings/robot')
@@ -964,6 +945,7 @@ async function selectTab(id) {
       'analysis-total-store': '/analysis/total/store',
       'analysis-total-custom': '/analysis/total/custom',
       'analysis-total-monthly-dashboard': '/analysis/total/monthly-dashboard',
+      'analysis-delivery-fees': '/analysis/delivery/fee-rules',
       'analysis-total-binding': '/analysis/total/binding',
       'analysis-group-platform': '/analysis/group-buy/platform',
       'analysis-group-meituan': '/analysis/group-buy/platform',
@@ -998,19 +980,24 @@ async function selectTab(id) {
     return
   }
   if (id.startsWith('staff-management-')) {
-    store.activeTabId = id
-    const routePath = { 'staff-management-employees': '/staff-management/employees', 'staff-management-store': '/staff-management/store-management', 'staff-management-salary': '/staff-management/salary', 'staff-management-attendance': '/staff-management/attendance', 'staff-management-roster': '/staff-management/roster', 'staff-management-review': '/staff-management/review', 'staff-management-payslips': '/staff-management/payslips', 'staff-management-dispatch': '/staff-management/dispatch' }[id]
-    await router.push(routePath || '/staff-management/employees')
+    const routePath = staffRouteForId(id, auth.permissions, staffLastPaths)
+    if (routePath) await router.push(routePath)
     return
   }
-  const routePath = WORKSPACE_TAB_ROUTES[id]
+  const routePath = id === 'pipeline' ? pipelineLastPath.value : WORKSPACE_TAB_ROUTES[id]
   store.activeTabId = id
   if (routePath) await router.push(routePath)
   else await leaveSpecialRoute()
 }
 
 async function closeTab(id) {
+  const closingStaffWorkspace = isStaffManagementRoute.value && staffRouteTabId.value === id
   store.closeTab(id)
+  if (closingStaffWorkspace) {
+    if (store.activeTabId) await selectTab(store.activeTabId)
+    else await router.push('/dashboard')
+    return
+  }
   if (id === 'collab' && isCollabRoute.value) await router.push('/')
   if (id.startsWith('analysis-') && isBusinessAnalyticsRoute.value) await router.push('/')
   if (id.startsWith('data-import-') && isDataImportRoute.value) await router.push('/')
@@ -1198,6 +1185,9 @@ onBeforeUnmount(() => {
   background: #4f7cff;
   box-shadow: 0 0 0 3px rgba(79,124,255,.12);
 }
+
+
+.popup-item:focus-visible{outline:2px solid var(--el-color-primary);outline-offset:1px}
 
 /* 侧边栏箭头 */
 .nav-arrow {

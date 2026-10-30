@@ -22,7 +22,7 @@
       <main class="upload-panel">
         <header>
           <span class="step-no">01</span>
-          <div><h3>{{ isDirectSource ? `上传${platform}原始报表` : '选择并上传营业文件' }}</h3><p>{{ isDouyinGroupBuy && groupReportKind === 'operation' ? '录入访问人数、购买人数、门店评分、累计评价数；营业额和实收自动取分账明细。' : isMeituanGroupOperation ? '只读取门店基础数据明细表；成交/核销/退款原字段不会展示，实际到账自动匹配收益明细。' : isMeituanGroupBuy ? '只读取“收益明细”工作表，按美团团购门店 ID 与收益时间精确入库。' : isDouyinGroupBuy ? '只读取“分账明细-正向-团购”和“分账明细-退款-团购”，按核销时间、订单编号与核销门店 ID 自动抵销。' : isMeituanDelivery ? '无需整理模板，先选好文件，点击「开始导入」后系统才自动识别报表类型，并按平台门店 ID 精确关联。' : '支持 Excel（.xlsx / .xls）和 CSV，同门店、同日期、同渠道再次导入会覆盖旧记录。' }}</p></div>
+          <div><h3>{{ isDirectSource ? `上传${platform}原始报表` : '选择并上传营业文件' }}</h3><p>{{ isDouyinGroupBuy && groupReportKind === 'operation' ? '录入访问人数、购买人数、门店评分、累计评价数；营业额和实收自动取分账明细。' : isMeituanGroupOperation ? '只读取门店基础数据明细表；成交、消费与退款指标分别展示，实际到账自动匹配收益明细。' : isMeituanGroupBuy ? '只读取“收益明细”工作表，按美团团购门店 ID 与收益时间精确入库。' : isDouyinGroupBuy ? '只读取“分账明细-正向-团购”和“分账明细-退款-团购”，按核销时间、订单编号与核销门店 ID 自动抵销。' : isMeituanDelivery ? '无需整理模板，先选好文件，点击「开始导入」后系统才自动识别报表类型，并按平台门店 ID 精确关联。' : '支持 Excel（.xlsx / .xls）和 CSV，同门店、同日期、同渠道再次导入会覆盖旧记录。' }}</p></div>
         </header>
 
         <el-form label-position="top">
@@ -157,7 +157,7 @@ const mode = ref(['group-buy', 'delivery'].includes(route.meta.importMode) ? rou
 const configs = {
   pos: {
     title: '收银系统数据导入',
-    description: '支持标准模板，也可直接上传收银系统“综合营业统计”原表；原表仅提取已配置的渠道字段入库。',
+    description: '支持综合营业统计、品项销售明细和全渠道订单明细（新版）；订单表仅保存订单与付款构成，用于逐笔手续费核对。',
     platforms: [],
     groups: [
       { title: '基础识别', fields: [{ name: '日期', required: true, note: '营业日期，格式 YYYY-MM-DD' }, { name: '门店ID / 门店名称', required: true, note: '至少填写一项，必须与门店档案匹配' }, { name: '订单数', note: '门店当日总订单数' }] },
@@ -204,7 +204,7 @@ const activeImportDescription = computed(() => {
   return `${platform.value || '当前平台'}的导入规则、字段说明与文件记录独立展示。`
 })
 const platformTabs = computed(() => mode.value === 'pos'
-  ? [{ value: '收银系统', label: '收银系统', short: 'POS', note: '综合营业统计 / 标准模板' }]
+  ? [{ value: '收银系统', label: '收银系统', short: 'POS', note: '综合营业统计 / 品项销售明细 / 全渠道订单明细（新版）' }]
   : config.value.platforms.map(name => ({
     value: name,
     label: name,
@@ -232,7 +232,7 @@ const douyinReportOptions = [
  {key:'operation',title:'门店经营数据',description:'访问人数、购买人数、门店评分、累计评价数；自动计算下单转化率。',destination:'门店经营看板',icon:TrendCharts,tone:'revenue'}
 ]
 const groupReportOptions = [
-  { key: 'benefit', title: '收益明细', description: '生成实际到账、费用明细与团购菜品来源。', destination: '结算与菜品分析', icon: Money, tone: 'revenue' },
+  { key: 'benefit', title: '收益明细', description: '支持团购及买单导出；买单仅计一键买单尾款，扣除券额与店内收银抵扣。', destination: '结算与菜品分析', icon: Money, tone: 'revenue' },
   { key: 'operation', title: '门店基础数据', description: '导入营业额、收入、订单量、流量与评分。实际到账自动取收益明细。', destination: '经营趋势看板', icon: TrendCharts, tone: 'revenue' },
 ]
 const meituanReports = computed(() => platform.value === '淘宝闪购'
@@ -267,13 +267,13 @@ const meituanGroupByPlatform = {
     { title: '商品销量报表', fields: [{ name: '日期 / 门店id / 商品名称', required: true, note: '三项共同确定一条商品销量记录' }, { name: '商品销量 / 商品销售额', note: '同一商品的重复行会自动合并' }] },
   ],
 }
-const meituanGroupOperationGroups = [{ title: '门店基础数据（只读取明细表）', fields: [{ name: '日期 / 美团门店ID / 门店名称', required: true, note: '按日期和美团团购门店 ID 精确归属' }, { name: '曝光人数 / 访问人数 / 购买人数', required: true, note: '进入流量转化趋势；两个转化率由人数重新计算，不读取原表百分比' }, { name: '成交金额 / 核销金额', required: true, note: '分别映射为营业额、收入；原字段名不在看板展示' }, { name: '美团星级 / 点评星级 / 全部评价数', note: '独立进入评分评价趋势组' }, { name: '退款金额', note: '只保留在原始行追溯，不参与本经营看板' }] }]
+const meituanGroupOperationGroups = [{ title: '门店基础数据（只读取明细表）', fields: [{ name: '日期 / 美团门店ID / 门店名称', required: true, note: '按日期和美团团购门店 ID 精确归属；支持首行分组标题、次行字段名' }, { name: '曝光人数 / 访问人数 / 购买人数 / 打卡人数', required: true, note: '人数分别保存；进店转化率、下单转化率按筛选范围重算' }, { name: '成交订单数 / 成交金额(优惠后) / 消费金额 / 消费人数', required: true, note: '订单数直接读取成交订单数；消费金额是平台经营指标，不是实际到账' }, { name: '退款金额 / 退款订单数', note: '直接读取原列；退单率按退款订单数除以成交订单数计算' }, { name: '美团星级 / 点评星级 / 全部评价数', note: '评分与评价按门店期末快照展示' }] }]
 const meituanGroupBenefitGroups = [{ title: '收益明细（仅此工作表）', fields: [{ name: '收益时间（C列）/ 美团门店ID（J列）', required: true, note: '收益时间是唯一结算归属日期；门店严格按美团团购 ID 匹配' }, { name: '项目名称（L列）', required: true, note: '消费与撤销流水自动进入“团购菜品绑定”，关联堂食菜品成本' }, { name: '售价（T列）/ 商家应得（AP列）', required: true, note: '售价计营业额；商家应得计真实结算收入' }, { name: 'U–AO 全部费用', required: true, note: '全量保留并纳入平台费用，保险、退款、推广等按原始字段可追溯' }, { name: 'AQ 美团补贴 / AR 顾客支付 / AS 售卖方式', note: '补贴不算商家费用；线上交易、线下买单分别保留' }] }]
 const douyinGroupSettlementGroups = [{ title: '分账明细（必须同时存在两张表）', fields: [{ name: '核销时间（A列）/ 订单编号（B列）', required: true, note: '核销时间决定营业日期，订单编号连接正向与退款流水' }, { name: '核销门店 ID（K列）/ 订单商品（N列）', required: true, note: '门店严格按抖音团购 ID 匹配；商品自动进入团购菜品绑定' }, { name: '售卖金额（U列）/ 到手金额（BK列）', required: true, note: '售卖金额计营业额，到手金额是最终真实结算收入' }, { name: 'X–BI 第三方费用与费率', required: true, note: '金额字段逐项保留用于费用看板；费率仅作原始追溯，不参与二次扣减' }] }]
 const douyinOperationGroups = [{title:'门店经营数据',fields:[{name:'门店ID / 天',required:true,note:'按抖音平台门店ID和日期关联'},{name:'访问人数 / 购买人数',required:true,note:'下单转化率按购买人数除以访问人数计算'},{name:'门店评分 / 累计评价数',required:true,note:'查询期末快照；累计评价不按每日重复相加'}]}]
 const activeGroups = computed(() => isDouyinGroupBuy.value && groupReportKind.value === 'operation' ? douyinOperationGroups : isMeituanGroupOperation.value ? meituanGroupOperationGroups : isMeituanGroupBuy.value ? meituanGroupBenefitGroups : isDouyinGroupBuy.value ? douyinGroupSettlementGroups : isMeituanDelivery.value ? (meituanGroupByPlatform[platform.value] || []) : config.value.groups)
 const activeFormula = computed(() => isDouyinGroupBuy.value && groupReportKind.value === 'operation' ? '下单转化率 = 购买人数 ÷ 访问人数；营业额、实收继续读取分账明细。' : isMeituanGroupOperation.value
-  ? '营业额 = 成交金额；收入 = 核销金额；订单量 = 购买人数；曝光-访问转化率 = 访问人数 ÷ 曝光人数；访问-购买转化率 = 购买人数 ÷ 访问人数；实际到账 = 同门店、同日期收益明细的商家应得。'
+  ? '进店转化率 = 访问人数 ÷ 曝光人数；下单转化率 = 购买人数 ÷ 访问人数；到店核销率 = 消费人数 ÷ 购买人数；退单率 = 退款订单数 ÷ 成交订单数。成交订单数、退款金额直接读取原表；实际到账仍取收益明细。'
   : isMeituanGroupBuy.value
   ? '营业额 = 售价（T）；平台费用 = U–AO；商家应得（AP）= 售价 − 平台费用。AQ 美团补贴只计算顾客实际支付（AR），不计为商家成本。'
   : isDouyinGroupBuy.value
@@ -286,9 +286,9 @@ const activeFormula = computed(() => isDouyinGroupBuy.value && groupReportKind.v
       : '营业报表按门店、日期更新平台营收；商品报表按门店、日期、商品汇总，重复商品自动合并。'
   : config.value.formula)
 const activeWorkflow = computed(() => isDouyinGroupBuy.value && groupReportKind.value === 'operation' ? [{title:'匹配门店与日期',note:'按抖音门店ID精确匹配'}, {title:'导入经营指标',note:'访问人数、购买人数、门店评分、累计评价数'}, {title:'计算下单转化率',note:'购买人数除以访问人数，按当前筛选范围重算'}] : isMeituanGroupOperation.value
-  ? [{ title: '读取门店基础明细', note: '只读取含美团门店 ID 的明细表，不读取汇总页，避免重复累计' }, { title: '重算转化率', note: '曝光—访问、访问—购买均以汇总人数重新计算' }, { title: '关联收益明细', note: '实际到账自动读取同门店、同日期已导入收益明细的商家应得' }]
+  ? [{ title: '读取门店基础明细', note: '只读取含美团门店 ID 的明细表，不读取汇总页，避免重复累计' }, { title: '重算四项比率', note: '按当前筛选范围的汇总人数或订单数计算，分母为 0 时显示缺失' }, { title: '关联收益明细', note: '实际到账自动读取同门店、同日期已导入收益明细的商家应得' }]
   : isMeituanGroupBuy.value
-  ? [{ title: '仅识别收益明细', note: '同文件的其他工作表不会读取或入库' }, { title: '按收益时间汇总', note: '消费、保险、撤销、退保等所有结算流水共同生成日账' }, { title: '生成菜品成本入口', note: '仅消费和撤销的项目名称进入团购菜品绑定' }]
+  ? [{ title: '导出订单收益明细', note: '分别在团购、买单标签下载订单收益明细，请勿使用列表汇总数据' }, { title: '核对尾款与到账', note: '买单仅取“一键买单”，保留实付、抵扣、退款及服务费；券包与智能点餐不计入尾款' }, { title: '与团购分别更新', note: '团购和尾款按各自范围覆盖，重复导入不累计；尾款不新增菜品销量' }]
   : isDouyinGroupBuy.value
   ? [{ title: '校验正向与退款两表', note: '缺少任一工作表将拒绝导入，避免退款漏算' }, { title: '按核销时间和订单编号抵销', note: '同订单正向与退款自动归到同一营业日和门店' }, { title: '生成费用与菜品数据', note: 'X–BI 保留费用字段，订单商品进入团购菜品绑定' }]
   : isMeituanDelivery.value
@@ -416,6 +416,8 @@ async function submitImport() {
     const settlementLabel = platform.value === '淘宝闪购' ? '账单汇总' : '结算账单'
     const stats = ['meituan_group_operation', 'douyin_group_operation'].includes(response.data_kind)
       ? [{ label: '经营明细', value: `${imported} 条` }, { label: '原始记录', value: `${response.raw_imported || 0} 条` }, { label: '匹配门店', value: `${response.matched_stores || 0} 家` }, { label: '运营周期', value: response.date_from && response.date_to ? `${response.date_from} 至 ${response.date_to}` : '—' }]
+      : response.data_kind === 'meituan_oneclick'
+      ? [{ label: '尾款流水', value: `${response.raw_imported || 0} 条` }, { label: '排除其他买单', value: `${response.excluded_rows || 0} 条` }, { label: '尾款（退款后）', value: `¥${formatMoney(response.gross_total)}` }, { label: '平台费用', value: `¥${formatMoney(response.fee_total)}` }, { label: '商家应得', value: `¥${formatMoney(response.net_total)}` }]
       : response.data_kind === 'meituan_group_benefit'
       ? [{ label: '已写入日账', value: `${imported} 条` }, { label: '原始收益流水', value: `${response.raw_imported || 0} 条` }, { label: '团购菜品', value: `${response.product_rows || 0} 条` }, { label: '营业额', value: `¥${formatMoney(response.gross_total)}` }, { label: '第三方费用', value: `¥${formatMoney(response.fee_total)}` }, { label: '商家应得', value: `¥${formatMoney(response.net_total)}` }]
       : response.data_kind === 'douyin_group_settlement'
@@ -435,12 +437,16 @@ async function submitImport() {
       message: (platformSwitch ? `已按文件内门店 ID 自动识别为「${platformSwitch.to}」（原选择「${platformSwitch.from}」），本次数据记入 ${platformSwitch.to}。` : '') + (imported > 0
         ? response.data_kind === 'douyin_group_operation'
           ? `已保存 ${response.raw_imported || 0} 条经营记录，其中 ${imported} 条已匹配门店；仅录入访问人数、购买人数、门店评分和累计评价数，下单转化率自动计算。营业额和实收仍取分账明细，不受本次导入影响。${response.unmatched ? ` ${response.unmatched} 条未匹配门店暂不参与看板，请核对门店的抖音 ID。` : ''}`
+          : response.data_kind === 'meituan_oneclick'
+          ? `已写入 ${response.raw_imported || 0} 条一键买单尾款，匹配 ${response.matched_stores || 0} 家门店；其他买单 ${response.excluded_rows || 0} 条未计入。尾款（退款后）¥${formatMoney(response.gross_total)} − 平台费用 ¥${formatMoney(response.fee_total)} = 商家应得 ¥${formatMoney(response.net_total)}；原团购流水保留，尾款不新增菜品销量。`
           : response.data_kind === 'meituan_group_benefit'
           ? `仅“收益明细”工作表已入库：${response.raw_imported || 0} 条原始流水汇总为 ${imported} 条门店日账；售价 ¥${formatMoney(response.gross_total)} − U–AO 第三方费用 ¥${formatMoney(response.fee_total)} = 商家应得 ¥${formatMoney(response.net_total)}。AQ 美团补贴 ¥${formatMoney(response.customer_promotion_total)} 与 AR 顾客实际支付 ¥${formatMoney(response.customer_paid_total)} 已单独保留；消费/撤销项目已写入团购菜品绑定。${response.unmatched ? ` ${response.unmatched} 条未匹配门店暂不参与看板。` : ''}`
           : response.data_kind === 'douyin_group_settlement'
           ? `已读取抖音团购正向/退款两张分账明细：${response.raw_imported || 0} 条流水汇总为 ${imported} 条门店日账；U列售卖金额 ¥${formatMoney(response.gross_total)}，BK列到手收入 ¥${formatMoney(response.net_total)}。X–BI 的费用金额已逐项保留用于费用明细展示，不会从到手收入重复扣减；${response.product_rows || 0} 条团购菜品已进入绑定来源。${response.unmatched ? ` ${response.unmatched} 条未匹配门店暂不参与看板。` : ''}`
           : settlementBills
           ? `已写入 ${response.revenue_records || 0} 条结算记录；${settlementLabel}原始明细 ${response.raw_imported || 0} 条${response.unmatched ? `，${response.unmatched} 条因未登记${platform.value}门店 ID 暂未计入` : '，全部匹配门店'}。优惠后收入 ¥${formatMoney(response.delivery_amount_total)} − 平台费用 ¥${formatMoney(response.fee_total)} = 真实实收 ¥${formatMoney(response.net_total)}；营业额和客户优惠继续由日报提供。${response.extra_headers?.length ? `本次发现新增列：${response.extra_headers.join('、')}，已随原始行自动收录。` : ''}${skipped ? `；跳过 ${skipped} 行异常数据` : ''}`
+          : response.data_kind === 'all_channel_orders'
+          ? `全渠道订单明细已写入 ${imported} 条订单，匹配 ${response.matched_stores} 家门店、${response.covered_store_days || 0} 个门店营业日（${response.date_from} 至 ${response.date_to}）；付款与退款构成用于逐笔计算堂食手续费。`
           : response.data_kind === 'cashier_composite'
           ? `已识别收银系统“综合营业统计”原表，按“淘宝闪购 → 营业额 / 营业收入 / 订单量”动态定位所需字段；已写入 ${imported} 条收银侧核对记录${skipped ? `；跳过 ${skipped} 行未匹配门店` : ''}。`
           : response.data_kind === 'product_sales'

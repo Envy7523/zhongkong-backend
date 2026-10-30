@@ -3,13 +3,14 @@
     <header><div><h2>{{ storeName }} · 员工信息</h2><p>只显示本店员工。固定薪酬、调店及离职流程由人事维护。</p></div><el-button type="primary" @click="edit()">录入员工</el-button></header>
     <el-table :data="employees" border v-loading="loading">
       <el-table-column prop="name" label="姓名" /><el-table-column prop="position" label="职务" /><el-table-column prop="phone" label="手机号" /><el-table-column prop="entry_date" label="入职日期" /><el-table-column prop="hire_type" label="用工类型" /><el-table-column prop="status" label="状态" />
-      <el-table-column label="操作" width="90"><template #default="{row}"><el-button link type="primary" @click="edit(row)">编辑</el-button></template></el-table-column>
+      <el-table-column label="管理方" width="100"><template #default="{row}">{{row.management_owner||'门店'}}</template></el-table-column>
+      <el-table-column label="操作" width="110"><template #default="{row}"><span v-if="row.readonly">总部维护</span><el-button v-else link type="primary" @click="edit(row)">编辑</el-button></template></el-table-column>
     </el-table>
     <el-dialog v-model="visible" :title="editingId?'编辑员工':'录入员工'" width="min(720px,95vw)" destroy-on-close>
       <el-form label-width="90px" class="employee-form">
         <el-form-item v-for="field in fields" :key="field.key" :label="field.label">
-          <el-select v-if="field.options" v-model="form[field.key]"><el-option v-for="value in field.options" :key="value" :label="value" :value="value" /></el-select>
-          <el-date-picker v-else-if="field.key==='entry_date'" v-model="form.entry_date" value-format="YYYY-MM-DD" type="date" />
+          <el-select v-if="field.options" v-model="form[field.key]"><el-option v-for="value in field.options" :key="value" :label="field.key==='id_card_long_term'?(value==='1'?'长期有效':'有到期日期'):value" :value="value" /></el-select>
+          <el-date-picker v-else-if="['entry_date','id_card_expiry'].includes(field.key)" v-model="form[field.key]" value-format="YYYY-MM-DD" type="date" />
           <el-input v-else v-model="form[field.key]" :maxlength="field.key==='remark'?1000:200" :type="field.key==='remark'?'textarea':'text'" />
         </el-form-item>
       </el-form>
@@ -22,9 +23,9 @@ import {onMounted,reactive,ref} from 'vue'
 import {ElMessage} from 'element-plus'
 import {getStoreStaff,createStoreStaff,updateStoreStaff} from '@/api'
 const employees=ref([]),storeName=ref('本店'),loading=ref(false),saving=ref(false),visible=ref(false),editingId=ref(null),form=reactive({})
-const fields=[{key:'name',label:'姓名'},{key:'phone',label:'手机号'},{key:'gender',label:'性别',options:['男','女','']},{key:'entry_date',label:'入职日期'},{key:'hire_type',label:'用工类型',options:['全职','兼职']},{key:'position',label:'职务'},{key:'id_card_number',label:'身份证号'},{key:'bank_name',label:'开户银行'},{key:'bank_branch',label:'开户支行'},{key:'bank_account_name',label:'开户姓名'},{key:'bank_card_number',label:'银行卡号'},{key:'emergency_contact',label:'紧急联系人'},{key:'emergency_phone',label:'联系电话'},{key:'contact_address',label:'联系地址'},{key:'remark',label:'备注'}]
+const fields=[{key:'name',label:'姓名'},{key:'phone',label:'手机号'},{key:'gender',label:'性别',options:['男','女','']},{key:'entry_date',label:'入职日期'},{key:'hire_type',label:'用工类型',options:['全职','兼职']},{key:'position',label:'职务'},{key:'id_card_number',label:'身份证号'},{key:'id_card_expiry',label:'身份证到期'},{key:'id_card_long_term',label:'长期有效',options:['0','1']},{key:'education_level',label:'学历',options:['小学','初中','高中','中专','大专','本科','硕士','博士']},{key:'bank_name',label:'开户银行'},{key:'bank_branch',label:'开户支行'},{key:'bank_account_name',label:'开户姓名'},{key:'bank_card_number',label:'银行卡号'},{key:'emergency_contact',label:'紧急联系人'},{key:'emergency_phone',label:'联系电话'},{key:'contact_address',label:'现居住地址'},{key:'remark',label:'备注'}]
 async function load(){loading.value=true;try{const result=await getStoreStaff();employees.value=result.employees;storeName.value=result.store_name}catch(error){ElMessage.error(error.message)}finally{loading.value=false}}
-function edit(row){editingId.value=row?.id || null;for(const field of fields)form[field.key]=row?.[field.key] || (field.key==='hire_type'?'全职':'');form.updated_at=row?.updated_at || '';visible.value=true}
+function edit(row){editingId.value=row?.id || null;for(const field of fields)form[field.key]=row?.[field.key] || (field.key==='hire_type'?'全职':field.key==='id_card_long_term'?'0':'');form.id_card_long_term=String(row?.id_card_long_term || 0);form.updated_at=row?.updated_at || '';visible.value=true}
 async function save(){saving.value=true;try{if(editingId.value)await updateStoreStaff(editingId.value,{...form});else await createStoreStaff({...form});visible.value=false;await load();ElMessage.success('员工信息已保存')}catch(error){ElMessage.error(error.message)}finally{saving.value=false}}
 onMounted(load)
 </script>

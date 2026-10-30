@@ -7,27 +7,35 @@
     </header>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="notice" />
     <el-alert title="时间均为北京时间；保存只影响未来计划，不会立即导出、补跑或发送。已入库的数据也不会自动进入日报。" type="info" :closable="false" show-icon class="notice" />
-    <div class="cards">
-      <section v-for="item in plans" :key="item.report_type" class="plan-card" :aria-label="item.name + '同步计划'">
+    <section v-for="group in groups" :key="group.key" class="plan-region" :aria-label="group.name + '报表计划'">
+      <div class="region-heading"><h2>{{ group.name }}</h2><span>{{ group.description }}</span></div>
+      <div class="cards">
+      <section v-for="item in group.plans" :key="item.report_type" class="plan-card" :aria-label="item.name + '同步计划'">
         <div class="card-top"><div><small>{{ item.platform }} · {{ item.source_site }}</small><h2>{{ item.name }}</h2></div>
           <el-switch v-model="item.enabled" :aria-label="'启用' + item.name + '同步'" /></div>
         <label :for="'time-' + item.report_type">每天导出与同步时间</label>
         <input :id="'time-' + item.report_type" v-model="item.run_time" type="time" step="60" />
         <p class="next">下次计划：{{ item.enabled ? formatNext(item.next_run_at, item) : '已停用' }}</p>
-        <p class="note">业务日期：计划执行日前一天 · 与日报发送计划独立</p>
+        <p class="note">{{ item.scope_note || '业务日期：计划执行日前一天 · 与日报发送计划独立' }}</p>
         <el-button type="primary" :loading="saving === item.report_type" :disabled="loading || !!saving || !changed(item)" @click="save(item)">保存此报表计划</el-button>
       </section>
-    </div>
+      </div>
+    </section>
     <p class="footer-note">执行结果以“运行记录”和中控数据库回读为准；时间已保存不代表报表已成功同步。</p>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { getReportSyncPlans, saveReportSyncPlan, saveAutomationSchedule } from '@/api'
 
 const plans = ref([])
+const groups = computed(() => [
+  { key: 'system', name: '系统', description: '收银系统报表' },
+  { key: 'delivery', name: '外卖', description: '外卖平台报表' },
+  { key: 'group', name: '团购', description: '团购平台报表与评价 · 同时到点的任务依次执行' },
+].map(group => ({ ...group, plans: plans.value.filter(item => (item.category || (item.platform === '美团外卖' ? 'delivery' : 'system')) === group.key) })))
 const loading = ref(false)
 const saving = ref('')
 const error = ref('')
@@ -53,10 +61,6 @@ async function save(item) {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(item.run_time)) { ElMessage.error('时间须为 HH:mm 格式'); return }
   const old = baseline.value[item.report_type]
   if (!old || !changed(item)) return
-  if (!old.enabled && item.enabled) {
-    try { await ElMessageBox.confirm('启用后仅在未来到点时尝试同步，不补跑旧日；请确认报表采集已验收。', '确认启用', { type: 'warning' }) }
-    catch { return }
-  }
   saving.value = item.report_type
   try {
     const aPatch = {}
@@ -77,3 +81,4 @@ onMounted(load)
 <style scoped>
 .sync-plans { color: var(--el-text-color-primary); }.plans-header { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:24px; border-radius:12px; color:#fff; background:linear-gradient(110deg,#17376c,#2868cb); }.eyebrow { margin:0 0 7px; font-size:11px; letter-spacing:.12em; color:#b9d3ff; }.plans-header h1 { margin:0; font-size:23px; }.plans-header p:last-child { margin:7px 0 0; font-size:13px; color:#e1ebff; }.notice { margin-top:14px; }.cards { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin-top:16px; }.plan-card { padding:20px; border:1px solid var(--el-border-color-light); border-radius:12px; background:var(--el-bg-color); }.card-top { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:22px; }.card-top small { color:var(--el-text-color-secondary); font-size:11px; }.card-top h2 { margin:5px 0 0; font-size:18px; }.plan-card label { display:block; margin-bottom:7px; color:var(--el-text-color-regular); font-size:12px; font-weight:700; }.plan-card input { width:100%; box-sizing:border-box; min-height:38px; padding:7px 10px; border:1px solid var(--el-border-color); border-radius:8px; background:var(--el-bg-color); color:var(--el-text-color-primary); font:inherit; }.plan-card input:focus-visible { outline:2px solid var(--el-color-primary); outline-offset:2px; }.next { margin:12px 0 0; font-size:13px; }.note,.footer-note { color:var(--el-text-color-secondary); font-size:12px; }.note { margin:7px 0 19px; }.footer-note { margin-top:14px; }@media(max-width:900px){.cards{grid-template-columns:1fr}.plans-header{align-items:flex-start;flex-direction:column}}
 </style>
+<style scoped>.plan-region{margin-top:26px}.region-heading{display:flex;align-items:baseline;gap:14px;padding-bottom:10px;border-bottom:1px solid var(--el-border-color-light)}.region-heading h2{margin:0;font-size:20px}.region-heading span{font-size:12px;color:var(--el-text-color-secondary)}@media(max-width:600px){.region-heading{align-items:flex-start;flex-direction:column;gap:6px}}</style>

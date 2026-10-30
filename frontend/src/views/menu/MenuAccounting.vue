@@ -31,9 +31,7 @@
           </span>
         </div>
         <div class="menu-filters">
-          <el-select v-model="filters.storeId" filterable clearable placeholder="全部门店" style="width: 210px;">
-            <el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" />
-          </el-select>
+          <StoreRegionSelect v-model="filters.storeId" clearable placeholder="全部门店" style="width: 210px;" :stores="stores" restrict-to-stores />
           <el-date-picker
             v-model="filters.range"
             type="daterange"
@@ -589,9 +587,7 @@
         title="按「门店 + 日期 + 禽类」唯一，同一天同一组合重复保存会覆盖原值。填的是实际用掉的只数，不是进货量——进货受库存进出影响，与理论用量口径不一致。" />
       <el-form label-position="top" class="consumption-form">
         <el-form-item label="门店">
-          <el-select v-model="consumptionForm.store_id" filterable placeholder="请选择门店" style="width: 100%;">
-            <el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" />
-          </el-select>
+          <StoreRegionSelect v-model="consumptionForm.store_id" placeholder="请选择门店" style="width: 100%;" :stores="stores" restrict-to-stores />
         </el-form-item>
         <el-form-item label="日期">
           <el-date-picker v-model="consumptionForm.date" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" style="width: 100%;" />
@@ -1216,6 +1212,7 @@
 </template>
 
 <script setup>
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 import { computed, onActivated, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'

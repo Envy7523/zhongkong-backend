@@ -1,0 +1,101 @@
+{
+  "hash": "d0e0b1b69527d9ed07f27ca4e68512c133acd99112964dee3505cd40b18f84bc",
+  "materials": [
+    {
+      "id": "package-P01",
+      "unit": "个",
+      "unit_cost": 0.0667461538461538,
+      "purchase_unit": "件",
+      "units_per_purchase": 1000,
+      "purchase_price": 66.7461538461538
+    },
+    {
+      "id": "package-P02",
+      "unit": "套",
+      "unit_cost": 0.386666666666667,
+      "purchase_unit": "箱",
+      "units_per_purchase": 150,
+      "purchase_price": 58
+    },
+    {
+      "id": "package-P03",
+      "unit": "套",
+      "unit_cost": 0.366666666666667,
+      "purchase_unit": "箱",
+      "units_per_purchase": 150,
+      "purchase_price": 55
+    },
+    {
+      "id": "package-P04",
+      "unit": "双",
+      "unit_cost": 0.08,
+      "purchase_unit": "箱",
+      "units_per_purchase": 1500,
+      "purchase_price": 120
+    },
+    {
+      "id": "package-P05",
+      "unit": "个",
+      "unit_cost": 0.105,
+      "purchase_unit": "箱",
+      "units_per_purchase": 600,
+      "purchase_price": 63
+    },
+    {
+      "id": "package-P06",
+      "unit": "个",
+      "unit_cost": 0.161666666666667,
+      "purchase_unit": "箱",
+      "units_per_purchase": 600,
+      "purchase_price": 97
+    },
+    {
+      "id": "package-P07",
+      "unit": "套",
+      "unit_cost": 0.7,
+      "purchase_unit": "箱",
+      "units_per_purchase": 300,
+      "purchase_price": 210
+    },
+    {
+      "id": "package-P08",
+      "unit": "个",
+      "unit_cost": 0.35,
+      "purchase_unit": "箱",
+      "units_per_purchase": 300,
+      "purchase_price": 105
+    },
+    {
+      "id": "package-P09",
+      "unit": "套",
+      "unit_cost": 1,
+      "purchase_unit": "箱",
+      "units_per_purchase": 100,
+      "purchase_price": 100
+    },
+    {
+      "id": "package-P10",
+      "unit": "套",
+      "unit_cost": 0.833333333333333,
+      "purchase_unit": "箱",
+      "units_per_purchase": 90,
+      "purchase_price": 75
+    },
+    {
+      "id": "package-P11",
+      "unit": "套",
+      "unit_cost": 1.02,
+      "purchase_unit": "箱",
+      "units_per_purchase": 150,
+      "purchase_price": 153
+    },
+    {
+      "id": "package-P12",
+      "unit": "个",
+      "unit_cost": 0.3,
+      "purchase_unit": "个",
+      "units_per_purchase": 1,
+      "purchase_price": 0.3
+    }
+  ]
+}

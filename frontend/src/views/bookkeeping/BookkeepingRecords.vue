@@ -1,6 +1,7 @@
 <template>
   <div class="bookkeeping-records">
     <BookkeepingHeader active="records" />
+    <div class="ledger-toolbar"><el-button v-if="canExport" type="primary" plain :disabled="!applied || dirty || loading" :loading="exporting" @click="exportResults">导出 Excel</el-button><span>{{ !applied ? '请设置筛选条件后点击查询' : dirty ? '筛选条件已变更，请点击查询更新结果' : '导出包含当前查询条件下的全部结果' }}</span></div>
 
     <el-card class="records-card" shadow="never">
       <div class="records-overview">
@@ -9,7 +10,7 @@
           <strong>{{ selectedStoreLabel }}</strong>
           <small>{{ canSelectStore ? '可选择单店或查看全部门店' : '当前账号仅可查看已绑定门店' }}</small>
         </div>
-        <span class="overview-count">{{ mode === 'detail' ? recordTotal : summaryRows.length }} {{ mode === 'detail' ? '条记录' : '个分类' }}</span>
+        <span class="overview-count">{{ resultMode === 'detail' ? recordTotal : summaryRows.length }} {{ resultMode === 'detail' ? '条记录' : '个分类' }}</span>
       </div>
 
       <!-- 筛选栏 -->
@@ -17,15 +18,15 @@
         <div class="filter-field date-filter">
           <span class="filter-label">日期</span>
           <div class="date-range">
-            <el-date-picker v-model="filters.date_from" :clearable="false" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" @change="handleFilter" />
+            <el-date-picker v-model="filters.date_from" :clearable="false" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" />
             <span class="filter-sep">至</span>
-            <el-date-picker v-model="filters.date_to" :clearable="false" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" @change="handleFilter" />
+            <el-date-picker v-model="filters.date_to" :clearable="false" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" />
           </div>
         </div>
 
         <div v-if="canSelectStore" class="filter-field">
           <span class="filter-label">门店</span>
-          <StoreRegionSelect v-model="filters.store_ids" :stores="stores" multiple placeholder="全部门店或按区域勾选" @update:model-value="handleFilter" />
+          <StoreRegionSelect v-model="filters.store_ids" :stores="stores" multiple placeholder="全部门店或按区域勾选" />
         </div>
 
         <div class="filter-field">
@@ -55,7 +56,7 @@
             filterable
             :disabled="!filters.category_id"
             style="width: 180px"
-            @change="handleFilter"
+           
           >
             <el-option
               v-for="subcategory in subcategories"
@@ -77,7 +78,7 @@
         <div class="filter-field filter-actions">
           <el-button type="success" plain @click="openQuickEntry">快捷录入</el-button>
           <el-button @click="resetFilters">重置</el-button>
-          <el-button type="primary" :loading="loading" @click="loadData">
+          <el-button type="primary" :loading="loading" @click="submitQuery">
             查询
           </el-button>
         </div>
@@ -85,7 +86,7 @@
     </el-card>
 
     <!-- 明细模式 -->
-    <el-card v-if="mode === 'detail'" class="records-card" shadow="never">
+    <el-card v-if="resultMode === 'detail'" class="records-card" shadow="never">
       <div class="card-head">
         <span class="card-title">📋 记账明细</span>
         <span class="card-total">
@@ -139,12 +140,12 @@
           </template>
         </el-table-column>
         <template #empty>
-          <el-empty description="暂无记账记录" :image-size="80" />
+          <el-empty :description="applied ? '暂无记账记录' : '设置筛选条件并点击查询后显示记录'" :image-size="80" />
         </template>
       </el-table>
       <div v-if="recordTotal > 0" class="records-pagination">
         <span>当前第 {{ detailPage }} 页</span>
-        <el-pagination v-model:current-page="detailPage" v-model:page-size="detailPageSize" :page-sizes="[20, 50, 100, 200]" :total="recordTotal" layout="total, sizes, prev, pager, next" background @current-change="loadData" @size-change="handleDetailPageSizeChange" />
+        <el-pagination v-model:current-page="detailPage" v-model:page-size="detailPageSize" :page-sizes="[20, 50, 100, 200]" :total="recordTotal" layout="total, sizes, prev, pager, next" background @current-change="loadPage" @size-change="handleDetailPageSizeChange" />
       </div>
     </el-card>
 
@@ -168,7 +169,7 @@
           <template #default="{ row }">{{ row.entry_count ?? 0 }}</template>
         </el-table-column>
         <template #empty>
-          <el-empty description="暂无汇总数据" :image-size="80" />
+          <el-empty :description="applied ? '暂无汇总数据' : '设置筛选条件并点击查询后显示汇总'" :image-size="80" />
         </template>
       </el-table>
     </el-card>
@@ -217,9 +218,9 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getBookkeepingEntries, deleteBookkeepingEntry, batchDeleteBookkeepingEntries, getBookkeepingCategories, getBookkeepingSubcategories, getStores, previewBookkeepingQuickEntry, commitBookkeepingQuickEntry } from '@/api'
+import { getBookkeepingEntries, exportBookkeepingEntries, deleteBookkeepingEntry, batchDeleteBookkeepingEntries, getBookkeepingCategories, getBookkeepingSubcategories, getStores, previewBookkeepingQuickEntry, commitBookkeepingQuickEntry } from '@/api'
 import { useAuthStore } from '@/stores/auth'
 import BookkeepingHeader from './BookkeepingHeader.vue'
 import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
@@ -237,6 +238,11 @@ const selectedStoreLabel = computed(() => {
 })
 
 const mode = ref('detail')
+const applied = ref(null), exporting = ref(false), totalAmount = ref(0)
+let querySequence=0
+const resultMode=computed(()=>applied.value?.aggregate==='summary'?'summary':'detail')
+const dirty=computed(()=>!!applied.value&&JSON.stringify(buildParams())!==JSON.stringify(applied.value))
+const canExport=computed(()=>authStore.can('bookkeeping.export') || (authStore.user?.legacy_position_permissions||[]).includes('bookkeeping.manage'))
 const loading = ref(false)
 const entries = ref([])
 const selectedEntries = ref([])
@@ -263,13 +269,8 @@ const filters = reactive({
   store_ids: []
 })
 
-const sumAmount = computed(() =>
-  entries.value.reduce((acc, e) => acc + (Number(e.amount) || 0), 0)
-)
-
-const sumSummaryAmount = computed(() =>
-  summaryRows.value.reduce((acc, r) => acc + (Number(r.total_amount) || 0), 0)
-)
+const sumAmount = computed(() => totalAmount.value)
+const sumSummaryAmount = computed(() => totalAmount.value)
 
 const quickPreviewTotal = computed(() =>
   quickPreviewRows.value.reduce((total, row) => total + (Number(row.amount) || 0), 0)
@@ -311,33 +312,44 @@ function buildParams() {
     params.store_id = authStore.user.store_id
   }
   if (mode.value === 'summary') params.aggregate = 'summary'
-  else {
-    params.page = detailPage.value
-    params.page_size = detailPageSize.value
-  }
+
   return params
 }
 
-async function loadData() {
-  loading.value = true
-  selectedEntries.value = []
+async function loadData(params=applied.value) {
+  if(!params)return
+  const snapshot={...params},sequence=++querySequence
+  loading.value=true
+  selectedEntries.value=[]
   try {
-    if (mode.value === 'summary') {
-      const data = await getBookkeepingEntries(buildParams())
-      summaryRows.value = data?.rows || []
-      entries.value = []
-      recordTotal.value = summaryRows.value.length
-    } else {
-      const data = await getBookkeepingEntries(buildParams())
-      entries.value = data?.entries || []
-      summaryRows.value = []
-      recordTotal.value = Number(data?.total) || 0
-    }
-  } catch (e) {
-    ElMessage.error(e?.response?.data?.message || e?.message || '加载失败')
-  } finally {
-    loading.value = false
-  }
+    const data=await getBookkeepingEntries({...snapshot,page:detailPage.value,page_size:detailPageSize.value})
+    if(sequence!==querySequence)return
+    applied.value=snapshot
+    entries.value=data?.entries||[]
+    summaryRows.value=data?.rows||[]
+    recordTotal.value=Number(data?.total)||0
+    totalAmount.value=Number(data?.amount)||0
+  }catch(e){if(sequence===querySequence)ElMessage.error(e?.response?.data?.error||e.message||'查询失败')}
+  finally{if(sequence===querySequence)loading.value=false}
+}
+function submitQuery(){
+  if(loading.value)return
+  if(filters.date_from&&filters.date_to&&filters.date_from>filters.date_to)return ElMessage.warning('开始日期不能晚于结束日期')
+  detailPage.value=1
+  loadData(buildParams())
+}
+function loadPage(){loadData()}
+async function exportResults(){
+  if(!applied.value||dirty.value||loading.value||exporting.value)return
+  exporting.value=true
+  const snapshot={...applied.value}
+  try{
+    const blob=await exportBookkeepingEntries({...snapshot})
+    const url=URL.createObjectURL(blob),a=document.createElement('a')
+    a.href=url;a.download='记账本_'+(snapshot.date_from||'全部')+'_'+(snapshot.date_to||'全部')+'.xlsx';a.click()
+    setTimeout(()=>URL.revokeObjectURL(url),1000)
+  }catch(e){let message=e.message||'导出失败';try{if(e.response?.data instanceof Blob)message=JSON.parse(await e.response.data.text()).error||message}catch{}ElMessage.error(message)}
+  finally{exporting.value=false}
 }
 
 async function loadCategories() {
@@ -373,15 +385,9 @@ async function loadStores() {
   }
 }
 
-function handleFilter() {
-  detailPage.value = 1
-  loadData()
-}
-
 async function handleCategoryChange() {
   filters.subcategory_id = null
   await loadSubcategories()
-  handleFilter()
 }
 
 function resetFilters() {
@@ -392,7 +398,7 @@ function resetFilters() {
   subcategories.value = []
   filters.store_ids = []
   detailPage.value = 1
-  loadData()
+  ++querySequence;loading.value=false;applied.value=null;entries.value=[];summaryRows.value=[];recordTotal.value=0;totalAmount.value=0;selectedEntries.value=[]
 }
 
 function handleDetailPageSizeChange() {
@@ -501,19 +507,17 @@ async function handleBatchDelete() {
   }
 }
 
-watch(mode, () => {
-  detailPage.value = 1
-  loadData()
-})
+
 
 onMounted(() => {
   loadCategories()
   loadStores()
-  loadData()
 })
 </script>
 
 <style scoped>
+.ledger-toolbar{display:flex;align-items:center;gap:16px;margin-bottom:18px;flex-wrap:wrap}.ledger-toolbar span{font-size:13px;color:#82909c}
+
 .bookkeeping-records {
   padding: 16px;
 }

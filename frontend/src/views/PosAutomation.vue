@@ -2,16 +2,17 @@
   <main class="pos-automation">
     <header class="project-header">
       <div>
-        <p class="eyebrow">收银系统 · 各报表独立里程碑</p>
+        <p class="eyebrow">系统 · 外卖 · 团购</p>
         <h1>自动导报表</h1>
-        <p>采集机器人只负责导出、校验与导入；美团管家是采集站点，日报由中控另行汇总发送。</p>
+        <p>统一管理各平台报表与评价的自动采集；日报由中控另行汇总发送。</p>
       </div>
       <el-button @click="router.push('/data-import/pos')">手工导入</el-button>
     </header>
-    <nav class="project-nav" aria-label="收银系统自动导报表导航">
+    <nav class="project-nav" aria-label="自动导报表导航">
       <button type="button" :class="{ active: section === 'runs' }" :aria-current="section === 'runs' ? 'page' : undefined" @click="router.push('/data-import/pos/automation')">运行记录</button>
       <button v-if="canManageSchedule" type="button" :class="{ active: section === 'schedule' }" :aria-current="section === 'schedule' ? 'page' : undefined" @click="router.push('/data-import/pos/automation/schedule')">各报表同步计划</button>
     </nav>
+    <BookkeepingReviewDashboard v-if="section === 'runs'" />
     <SyncRuns v-if="section === 'runs'" />
     <ReportSyncPlans v-else-if="section === 'schedule'" />
   </main>
@@ -23,6 +24,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import SyncRuns from '@/views/analysis/SyncRuns.vue'
 import ReportSyncPlans from '@/views/ReportSyncPlans.vue'
+import BookkeepingReviewDashboard from '@/views/BookkeepingReviewDashboard.vue'
 
 const router = useRouter()
 const route = useRoute()

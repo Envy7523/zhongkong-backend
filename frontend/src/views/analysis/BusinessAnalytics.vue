@@ -44,23 +44,23 @@
         <button
           v-for="item in timeModes"
           :key="item.value"
-          :class="{ active: filters.timeMode === item.value }"
+          :class="{ active: queryFilters.timeMode === item.value }"
           @click="changeTimeMode(item.value)"
         >
           {{ item.label }}
         </button>
       </div>
       <el-date-picker
-        v-if="filters.timeMode === 'day'"
-        v-model="filters.day"
+        v-if="queryFilters.timeMode === 'day'"
+        v-model="queryFilters.day"
         :clearable="false"
         type="date"
         value-format="YYYY-MM-DD"
         placeholder="选择日期"
       />
       <el-date-picker
-        v-else-if="filters.timeMode === 'week'"
-        v-model="filters.week"
+        v-else-if="queryFilters.timeMode === 'week'"
+        v-model="queryFilters.week"
         :clearable="false"
         type="week"
         value-format="YYYY-MM-DD"
@@ -68,8 +68,8 @@
         placeholder="选择周次"
       />
       <el-date-picker
-        v-else-if="filters.timeMode === 'month'"
-        v-model="filters.month"
+        v-else-if="queryFilters.timeMode === 'month'"
+        v-model="queryFilters.month"
         :clearable="false"
         type="month"
         value-format="YYYY-MM"
@@ -77,7 +77,7 @@
       />
       <el-date-picker
         v-else
-        v-model="filters.customRange"
+        v-model="queryFilters.customRange"
         :clearable="false"
         class="compact-range-picker"
         type="daterange"
@@ -89,14 +89,14 @@
       <template v-if="showRevenueSourceControls">
         <div class="analysis-source-switch">
           <span>数据视角</span
-          ><el-radio-group v-model="filters.dataView"
+          ><el-radio-group v-model="queryFilters.dataView"
             ><el-radio-button label="cashier">收银机</el-radio-button
             ><el-radio-button label="real"
               >真实第三方</el-radio-button
             ></el-radio-group
           >
         </div>
-        <span v-if="filters.dataView === 'cashier'" class="source-mode-hint"
+        <span v-if="queryFilters.dataView === 'cashier'" class="source-mode-hint"
           >线上渠道按收银机入账，平台配置不参与本次取数</span
         >
         <el-button
@@ -115,7 +115,7 @@
         >
           <span>平台</span>
           <el-radio-group
-            v-model="filters.platform"
+            v-model="queryFilters.platform"
             size="small"
             @change="switchDeliveryPlatform"
           >
@@ -136,7 +136,7 @@
           :aria-label="`${analysisScope === 'group-buy' ? '团购' : '外卖'}门店范围`"
         >
           <StoreRegionSelect
-            v-model="filters.deliveryStoreIds"
+            v-model="queryFilters.deliveryStoreIds"
             :stores="storeOptions"
             multiple
             :filterable="false"
@@ -150,7 +150,7 @@
       <template v-else>
         <StoreRegionSelect
           v-if="analysisMode === 'platform'"
-          v-model="filters.platformStoreIds"
+          v-model="queryFilters.platformStoreIds"
           :stores="storeOptions"
           multiple
           :filterable="false"
@@ -161,7 +161,7 @@
         />
         <StoreRegionSelect
           v-else-if="analysisMode === 'store'"
-          v-model="filters.storeIds"
+          v-model="queryFilters.storeIds"
           :stores="storeOptions"
           multiple
           :filterable="false"
@@ -172,7 +172,7 @@
         />
         <el-select
           v-if="showPlatformSelect"
-          v-model="filters.platform"
+          v-model="queryFilters.platform"
           style="width: 180px"
           ><el-option label="平台汇总" value="" /><el-option
             v-for="platform in scopedPlatforms"
@@ -212,6 +212,7 @@
       </div>
     </section>
 
+    <template v-if="!requiresExplicitQuery || queryResultsReady">
     <section
       class="metric-grid"
       :class="{ compact: analysisScope === 'total' }"
@@ -224,9 +225,9 @@
             mtOpView
               ? "平台运营日报 · 营业额"
               : isMeituanGroupBuyView
-                ? "收益明细 · 售价"
+                ? "团购券＋尾款 · 售价"
                 : data.totals.gross_pending
-                  ? "美团外卖待导入营业日报，暂不汇总营业额"
+                  ? "已汇总已导入营业额，部分营业日报待补齐"
                   : "营业收入 + 优惠金额"
           }}</small>
         </div>
@@ -242,14 +243,14 @@
       <article class="metric-card">
         <div>
           <span>{{
-            isMeituanOperationView
+            isMeituanGroupBuyView ? incomeLabel : isMeituanOperationView
               ? isTaobaoOperation
                 ? "实际收入"
                 : "实收（营业收入）"
               : incomeLabel
           }}</span
           ><small>{{
-            isMeituanOperationView
+            isMeituanGroupBuyView ? incomeHint : isMeituanOperationView
               ? isTaobaoOperation
                 ? "平台营业日报 · 未扣第三方费用"
                 : isJdOperation
@@ -259,7 +260,7 @@
           }}</small>
         </div>
         <strong>{{ money(cardIncome) }}</strong>
-        <div class="metric-foot">实收占比 {{ percent(cardIncomeRatio) }}</div>
+        <div class="metric-foot">实收占比 {{ isTrueThirdPartyView && data.totals.gross_pending ? "待营业额补齐" : percent(cardIncomeRatio) }}</div>
         <aside v-if="compareMode" class="card-compare">
           <span>环比</span
           ><b :class="compareValueClass(compareRates.actual_amount)">{{
@@ -268,7 +269,7 @@
         </aside>
       </article>
       <article class="metric-card">
-        <div><span>订单量</span><small>渠道订单量汇总</small></div>
+        <div><span>订单量</span><small>{{ isMeituanGroupBuyView ? "团购券核销订单，尾款不重复计单" : "渠道订单量汇总" }}</small></div>
         <strong>{{ numberText(cardOrders) }}</strong>
         <div class="metric-foot">当前筛选范围</div>
         <aside v-if="compareMode" class="card-compare">
@@ -282,7 +283,7 @@
         <div><span>{{ isMeituanPage ? '补贴及支出' : '优惠金额' }}</span><small>{{ isMeituanPage ? '营业额与营业日报收入之差' : '客户优惠汇总' }}</small></div>
         <strong>{{ money(cardDiscount) }}</strong>
         <div class="metric-foot">
-          {{ isMeituanPage ? '补贴及支出' : '优惠金额' }}占比 {{ percent(cardDiscountRatio) }}
+          {{ isMeituanPage ? '补贴及支出' : '优惠金额' }}占比 {{ isTrueThirdPartyView && data.totals.gross_pending ? '待营业额补齐' : percent(cardDiscountRatio) }}
         </div>
         <aside v-if="compareMode" class="card-compare">
           <span>环比</span
@@ -425,7 +426,7 @@
     >
       <div>
         <span>营业额</span><strong>{{ money(data.totals.gross_amount) }}</strong
-        ><small>收益明细 · 售价</small>
+        ><small>团购券＋尾款 · 售价</small>
       </div>
       <template v-for="item in meituanGroupFeeCategories" :key="item.key">
         <b>−</b>
@@ -469,9 +470,10 @@
       <b>=</b>
       <div class="settlement-result">
         <span>商家应得</span><strong>{{ money(scopeIncome) }}</strong
-        ><small>收益明细 · 商家应得</small>
+        ><small>团购券＋尾款 · 商家应得</small>
       </div>
     </section>
+
 
     <section
       v-if="isDirectGroupSettlementView"
@@ -589,7 +591,7 @@
                 :class="{ active: mtGroupTrendSection === 'revenue' }"
                 @click="switchGroupMtSection('revenue')"
               >
-                经营收入
+                经营交易
               </button>
               <button
                 type="button"
@@ -604,6 +606,14 @@
                 @click="switchGroupMtSection('rating')"
               >
                 评分评价
+              </button>
+              <button
+                v-if="groupMtMetricOptions.some((item) => item.section === 'refund')"
+                type="button"
+                :class="{ active: mtGroupTrendSection === 'refund' }"
+                @click="switchGroupMtSection('refund')"
+              >
+                退款
               </button>
             </div>
             <div class="mt-metric-group mt-metric-funnel mt-group-field-picker">
@@ -682,7 +692,7 @@
           <p>
             {{
               isGroupOperationView
-                ? `${rangeLabel} · 金额、人数为求和；转化率按汇总人数重算。`
+                ? `${rangeLabel} · 金额、人数和订单数求和；各比率按汇总后的分子与分母重算。`
                 : `${rangeLabel} · 金额/人数/次数为求和；转化率为加权口径。`
             }}
           </p>
@@ -692,6 +702,8 @@
           {{ meituanOpTotals.days || 0 }} 天</span
         >
       </header>
+      <el-alert v-if="effectivePlatform==='美团团购' && meituanOpTotals.metric_coverage?.order_count?.missing_dates?.length" type="warning" :closable="false" :title="`成交订单数仅汇总原始报表已提供的记录，${meituanOpTotals.metric_coverage.order_count.missing_dates.length} 天缺少该字段；不能用购买人数代替订单数。`" />
+      <el-alert v-if="effectivePlatform==='抖音团购' && meituanOpTotals.metric_coverage?.click_users?.missing_dates?.length" type="warning" :closable="false" title="新增经营指标仅汇总已采集日期，覆盖范围见各指标卡片；比率按同一批已采集记录计算，不将历史缺失记为零。" />
       <div
         v-if="isGroupOperationView"
         class="meituan-op-tiles group-operation-tiles"
@@ -1140,6 +1152,15 @@
     </section>
     <template v-if="activeTab === 'overview'">
       <template v-if="analysisScope === 'total'">
+        <RealRevenueComposition
+          v-if="isUnifiedRealView"
+          class="panel composition-panel"
+          :data="data"
+          :previous="compareData"
+          :compare="compareMode"
+          :period="rangeLabel"
+        />
+        <template v-else>
         <section class="panel composition-panel">
           <header>
             <div>
@@ -1253,6 +1274,7 @@
           </div>
           <el-empty v-else :description="`暂无${incomeCompositionTitle}数据`" />
         </section>
+        </template>
         <section class="panel hourly-order-panel">
           <header>
             <div>
@@ -1827,9 +1849,14 @@
               }}
             </p>
           </div>
-          <span class="panel-badge"
-            >{{ productAnalytics.totals.total_products || 0 }} 款菜品</span
-          >
+          <div class="product-sort-actions">
+            <el-radio-group v-model="productSort" size="small" aria-label="菜品排序" @change="productPage = 1">
+              <el-radio-button value="quantity">按销量</el-radio-button>
+              <el-radio-button value="amount">按营业额</el-radio-button>
+              <el-radio-button value="income">按实收</el-radio-button>
+            </el-radio-group>
+            <span class="panel-badge">{{ productAnalytics.totals.total_products || 0 }} 款菜品</span>
+          </div>
         </header>
       <div v-loading="productLoading">
         <div class="product-summary-grid">
@@ -1937,7 +1964,7 @@
             type="index"
             :index="productIndex"
             label="排名"
-            width="72"
+            :width="isMeituanGroupProductBoard ? 48 : 72"
           /><el-table-column
             prop="product_name"
             :label="
@@ -1947,12 +1974,12 @@
                 ? '菜品（项目名称）'
                 : `${platformProductName}商品`
             "
-            min-width="220"
+            :min-width="isMeituanGroupProductBoard ? 180 : 220"
             show-overflow-tooltip
           /><el-table-column
             v-if="isMeituanGroupProductBoard"
             label="消费订单"
-            width="110"
+            :width="isMeituanGroupProductBoard ? 76 : 110"
             align="right"
             ><template #default="{ row }">{{
               numberText(row.orders)
@@ -1960,14 +1987,14 @@
           ><el-table-column
             v-if="isMeituanGroupProductBoard"
             label="撤销退单"
-            width="110"
+            :width="isMeituanGroupProductBoard ? 76 : 110"
             align="right"
             ><template #default="{ row }">{{
               numberText(row.refunds)
             }}</template></el-table-column
           ><el-table-column
             :label="isTotalProductBoard ? '销量（含赠品）' : '净销量'"
-            width="124"
+            :width="isMeituanGroupProductBoard ? 80 : 124"
             align="right"
             ><template #default="{ row }">{{
               numberText(row.quantity)
@@ -1983,7 +2010,7 @@
             ></el-table-column
           ><el-table-column
             :label="isTotalProductBoard ? '营业额（含赠品）' : '销售额'"
-            width="152"
+            :width="isMeituanGroupProductBoard ? 100 : 152"
             align="right"
             ><template #default="{ row }">{{
               money(row.sales_amount)
@@ -2000,12 +2027,12 @@
           ><el-table-column
             v-if="isMeituanGroupProductBoard"
             label="商家应得"
-            width="140"
+            :width="isMeituanGroupProductBoard ? 104 : 140"
             align="right"
             ><template #default="{ row }">{{
               money(row.merchant_income)
             }}</template></el-table-column
-          ><el-table-column label="本地菜品 SKU" min-width="270"
+          ><el-table-column label="本地菜品 SKU" :min-width="isMeituanGroupProductBoard ? 220 : 270"
             ><template #default="{ row }"
               ><el-popover
                 trigger="click"
@@ -2076,7 +2103,7 @@
                 </div></el-popover
               ></template
             ></el-table-column
-          ><el-table-column width="172" align="right"
+          ><el-table-column :width="isMeituanGroupProductBoard ? 96 : 172" align="right"
             ><template #header
               ><el-tooltip
                 effect="light"
@@ -2125,7 +2152,7 @@
               }}</span
               ><span v-else class="dish-cost-pending">—</span></template
             ></el-table-column
-          ><el-table-column label="预估成本" width="140" align="right"
+          ><el-table-column label="预估成本" :width="isMeituanGroupProductBoard ? 104 : 140" align="right"
             ><template #default="{ row }"
               ><span v-if="row.mapped">{{ money(row.total_cost) }}</span
               ><span v-else>—</span></template
@@ -2133,7 +2160,7 @@
           ><el-table-column
             v-if="isMeituanGroupProductBoard"
             label="预估毛利"
-            width="140"
+            :width="isMeituanGroupProductBoard ? 104 : 140"
             align="right"
             ><template #default="{ row }"
               ><el-tooltip
@@ -2192,11 +2219,7 @@
           v-if="productAnalytics.products.length"
           class="product-pagination"
         >
-          <span>{{
-            isMeituanGroupProductBoard
-              ? "按菜品销售额从高到低排序"
-              : "按商品销售额从高到低排序"
-          }}</span
+          <span>按{{ {quantity:'销量',amount:'营业额（商品销售额）',income:isMeituanGroupProductBoard?'实收（商家应得）':'实收（按商品销售额分摊）'}[productSort] }}从高到低排序</span
           ><el-pagination
             v-model:current-page="productPage"
             v-model:page-size="productPageSize"
@@ -2300,6 +2323,14 @@
           @current-change="handleReconciliationPage"
         />
       </div>
+    </section>
+
+    <DouyinStoreReviews v-if="queryResultsReady && analysisMode === 'store' && analysisScope === 'group-buy' && effectivePlatform === '抖音团购'" :key="submittedQuery.revision" :scope="submittedQuery.scope" />
+    <MeituanStoreReviews v-if="queryResultsReady && analysisMode === 'store' && analysisScope === 'group-buy' && effectivePlatform === '美团团购'" :key="submittedQuery.revision" :scope="submittedQuery.scope" />
+
+    </template>
+    <section v-else class="panel">
+      <el-empty description="请选择门店和日期，点击查询后查看结果" :image-size="90" />
     </section>
 
     <el-dialog
@@ -2708,6 +2739,8 @@
 
 <script setup>
 import MeituanOperatingSource from '@/components/MeituanOperatingSource.vue'
+import RealRevenueComposition from "@/components/RealRevenueComposition.vue";
+import { sortProductSales } from '@/utils/product-sales-sort.mjs'
 import MeituanSettlement from '@/components/MeituanSettlement.vue'
 import {
   computed,
@@ -2737,6 +2770,9 @@ import {
   saveBusinessProductMapping,
   saveDishSalesMapping,
 } from "@/api";
+import { validQueryRange, querySignature } from "@/utils/analysis-query-gate.mjs";
+import DouyinStoreReviews from "@/components/DouyinStoreReviews.vue";
+import MeituanStoreReviews from "@/components/MeituanStoreReviews.vue";
 import StoreRegionSelect from "@/components/StoreRegionSelect.vue";
 import { groupOperationMetrics } from "@/utils/group-operation";
 
@@ -2780,29 +2816,33 @@ const groupQueryStepText = computed(
   () => groupQuerySteps.value[groupQueryStep.value] || groupQuerySteps.value[0],
 );
 let groupQueryToken = 0,
-  groupQueryInterval = null;
+  groupQueryInterval = null,
+  groupQueryStartTimer = null;
 function beginGroupQueryFeedback() {
   const token = ++groupQueryToken;
   clearInterval(groupQueryInterval);
-  groupQueryVisible.value = true;
+  clearTimeout(groupQueryStartTimer);
+  groupQueryVisible.value = false;
   groupQueryStep.value = 0;
-  const startedAt = Date.now();
-  groupQueryInterval = setInterval(() => {
-    if (token === groupQueryToken)
-      groupQueryStep.value =
-        (groupQueryStep.value + 1) % groupQuerySteps.value.length;
-  }, 460);
-  return { token, startedAt };
+  // Fast queries need no flashing overlay; slower queries still show feedback.
+  groupQueryStartTimer = setTimeout(() => {
+    if (token !== groupQueryToken) return;
+    groupQueryVisible.value = true;
+    groupQueryInterval = setInterval(() => {
+      if (token === groupQueryToken)
+        groupQueryStep.value =
+          (groupQueryStep.value + 1) % groupQuerySteps.value.length;
+    }, 460);
+  }, 160);
+  return { token };
 }
-async function finishGroupQueryFeedback(feedback) {
+function finishGroupQueryFeedback(feedback) {
   if (!feedback || feedback.token !== groupQueryToken) return;
-  const wait = Math.max(0, 980 - (Date.now() - feedback.startedAt));
-  if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
-  if (feedback.token === groupQueryToken) {
-    clearInterval(groupQueryInterval);
-    groupQueryInterval = null;
-    groupQueryVisible.value = false;
-  }
+  clearTimeout(groupQueryStartTimer);
+  clearInterval(groupQueryInterval);
+  groupQueryStartTimer = null;
+  groupQueryInterval = null;
+  groupQueryVisible.value = false;
 }
 const storeDetailVisible = ref(false),
   storeDetailLoading = ref(false),
@@ -2816,6 +2856,8 @@ const compareMode = ref(false),
   compareCurrentSelection = ref(null),
   comparePreviousSelection = ref(null),
   hasQueried = ref(false);
+const submittedQuery = ref(null);
+let submittedQueryRevision = 0;
 const reconciliationPage = ref(1),
   reconciliationPageSize = ref(20);
 const deliveryReconChannelOptions = [
@@ -2923,6 +2965,8 @@ const filters = reactive({
     meituan_group: "platform",
   },
 });
+const draftFilters = reactive(JSON.parse(JSON.stringify(filters)));
+const queryFilters = computed(() => requiresExplicitQuery.value ? draftFilters : filters);
 const data = reactive({
   totals: {},
   trend: [],
@@ -2950,6 +2994,7 @@ const dishTotal = ref(0);
 const hourlyOrderTotal = computed(() => (dishAnalytics.hourly_trend || []).reduce((sum, row) => sum + (Number(row.order_count) || 0), 0));
 const productAnalytics = reactive({ products: [], totals: {} });
 const productLoading = ref(false);
+const productSort = ref("amount");
 const productPage = ref(1);
 const productPageSize = ref(20);
 const localMenuItems = ref([]);
@@ -3313,6 +3358,7 @@ async function loadMeituanOperation() {
     if (request !== operationRequest || platform !== effectivePlatform.value)
       return;
     meituanOpTotals.value = {
+      metric_coverage:result.metric_coverage || {},
       days: result.days || 0,
       stores_count: result.stores_count || 0,
       totals: result.totals || {},
@@ -3332,6 +3378,9 @@ async function loadMeituanOperation() {
 watch(effectivePlatform, () => {
   operationRequest++;
   meituanOpLoaded.value = false;
+  if (!groupMtMetricOptions.value.some(item => item.section === mtGroupTrendSection.value)) {
+    mtGroupTrendSection.value = "revenue";
+  }
 });
 watch(mtTrendChartRef, async (target) => {
   if (mtTrendChart && mtTrendChart.getDom() !== target) {
@@ -3346,13 +3395,15 @@ watch(mtTrendChartRef, async (target) => {
 });
 function groupMetricSectionLabel(item) {
   return (
-    { revenue: "经营收入", traffic: "流量转化", rating: "评分评价" }[
+    { revenue: "经营交易", traffic: "流量转化", refund: "退款", rating: "评分评价" }[
       item?.section
     ] || "经营指标"
   );
 }
 function groupMetricHint(item) {
-  if (item?.unit === "percent") return "按汇总人数重新计算";
+  const coverage=meituanOpTotals.value.metric_coverage?.[item?.key];
+  if(coverage?.missing_dates?.length)return coverage.available_rows?`仅汇总 ${coverage.available_rows}/${coverage.total_rows} 条已提供记录`:'原始报表未提供此字段';
+  if (item?.unit === "percent") return "按汇总后的分子与分母计算";
   if (item?.unit === "rating") return "门店评分均值";
   if (item?.unit === "money") return "当前筛选范围合计";
   return item?.key === "review_count" ? "当前累计评价" : "当前筛选范围汇总";
@@ -3545,6 +3596,12 @@ function renderMeituanTrends() {
               axis("人数", "#94a3b8"),
               axis("转化率", "#0f9d7b", (value) => `${value}%`),
             ]
+          : section === "refund"
+            ? [
+                axis("退款金额（元）", "#94a3b8", moneyAxis),
+                axis("退款订单（单）", "#dc6262"),
+                { ...axis("退单率", "#b83e51", (value) => `${value}%`), offset: 56 },
+              ]
           : [
               axis("星级", "#7859a7", (value) => Number(value).toFixed(1)),
               axis("评价数", "#8a97a7"),
@@ -3559,21 +3616,22 @@ function renderMeituanTrends() {
         (item) => item.section === section && mtGroupMetricActive(item.key),
       )
       .map((item) => {
-        const right =
-          item.unit === "percent" ||
-          item.key === "order_count" ||
-          (section === "rating" && item.unit === "count");
+        const axisIndex = section === "refund"
+          ? (item.unit === "percent" ? 2 : item.unit === "count" ? 1 : 0)
+          : (item.unit === "percent" || item.key === "order_count" ||
+              (section === "rating" && item.unit === "count") ? 1 : 0);
         return item.unit === "percent" ||
           item.unit === "rating" ||
+          item.unit === "count" && section === "refund" ||
           item.key === "order_count"
           ? line(
               item.label,
               item.key,
               item.color,
-              right ? 1 : 0,
+              axisIndex,
               item.unit === "percent",
             )
-          : bar(item.label, item.key, item.color, right ? 1 : 0);
+          : bar(item.label, item.key, item.color, axisIndex);
       });
     const options = { yAxis: axes, series };
     renderMeituanTrendPlayback(mtTrendChart, {
@@ -3586,7 +3644,7 @@ function renderMeituanTrends() {
         itemHeight: 9,
         textStyle: { color: "#64748b", fontSize: 11 },
       },
-      grid: { ...baseOption.grid, top: 42 },
+      grid: { ...baseOption.grid, top: 42, right: section === "refund" ? 108 : baseOption.grid.right },
       yAxis: options.yAxis,
       series: options.series,
     });
@@ -3598,7 +3656,7 @@ function renderMeituanTrends() {
     const isRating = single.unit === "rating";
     const data = isPercent
       ? rows.map(
-          (row) => Math.round(Number(row[single.key] || 0) * 10000) / 100,
+          (row) => row[single.key] == null ? null : Math.round(Number(row[single.key]) * 10000) / 100,
         )
       : isRating
         ? rows.map((row) => row[single.key] == null ? null : Number(Number(row[single.key]).toFixed(1)))
@@ -3745,13 +3803,14 @@ const showRevenueSourceControls = computed(
 const isTrueThirdPartyView = computed(
   () => analysisScope.value === "total" && filters.dataView === "real",
 );
+const isUnifiedRealView = computed(() => isTrueThirdPartyView.value && ["store", "brand"].includes(analysisMode.value));
 const platformSourceSummary = computed(
   () =>
     `${platformSourceOptions.filter((item) => filters.sourceOverrides[item.key] === "platform").length}/5 第三方`,
 );
 const channelCompositionDescription = computed(
   () =>
-    `${rangeLabel.value} · 渠道字段和顺序固定；仅按当前数据视角切换每个渠道的取值来源。平台字段缺失时明确标记回退收银机。`,
+    `${rangeLabel.value} · 渠道字段和顺序固定；按所选来源取数。第三方数据缺失时不使用收银机补数。`,
 );
 const incomeCompositionTitle = computed(() => "营业收入构成");
 const incomeCompositionDescription = computed(
@@ -3841,11 +3900,7 @@ const cardGross = computed(() =>
     ? Number(mtOpTot.value.gross_amount || 0)
     : Number(data.totals.gross_amount || 0),
 );
-const grossValueText = computed(() =>
-  isTrueThirdPartyView.value && data.totals.gross_pending
-    ? "待补营业日报"
-    : money(cardGross.value),
-);
+const grossValueText = computed(() => money(cardGross.value));
 const mtOpIncomeRaw = computed(() =>
   isJdOperation.value
     ? Number(mtOpTot.value.platform_income_amount || 0)
@@ -3985,10 +4040,12 @@ const deliveryExpenseItems = computed(() => {
     : data.totals.fee_breakdown || {};
   const items = [
     { key: "customer_discount", label: "客户优惠", amount: Number(chainDiscount.value || 0) },
-    { key: "promotion_fee", label: "推广费", amount: Number(breakdown.promotion_fee || 0) },
-    { key: "service_fee", label: "服务费", amount: Number(breakdown.service_fee || 0) },
-    { key: "insurance_fee", label: "保障 / 保险", amount: Number(breakdown.insurance_fee || 0) },
-    { key: "refund_amount", label: "退款及赔付", amount: Number(breakdown.refund_amount || 0) },
+    ...(hasRawFeeBreakdown.value ? feeBreakdownItems.value : [
+      { key: "promotion_fee", label: "推广费", amount: Number(breakdown.promotion_fee || 0) },
+      { key: "service_fee", label: "服务费", amount: Number(breakdown.service_fee || 0) },
+      { key: "insurance_fee", label: "保障 / 保险", amount: Number(breakdown.insurance_fee || 0) },
+      { key: "refund_amount", label: "退款及赔付", amount: Number(breakdown.refund_amount || 0) },
+    ]),
   ].filter((item) => Math.abs(item.amount) > 0.005);
   const knownTotal = items.reduce((sum, item) => sum + item.amount, 0);
   const adjustment = Math.round((chainExpenses.value - knownTotal) * 100) / 100;
@@ -4032,7 +4089,7 @@ const incomeLabel = computed(() =>
 );
 const incomeHint = computed(() =>
   isMeituanGroupBuyView.value
-    ? "收益明细 · 商家应得"
+    ? "团购券＋尾款 · 商家应得"
     : effectivePlatform.value
       ? "已固定至所选平台"
       : analysisScope.value === "total"
@@ -4216,8 +4273,8 @@ const channelTableRows = computed(() => {
   );
   const sourceInfo = (source, status, missing) => {
     if (missing) return { label: "收银字段未上传", tone: "warning" };
-    if (status === "platform_missing_fallback_pos")
-      return { label: "平台缺失·收银机", tone: "warning" };
+    if (["platform_missing_zero", "platform_incomplete"].includes(status))
+      return { label: "第三方·数据缺失", tone: "danger" };
     if (source === "platform") return { label: "第三方", tone: "success" };
     if (source === "mixed") return { label: "混合口径", tone: "warning" };
     return { label: "收银机", tone: "info" };
@@ -4325,7 +4382,7 @@ const customStoreRows = computed(() =>
     .sort((a, b) => b.actual - a.actual),
 );
 const productPageRows = computed(() =>
-  productAnalytics.products.slice(
+  sortProductSales(productAnalytics.products, productSort.value, isMeituanGroupProductBoard.value).slice(
     (productPage.value - 1) * productPageSize.value,
     productPage.value * productPageSize.value,
   ),
@@ -4348,20 +4405,19 @@ const rankingBands = computed(() => {
     { key: "bottom", label: "后三", rows: bottom },
   ];
 });
-const requiresInitialStoreSelection = computed(
-  () =>
-    !hasQueried.value &&
-    analysisMode.value === "store" &&
-    ["delivery", "group-buy"].includes(analysisScope.value),
-);
-const hasRequiredInitialStore = computed(
-  () => filters.deliveryStoreIds.length > 0,
-);
-const canQuery = computed(
-  () =>
-    !(filters.timeMode === "custom" && activeRange.value?.length !== 2) &&
-    (!requiresInitialStoreSelection.value || hasRequiredInitialStore.value),
-);
+const requiresExplicitQuery = computed(() => analysisMode.value === "store" && ["delivery", "group-buy"].includes(analysisScope.value));
+const currentQuerySignature = computed(() => querySignature({ platform: effectivePlatform.value, storeIds: filters.deliveryStoreIds, range: reportRange.value, previousRange: comparePreviousRange.value, compare: compareMode.value, timeMode: filters.timeMode, dataView: filters.dataView }));
+const queryResultsReady = computed(() => hasQueried.value && Boolean(submittedQuery.value));
+const requiresInitialStoreSelection = computed(() => requiresExplicitQuery.value);
+const pendingQueryRange = computed(() => {
+  if (compareMode.value) return compareCurrentRange.value;
+  const pending = queryFilters.value;
+  return pending.timeMode === 'day' ? [pending.day, pending.day]
+    : pending.timeMode === 'week' ? fullWeekRange(pending.week)
+    : pending.timeMode === 'month' ? monthRange(pending.month) : pending.customRange;
+});
+const hasRequiredInitialStore = computed(() => queryFilters.value.deliveryStoreIds.length > 0);
+const canQuery = computed(() => validQueryRange(pendingQueryRange.value) && (!requiresExplicitQuery.value || hasRequiredInitialStore.value));
 const selectedExternalExpenseStoreIds = computed(() =>
   analysisMode.value === "store" && analysisScope.value === "delivery"
     ? filters.deliveryStoreIds.map(Number).filter(Boolean)
@@ -4564,7 +4620,7 @@ function compareValueClass(value) {
   return value > 0 ? "compare-up" : value < 0 ? "compare-down" : "compare-flat";
 }
 function changeTimeMode(mode) {
-  filters.timeMode = mode;
+  queryFilters.value.timeMode = mode;
 }
 function currentStoreScope() {
   // 团购、外卖三种子视角共用平台框架：品牌汇总不传门店，
@@ -4811,7 +4867,8 @@ async function applyCompareMode() {
   reconciliationPage.value = 1;
   compareMode.value = true;
   compareDialogVisible.value = false;
-  await loadData();
+  await nextTick();
+  await queryData();
 }
 function exitCompareMode() {
   compareMode.value = false;
@@ -4825,10 +4882,15 @@ function exitCompareMode() {
 function handleCompareDialogClosed() {
   if (!compareMode.value) compareDialogVisible.value = false;
 }
-function queryData() {
+async function queryData() {
+  if (!validQueryRange(pendingQueryRange.value)) { ElMessage.warning("请选择有效日期范围"); return; }
   if (requiresInitialStoreSelection.value && !hasRequiredInitialStore.value) {
-    ElMessage.warning("门店视角首次查询请先选择至少一个门店");
+    ElMessage.warning("请先选择至少一个门店");
     return;
+  }
+  if (requiresExplicitQuery.value) {
+    Object.assign(filters, JSON.parse(JSON.stringify(draftFilters)));
+    await nextTick();
   }
   reconciliationPage.value = 1;
   // 只有用户主动“查询”才丢弃缓存；平台切换始终复用这一轮查询的结果。
@@ -4840,6 +4902,8 @@ function queryData() {
 }
 async function switchDeliveryPlatform() {
   if (!["delivery", "group-buy"].includes(analysisScope.value)) return;
+  if (requiresExplicitQuery.value) return; // 筛选只是草稿，只有点击查询才加载。
+
   // 门店视角的首轮数据必须先由用户明确门店范围，平台切换不能绕过该条件。
   // 首次成功查询后，门店范围会保留，后续切换平台直接复用当前范围查询即可。
   if (requiresInitialStoreSelection.value && !hasRequiredInitialStore.value) {
@@ -4857,14 +4921,17 @@ function handleReconciliationPage(page) {
 async function refreshDiagnosis() {
   if (!hasQueried.value) return;
   const signature = diagnosisSignature.value;
+  const request = analyticsRequestId;
   try {
     const result = await getBusinessDiagnosis({
       perspective_key: pageMeta.analysisKey || pageMeta.routePath,
       filter_signature: signature,
     });
+    if (request !== analyticsRequestId || signature !== diagnosisSignature.value) return;
     diagnosis.value = result.diagnosis || null;
     diagnosisAvailable.value = Boolean(result.diagnosis);
   } catch (error) {
+    if (request !== analyticsRequestId || signature !== diagnosisSignature.value) return;
     diagnosis.value = null;
     diagnosisAvailable.value = false;
   }
@@ -4893,7 +4960,11 @@ async function runDiagnosis() {
 }
 let analyticsRequestId = 0;
 async function loadData() {
+  if (requiresExplicitQuery.value && !canQuery.value) return;
   const request = ++analyticsRequestId;
+  const submittedSignature = currentQuerySignature.value;
+  const submittedScope = { ...currentStoreScope(), date_from: reportRange.value?.[0], date_to: reportRange.value?.[1] };
+  if (requiresExplicitQuery.value) submittedQuery.value = null;
   const range = reportRange.value;
   if (
     (!compareMode.value &&
@@ -4912,6 +4983,14 @@ async function loadData() {
       : null;
   loading.value = true;
   try {
+    // These group-buy panels use the submitted filters, not the overview result.
+    // Start together so network latency is paid once instead of for every panel.
+    const groupPanels = isGroupOperationView.value
+      ? Promise.all([
+          loadMeituanOperation(),
+          ...(hasProductBoard.value ? [loadProductAnalytics()] : []),
+        ])
+      : null;
     if (analysisScope.value === "delivery") {
       if (compareMode.value) {
         const [result, previous] = await Promise.all([
@@ -4921,6 +5000,7 @@ async function loadData() {
             effectivePlatform.value,
           ),
         ]);
+        if (request !== analyticsRequestId) return;
         Object.assign(data, result);
         Object.assign(compareData, previous);
         await Promise.all([
@@ -4928,10 +5008,9 @@ async function loadData() {
           warmDeliveryDatasets(comparePreviousRange.value),
         ]);
       } else {
-        Object.assign(
-          data,
-          await fetchDeliveryDataset(range, effectivePlatform.value),
-        );
+        const result = await fetchDeliveryDataset(range, effectivePlatform.value);
+        if (request !== analyticsRequestId) return;
+        Object.assign(data, result);
         Object.assign(compareData, {
           totals: {},
           stores: [],
@@ -4948,6 +5027,7 @@ async function loadData() {
           analyticsParams(comparePreviousRange.value),
         ),
       ]);
+      if (request !== analyticsRequestId) return;
       Object.assign(data, result);
       Object.assign(compareData, previous);
     } else {
@@ -4964,28 +5044,36 @@ async function loadData() {
         channel_breakdown: [],
       });
     }
+    if (groupPanels) await groupPanels;
+    if (request !== analyticsRequestId) return;
     reconciliationPage.value =
       Number(data.reconciliation_page) || reconciliationPage.value;
     hasQueried.value = true;
 
     diagnosisSignatureAtQuery.value = diagnosisSignature.value;
-    if (isMeituanOperationView.value) await loadMeituanOperation();
+    if (isMeituanOperationView.value && !groupPanels) await loadMeituanOperation();
     if (analysisScope.value === "total") await loadDishAnalytics();
-    if (hasProductBoard.value) await loadProductAnalytics();
-    await refreshDiagnosis();
+    if (hasProductBoard.value && !groupPanels) await loadProductAnalytics();
+    if (request !== analyticsRequestId || (requiresExplicitQuery.value && submittedSignature !== currentQuerySignature.value)) return;
+    if (requiresExplicitQuery.value) submittedQuery.value = { signature: submittedSignature, scope: submittedScope, revision: ++submittedQueryRevision };
+    // A saved AI diagnosis is optional and must not hold up the queried data.
+    void refreshDiagnosis();
     await nextTick();
   } catch (error) {
     if (request === analyticsRequestId) ElMessage.error(error.message);
   } finally {
     if (request === analyticsRequestId) {
-      await finishGroupQueryFeedback(groupFeedback);
+      finishGroupQueryFeedback(groupFeedback);
       loading.value = false;
       await nextTick();
       queueChartRender();
     }
   }
 }
+let productRequest = 0;
 async function loadProductAnalytics() {
+  const request = ++productRequest;
+  const analyticsRequest = analyticsRequestId;
   const range = reportRange.value;
   if (!hasProductBoard.value || range?.length !== 2 || !range[0] || !range[1]) {
     Object.assign(productAnalytics, { products: [], totals: {} });
@@ -5016,6 +5104,7 @@ async function loadProductAnalytics() {
       ),
       ensureLocalMenuItems(),
     ]);
+    if (request !== productRequest || analyticsRequest !== analyticsRequestId) return;
     Object.assign(productAnalytics, {
       products: result.products || [],
       totals: result.totals || {},
@@ -5026,12 +5115,13 @@ async function loadProductAnalytics() {
     )
       productPage.value = 1;
   } catch (error) {
+    if (request !== productRequest || analyticsRequest !== analyticsRequestId) return;
     Object.assign(productAnalytics, { products: [], totals: {} });
     ElMessage.error(
       error.message || `加载${platformProductName.value}菜品销售数据失败`,
     );
   } finally {
-    productLoading.value = false;
+    if (request === productRequest) productLoading.value = false;
   }
 }
 function productIndex(index) {
@@ -5641,6 +5731,11 @@ function renderHourlyOrderChart() {
   );
 }
 function renderCharts() {
+  if (isUnifiedRealView.value) {
+    compositionChart?.dispose(); compositionChart = null;
+    channelCompositionChart?.dispose(); channelCompositionChart = null;
+  }
+
   if (activeTab.value !== "overview") return;
   const series = chartSeries.value;
   const isStoreTrend = analysisMode.value === "store";
@@ -5876,11 +5971,18 @@ onMounted(async () => {
   }));
   storeOptions.value = result.stores || [];
   resetScopeFilters();
+  Object.assign(draftFilters, JSON.parse(JSON.stringify(filters)));
   hasQueried.value = false;
   clearData();
   window.addEventListener("resize", resizeCharts);
 });
 onBeforeUnmount(() => {
+  analyticsRequestId++;
+  operationRequest++;
+  productRequest++;
+  groupQueryToken++;
+  clearTimeout(groupQueryStartTimer);
+  clearInterval(groupQueryInterval);
   if (chartFrame) cancelAnimationFrame(chartFrame);
   clearTimeout(mtTrendPlaybackTimer);
   mtTrendPlaybackToken += 1;
@@ -5894,6 +5996,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.meituan-group-breakdown-panel > .group-breakdown { margin: 0 20px 18px; }
+.product-sort-actions { display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap }
 .external-expense-scope { display: grid; gap: 4px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid #dbeafe; border-radius: 10px; background: #f8fbff; }
 .external-expense-scope b { color: #26415f; }
 .external-expense-scope span { color: #3d6baf; font-size: 13px; }

@@ -4,31 +4,31 @@
       <div>
         <span class="eyebrow">NOTIFICATION RULES</span>
         <h2>通知规则</h2>
-        <p>设置员工转正提醒的提前天数和接收人。提醒会出现在运营工具的「消息通知」中。</p>
+        <p>设置转正、合同及证件到期提醒的提前天数和接收人。提醒会出现在运营工具的「消息通知」中。</p>
       </div>
       <el-button type="primary" :loading="saving" @click="save">保存规则</el-button>
     </section>
     <section class="rules-panel">
       <header>
-        <div><h3>员工转正提醒</h3><p>员工转正日期临近时，系统将通知所选人员。</p></div>
+        <div><h3>人事提醒</h3><p>按各项规则通知指定接收人员，提醒不自动变更员工状态。</p></div>
         <el-button :loading="checking" @click="checkNow">立即检查</el-button>
       </header>
       <article v-for="(rule, type) in rules" :key="type" class="rule-card">
         <div class="rule-card__head">
-          <div><b>{{ rule.name || '员工转正提醒' }}</b><small>{{ rule.description || '按转正日期自动生成提醒' }}</small></div>
+          <div><b>{{ rule.label || '人事提醒' }}</b><small>{{ rule.description || '按对应日期自动生成提醒' }}</small></div>
           <el-switch v-model="rule.enabled" active-text="启用" inactive-text="停用" />
         </div>
         <div class="rule-card__body">
-          <label class="rule-field"><span>提前提醒天数</span><el-input-number v-model="rule.lead_days" :min="1" :max="90" controls-position="right" /><small>例如填 30：在转正前 30 天生成消息通知。</small></label>
-          <label class="rule-field"><span>接收人员</span><el-select v-model="rule.recipient_user_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="请选择接收提醒的后台人员"><el-option v-for="user in users" :key="user.id" :label="userLabel(user)" :value="user.id" /></el-select><small>接收人可在运营工具的「消息通知」中确认、归档或稍后处理。</small></label>
+          <label class="rule-field"><span>提前提醒天数</span><el-input-number v-model="rule.lead_days" :min="1" :max="90" controls-position="right" /><small>例如填 30：在对应日期前 30 天生成消息通知。</small></label>
+          <label class="rule-field"><span>接收人员</span><el-select v-model="rule.user_ids" multiple filterable collapse-tags collapse-tags-tooltip placeholder="请选择接收提醒的后台人员"><el-option v-for="user in users" :key="user.id" :label="userLabel(user)" :value="user.id" /></el-select><small>接收人可在运营工具的「消息通知」中确认、归档或稍后处理。</small></label>
         </div>
       </article>
       <section v-if="upcoming.length" class="upcoming-panel">
-        <b>近期转正节点</b>
+        <b>近期人事节点</b>
         <p>以下为系统已识别的员工；到预计触发日才会进入「消息通知」。</p>
-        <div v-for="item in upcoming" :key="item.employee_id" class="upcoming-item">
+        <div v-for="item in upcoming" :key="`${item.type}-${item.employee_id}`" class="upcoming-item">
           <span><strong>{{ item.name }}</strong><em v-if="item.store_name"> · {{ item.store_name }}</em></span>
-          <span>转正 {{ item.probation_date }}</span>
+          <span>{{ item.date_label || '转正' }} {{ item.milestone_date || item.probation_date }}</span>
           <span>预计 {{ item.trigger_date }} 生成提醒<small v-if="item.days_until_trigger > 0">（还有 {{ item.days_until_trigger }} 天）</small><small v-else>（已进入提醒范围）</small></span>
         </div>
       </section>

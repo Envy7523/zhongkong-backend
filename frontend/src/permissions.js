@@ -10,9 +10,9 @@ export const PERMISSION_KEYS = [
   'store.manage',
   'store-preparation.manage',
   'menu.manage',
-  'cost.manage',
   'staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review',
   'collab.manage',
+  'inspections.view','inspections.submit','inspections.assign','inspections.execute','inspections.review',
   'store-reports.submit', 'store-reports.view', 'mini-staff.transfer', 'staff.transfers.view','staff.support.view','staff.offboarding.view','staff.onboarding.view', 'store-notices.manage', 'learning.view', 'knowledge.edit', 'knowledge.publish', 'store-tasks.manage', 'store-tasks.execute', 'store-tasks.review',
   'bookkeeping.manage',
   'data-import.manage',
@@ -20,7 +20,6 @@ export const PERMISSION_KEYS = [
   'ai-assistant.view',
   'notifications.view',
   'notifications.rules',
-  'db-viewer.view',
   'enterprise-settings.manage',
   'users.manage',
   'positions.manage',
@@ -30,9 +29,9 @@ export const PERMISSION_KEYS = [
 // 左侧导航分组 → 需要的权限码（组内任一命中即显示该组）
 export const NAV_GROUP_PERMISSIONS = {
   dashboard: ['dashboard.view'],
-  'core-business': ['analysis.view', 'store.manage', 'store-preparation.manage', 'menu.manage', 'cost.manage', 'staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'],
-  'operation-tools': ['store-reports.view','staff.hq.manage','workflow.start','workflow.manage','workflow.view','workflow.execute','staff.transfers.view','staff.support.view','staff.offboarding.view','staff.onboarding.view','store-notices.manage','knowledge.edit','collab.manage', 'store-tasks.manage', 'store-tasks.execute', 'store-tasks.review', 'bookkeeping.manage', 'data-import.manage', 'pipeline.manage', 'ai-assistant.view', 'notifications.view'],
-  system: ['db-viewer.view', 'enterprise-settings.manage', 'users.manage', 'positions.manage', 'settings.manage', 'notifications.rules'],
+  'core-business': ['analysis.view', 'store.manage', 'store-preparation.manage', 'menu.manage', 'staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'],
+  'operation-tools': ['inspections.view','inspections.submit','inspections.assign','inspections.execute','inspections.review','store-reports.view','staff.hq.manage','workflow.start','workflow.manage','workflow.view','workflow.execute','staff.transfers.view','staff.support.view','staff.offboarding.view','staff.onboarding.view','store-notices.manage','knowledge.edit','collab.manage', 'store-tasks.manage', 'store-tasks.execute', 'store-tasks.review', 'bookkeeping.manage', 'data-import.manage', 'pipeline.manage', 'ai-assistant.view', 'notifications.view'],
+  system: ['enterprise-settings.manage', 'users.manage', 'positions.manage', 'settings.manage', 'notifications.rules'],
 }
 
 // 菜单项 index → 需要的权限码
@@ -45,11 +44,11 @@ export const NAV_ITEM_PERMISSIONS = {
   'store-management-group': 'store.manage',
   'store-preparation-group': 'store-preparation.manage',
   'menu-management-group': 'menu.manage',
-  'cost-accounting-group': 'cost.manage',
   'staff-management-group': ['staff.view', 'staff.store.edit', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'],
   'collab-list': 'collab.manage',
   'knowledge-base':'knowledge.edit',
   'store-operations':['staff.transfers.view','staff.support.view','staff.offboarding.view','staff.onboarding.view','workflow.manage','store-notices.manage'],
+  'inspections':['inspections.view','inspections.submit','inspections.assign','inspections.execute','inspections.review'],
   'store-tasks': ['store-tasks.manage','store-tasks.execute','store-tasks.review'],
   'bookkeeping-entry': 'bookkeeping.manage',
   'data-import-group': 'data-import.manage',
@@ -57,7 +56,6 @@ export const NAV_ITEM_PERMISSIONS = {
   'ai-assistant': 'ai-assistant.view',
   notifications: 'notifications.view',
   'notification-rules': 'notifications.rules',
-  'db-viewer': 'db-viewer.view',
   'enterprise-settings': 'enterprise-settings.manage',
   'user-management': 'users.manage',
   'position-settings': 'positions.manage',

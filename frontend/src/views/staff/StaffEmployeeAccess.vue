@@ -5,5 +5,5 @@ import {useAuthStore} from '@/stores/auth'
 import StaffEmployees from './StaffEmployees.vue'
 import StoreEmployees from './StoreEmployees.vue'
 const auth=useAuthStore()
-const ownOnly=computed(()=>!auth.isAdmin && auth.can('staff.store.edit'))
+const ownOnly=computed(()=>!auth.isAdmin && auth.can('staff.store.edit')&&!auth.can('staff.view'))
 </script>

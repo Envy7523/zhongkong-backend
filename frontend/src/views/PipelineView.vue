@@ -9,7 +9,7 @@
       <div class="control-title"><span>①</span><div><b>选择日报范围</b><small>不选门店则读取当日全部已汇报门店</small></div></div>
       <div class="control-fields">
         <div class="field"><label>日报日期</label><el-date-picker v-model="bizDate" type="date" value-format="YYYY-MM-DD" format="YYYY-MM-DD" :clearable="false" /></div>
-        <div class="field store-field"><label>门店范围</label><el-select v-model="storeIds" multiple collapse-tags collapse-tags-tooltip clearable filterable placeholder="全部已汇报门店"><el-option v-for="store in stores" :key="store.id" :label="store.store_name" :value="store.id" /></el-select></div>
+        <div class="field store-field"><label>门店范围</label><StoreRegionSelect v-model="storeIds" multiple clearable placeholder="全部已汇报门店" :stores="stores" restrict-to-stores /></div>
         <el-button type="primary" :loading="loading" @click="loadPreview">生成预览</el-button>
       </div>
     </section>
@@ -48,6 +48,7 @@
 </template>
 
 <script setup>
+import StoreRegionSelect from '@/components/StoreRegionSelect.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'

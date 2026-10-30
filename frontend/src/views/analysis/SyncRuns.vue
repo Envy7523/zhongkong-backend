@@ -1,10 +1,11 @@
 <template>
   <div class="sync-runs-page">
+    <DeliveryClientUpdates />
     <!-- ===== 顶部概览 ===== -->
     <el-card shadow="never" class="overview-card">
       <template #header>
         <div class="card-header">
-          <span class="title">收银系统 · 自动导入记录</span>
+          <span class="title">各平台 · 自动采集与导入记录</span>
           <div class="header-actions">
             <el-tag size="small" type="info" effect="plain">今日：{{ overview.today || '-' }}</el-tag>
             <el-button size="small" :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
@@ -50,13 +51,11 @@
     <!-- ===== 筛选 ===== -->
     <el-card shadow="never" class="filter-card">
       <div class="filters">
-        <el-select v-model="filters.platform" placeholder="采集站点" clearable size="small" style="width: 120px" @change="reload">
-          <el-option label="美团管家" value="meituan" />
+        <el-select v-model="filters.platform" placeholder="采集站点" clearable size="small" style="width: 120px" @change="changePlatform">
+          <el-option label="美团管家" value="meituan" /><el-option label="美团外卖" value="meituan_delivery" /><el-option label="淘宝闪购" value="taobao_flash" /><el-option label="京东外卖" value="jd_delivery" /><el-option label="美团经营宝" value="meituan_group" /><el-option label="抖音来客 / 生意经" value="douyin_group" />
         </el-select>
         <el-select v-model="filters.report_type" placeholder="报表类型" clearable size="small" style="width: 190px" @change="reload">
-          <el-option label="综合营业统计" value="cashier_composite" />
-          <el-option label="品项销售明细" value="item_sales_detail" />
-          <el-option label="门店收支统计" value="pos_bookkeeping_daily" />
+          <el-option v-for="option in reportOptions" :key="option.value" :label="option.label" :value="option.value" />
         </el-select>
         <el-date-picker
           v-model="dateRange" type="daterange" size="small" unlink-panels
@@ -77,10 +76,7 @@
           <el-option label="已导入" value="1" />
           <el-option label="未导入" value="0" />
         </el-select>
-        <el-select v-model="filters.pushed" placeholder="是否已推送" clearable size="small" style="width: 130px" @change="reload">
-          <el-option label="已推送" value="1" />
-          <el-option label="未推送" value="0" />
-        </el-select>
+
         <el-button size="small" :icon="Refresh" @click="resetFilters">重置</el-button>
       </div>
     </el-card>
@@ -88,9 +84,9 @@
     <!-- ===== 运行列表 ===== -->
     <el-card shadow="never">
       <el-table :data="runs" v-loading="loading" size="small" border stripe @row-click="openDetail" style="width: 100%">
-        <el-table-column label="业务来源" width="100"><template #default>收银系统</template></el-table-column>
+        <el-table-column label="业务来源" width="100"><template #default="{row}">{{ DELIVERY_REPORTS[row.report_type] ? '外卖' : GROUP_REPORTS[row.report_type] ? '团购' : '收银系统' }}</template></el-table-column>
         <el-table-column label="采集站点" width="100">
-          <template #default="{ row }">{{ row.platform === 'meituan' ? '美团管家' : row.platform }}</template>
+          <template #default="{ row }">{{ siteLabel(row.platform) }}</template>
         </el-table-column>
         <el-table-column label="报表类型" width="140">
           <template #default="{ row }">{{ reportTypeLabel(row.report_type) }}</template>
@@ -123,13 +119,13 @@
         </el-table-column>
         <el-table-column label="允许推送" width="90">
           <template #default="{ row }">
-            <span v-if="row.report_type === 'item_sales_detail' || row.report_type === 'pos_bookkeeping_daily'" class="muted">不适用</span>
+            <span v-if="['all_channel_orders','item_sales_detail','pos_bookkeeping_daily'].includes(row.report_type)" class="muted">不适用</span>
             <el-tag v-else size="small" :type="row.ready_to_push ? 'success' : 'info'" effect="plain">{{ row.ready_to_push ? '是' : '否' }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="推送状态" width="110">
           <template #default="{ row }">
-            <span v-if="row.report_type === 'item_sales_detail' || row.report_type === 'pos_bookkeeping_daily'" class="muted">不适用</span>
+            <span v-if="['all_channel_orders','item_sales_detail','pos_bookkeeping_daily'].includes(row.report_type)" class="muted">不适用</span>
             <el-tag v-else-if="row.push_status" size="small" :type="row.push_status === 'success' ? 'success' : 'danger'">{{ row.push_status === 'success' ? '已推送' : '推送失败' }}</el-tag>
             <span v-else class="muted">{{ row.pushed ? '已推送' : '未推送' }}</span>
           </template>
@@ -168,7 +164,7 @@
           <el-descriptions-item label="SHA-256 前缀"><code class="sha">{{ detail.run.sha256_prefix || '-' }}</code></el-descriptions-item>
           <el-descriptions-item label="导入批次">{{ detail.run.import_batch_id || '-' }}</el-descriptions-item>
           <el-descriptions-item label="门店(原始/匹配)">{{ detail.run.raw_store_count ?? '-' }} / {{ detail.run.matched_store_count ?? '-' }}</el-descriptions-item>
-          <el-descriptions-item label="允许推送">{{ ['item_sales_detail', 'pos_bookkeeping_daily'].includes(detail.run.report_type) ? '不适用' : (detail.run.ready_to_push ? '是' : '否') }}</el-descriptions-item>
+          <el-descriptions-item label="允许推送">{{ ['all_channel_orders','item_sales_detail', 'pos_bookkeeping_daily'].includes(detail.run.report_type) ? '不适用' : (detail.run.ready_to_push ? '是' : '否') }}</el-descriptions-item>
         </el-descriptions>
 
         <el-alert
@@ -213,11 +209,14 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import DeliveryClientUpdates from '@/components/DeliveryClientUpdates.vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import { getSyncRuns, getSyncRunsOverview, getSyncRunDetail } from '@/api'
 import { stageLabel, reasonLabel, detailLines } from '@/utils/syncRunDisplay'
 
+const route=useRoute()
 const loading = ref(false)
 const runs = ref([])
 const total = ref(0)
@@ -228,17 +227,29 @@ const overview = ref({
   today: '', latest: null, last_success_at: null, last_success_business_date: null,
   today_counts: { success: 0, failed: 0, waiting_human: 0, running: 0 }, pending_exceptions: 0,
 })
-const filters = reactive({ platform: '', report_type: '', status: '', is_backfill: '', imported: '', pushed: '' })
+const filters = reactive({ platform: '', report_type: '', status: '', is_backfill: '', imported: '' })
 
 const drawer = ref(false)
 const detail = ref(null)
 const detailLoading = ref(false)
 
-const STATUS_LABEL = { success: '成功', failed: '失败', running: '运行中', waiting_human: '等待人工' }
+const STATUS_LABEL = { success: '成功', failed: '失败', running: '运行中', waiting_human: '等待人工', cancelled:'已取消' }
 const STATUS_TYPE = { success: 'success', failed: 'danger', running: 'primary', waiting_human: 'warning' }
 const statusLabel = (s) => STATUS_LABEL[s] || s || '-'
 const statusType = (s) => STATUS_TYPE[s] || 'info'
-const reportTypeLabel = (s) => ({ cashier_composite: '综合营业统计', item_sales_detail: '品项销售明细', pos_bookkeeping_daily: '门店收支统计' }[s] || s || '-')
+const DELIVERY_REPORTS={...Object.fromEntries(['taobao_flash','jd_delivery'].flatMap(p=>['operating','product','settlement'].map(t=>[p+'_'+t,(p==='taobao_flash'?'淘宝闪购':'京东外卖')+({operating:'营业日报',product:'商品销量',settlement:'结算账单'}[t])]))),meituan_delivery_operating:'美团外卖营业表',meituan_delivery_product:'美团外卖商品销量明细',meituan_delivery_settlement:'美团外卖结算与费用明细'}
+const GROUP_REPORTS={meituan_group_report1:'美团团购收益明细',meituan_group_report2:'美团经营参谋报表',meituan_group_reviews:'美团与点评评价',douyin_group_report1:'抖音团购账单',douyin_group_report2:'抖音门店经营报表',douyin_group_reviews:'抖音门店评价'}
+const reportOptions = computed(() => {
+  const cashier = {member_card_transactions:'会员卡交易流水表', cashier_composite: '综合营业统计', all_channel_orders: '全渠道订单明细（新版）', item_sales_detail: '品项销售明细', pos_bookkeeping_daily: '门店收支统计' }
+  const entries = Object.entries({ ...cashier, ...GROUP_REPORTS,...DELIVERY_REPORTS })
+  return entries.filter(([type]) => !filters.platform || (filters.platform === 'meituan' ? type in cashier : type.startsWith(filters.platform + '_'))).map(([value, label]) => ({ value, label }))
+})
+function changePlatform() {
+  if (!reportOptions.value.some(option => option.value === filters.report_type)) filters.report_type = ''
+  reload()
+}
+const siteLabel=platform=>({meituan:'美团管家',meituan_delivery:'美团外卖',taobao_flash:'淘宝闪购',jd_delivery:'京东外卖',meituan_group:'美团经营宝',douyin_group:'抖音来客 / 生意经'}[platform] || platform || '—')
+const reportTypeLabel = (s) => DELIVERY_REPORTS[s] || GROUP_REPORTS[s] || ({ cashier_composite: '综合营业统计', all_channel_orders: '全渠道订单明细（新版）', item_sales_detail: '品项销售明细', pos_bookkeeping_daily: '门店收支统计' }[s] || s || '-')
 
 function fmtTime(v) {
   if (!v) return '-'
@@ -315,7 +326,9 @@ async function openDetail(row) {
   } finally { detailLoading.value = false }
 }
 
-onMounted(loadAll)
+function applyHealthFilters(){const date=String(route.query.business_date||'');if(/^\d{4}-\d{2}-\d{2}$/.test(date))dateRange.value=[date,date];const type=String(route.query.report_type||'');if(type){filters.platform='';filters.report_type=type}page.value=1}
+onMounted(()=>{applyHealthFilters();loadAll()})
+watch(()=>[route.query.business_date,route.query.report_type],()=>{applyHealthFilters();loadRuns()})
 </script>
 
 <style scoped>

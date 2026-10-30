@@ -1,20 +1,16 @@
 <template>
-  <el-dialog
+  <NotificationDialog
     v-model="visible"
-    width="520px"
+    width="min(680px,96vw)"
+    title="新通知"
+    subtitle="查看通知内容，逐项确认或稍后处理。"
+    :badge="items.length+' 条'"
+    tone="info"
     class="notify-popup"
     :show-close="false"
     align-center
     @closed="onClosed"
   >
-    <template #header>
-      <div class="np-head">
-        <span class="np-dot" />
-        <b>新通知</b>
-        <em>{{ items.length }} 条</em>
-      </div>
-    </template>
-
     <ul class="np-list">
       <li v-for="item in items" :key="item.id" class="np-item" :class="{ done: handled[item.id] }">
         <div class="np-item__main">
@@ -26,8 +22,8 @@
             <span class="np-item__done">{{ handled[item.id] === 'confirm' ? '已归档' : '已稍后' }}</span>
           </template>
           <template v-else>
-            <el-button size="small" type="primary" :loading="acting === item.id" @click="act(item, 'confirm')">确定</el-button>
-            <el-button size="small" text :loading="acting === item.id" @click="act(item, 'later')">稍后</el-button>
+            <el-button type="primary" :loading="acting === item.id" @click="act(item, 'confirm')">确定</el-button>
+            <el-button text :loading="acting === item.id" @click="act(item, 'later')">稍后</el-button>
           </template>
         </div>
       </li>
@@ -37,15 +33,16 @@
       <div class="np-foot">
         <span class="np-foot__hint">{{ remaining ? `还有 ${remaining} 条待处理` : '已全部处理' }}</span>
         <div class="np-foot__actions">
-          <el-button size="small" text @click="openCenter">通知中心</el-button>
-          <el-button size="small" @click="visible = false">关闭</el-button>
+          <el-button text @click="openCenter">通知中心</el-button>
+          <el-button @click="visible = false">关闭</el-button>
         </div>
       </div>
     </template>
-  </el-dialog>
+  </NotificationDialog>
 </template>
 
 <script setup>
+import NotificationDialog from './NotificationDialog.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
@@ -120,20 +117,19 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.np-head { display:flex; align-items:center; gap:8px; }
-.np-dot { width:7px; height:7px; border-radius:50%; background:#e0453f; box-shadow:0 0 0 3px rgba(224,69,63,.14); }
-.np-head b { color:#243d5e; font-size:15px; font-weight:650; }
-.np-head em { color:#93a2b4; font-size:12px; font-style:normal; }
-.np-list { max-height:46vh; margin:0; padding:0; overflow:auto; list-style:none; }
-.np-item { display:flex; align-items:center; gap:12px; padding:11px 2px; border-top:1px solid #f0f4f9; }
+/* Title, status icon and dialog chrome come from NotificationDialog. */
+.np-list { margin:0; padding:0; list-style:none; }
+.np-item { display:flex; align-items:center; gap:12px; padding:16px 2px; border-top:1px solid #f0f4f9; }
 .np-item:first-child { border-top:0; }
 .np-item.done { opacity:.55; }
 .np-item__main { min-width:0; flex:1; }
-.np-item__title { display:block; overflow:hidden; color:#26364b; font-size:13px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
-.np-item__desc { display:block; margin-top:3px; overflow:hidden; color:#8b9aad; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.np-item__title { display:block; overflow:hidden; color:#26364b; font-size:14px; font-weight:600; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; }
+.np-item__desc { display:block; margin-top:3px; overflow:hidden; color:#8b9aad; font-size:12px; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.8; }
 .np-item__side { display:flex; flex:none; align-items:center; gap:4px; }
 .np-item__done { color:#5a8f6e; font-size:12px; }
 .np-foot { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .np-foot__hint { color:#93a2b4; font-size:12px; }
 .np-foot__actions { display:flex; align-items:center; gap:6px; }
 </style>
+
+<style scoped>@media(max-width:600px){.np-item{flex-direction:column;align-items:stretch}.np-item__side{justify-content:flex-end}.np-foot{flex-wrap:wrap}.np-foot__actions{margin-left:auto}}</style>
