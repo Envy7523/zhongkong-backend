@@ -88,7 +88,16 @@ async function prepareOperatingReportImpl(page, { from, to = from, storeIds }, p
   }
   // 日期由报表固定输出，界面仅有其余五个不可取消的基础字段复选框。
   const selected = ['日期', ...await labels.evaluateAll(elements => elements.filter(el => {const input=el.querySelector('input');return input?.checked&&(input.value||input.disabled);}).map(el => el.textContent.trim()))];
-  if (selected.length !== contract.fields.length || contract.fields.some(name => !selected.includes(name))) throw Error('operating_ui_selection_mismatch');
+  if (selected.length !== contract.fields.length || contract.fields.some(name => !selected.includes(name))) {
+    const error=Error('operating_ui_selection_mismatch');
+    // Only public report field labels are recorded. Never capture input values,
+    // page text, account identifiers, or browser credentials in diagnostics.
+    const missing=contract.fields.map((name,index)=>selected.includes(name)?null:index).filter(index=>index!==null);
+    const duplicates=contract.fields.map((name,index)=>selected.filter(value=>value===name).length>1?index:null).filter(index=>index!==null);
+    error.trace=['fields_count_'+selected.length,'fields_missing_'+(missing.join('_')||'none'),'fields_duplicate_'+(duplicates.join('_')||'none'),
+      ...selected.filter(name=>!contract.fields.includes(name)).slice(0,4).map(name=>'fields_extra_'+Buffer.from(name,'utf8').toString('hex').slice(0,100))];
+    throw error;
+  }
   if(storeIds&&!await visible(page.getByRole('button',{name:'自定义门店',exact:true})).evaluate(el=>el.classList.contains('roo-btn-primary')))throw Error('operating_ui_scope_mismatch');
   return { from, to, fields: [...selected], scope: storeIds?'custom_stores':'all_stores', ...(storeIds?{expected_store_ids:[...storeIds]}:{}), grain: 'day' };
 }

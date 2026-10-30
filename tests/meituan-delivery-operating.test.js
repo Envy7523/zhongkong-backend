@@ -85,6 +85,22 @@ test('日期未设置正确时停止，不能误导出昨日以外的数据', as
   await assert.rejects(prepareOperatingReport({locator(){return locator},getByRole(){clicked=true}},scope),/ui_date_mismatch/);
   assert.equal(clicked,false);
 });
+
+test('字段差异诊断指出缺项且不包含页面原文或输入值，错误仍拒绝导出',async()=>{
+ const cells=C.fields.slice(1).map((name,index)=>({textContent:name,querySelector:()=>({checked:name!=='综合体验分',disabled:index<5,value:'field'+index})}));
+ const labels={filter(){return this},async waitFor(){},async evaluateAll(fn){return fn(cells)},async evaluate(){return false},async click(){}};
+ const active={filter(){return this},async evaluate(){return true}};
+ const page={locator(css){return css==='input[type="text"]'?{filter(){return this},async evaluateAll(){return ['2026-10-05','2026-10-05']}}:labels},getByRole(){return active},getByText(){return {filter(){return this},async evaluate(){return true}}}};
+ let failure;try{await prepareOperatingReport(page,scope)}catch(e){failure=e}
+ assert.equal(failure.message,'operating_ui_selection_mismatch');assert(failure.trace.includes('fields_missing_14'));assert(failure.trace.includes('fields_count_14'));
+ assert(failure.trace.every(v=>/^[a-z0-9_]+$/.test(v)));assert(!JSON.stringify(failure.trace).includes('2026-10-05'));
+});
+test('custom-store tasks require explicit scope and cannot be confused with all-store tasks',()=>{
+ const name='门店_自定义门店_20261005_20261005_testaccount_2026-10-06 15_45_31';
+ assert.throws(()=>validateJobFilename(name,{from:'2026-10-05',account:'testaccount'}),/job_name_mismatch/);
+ assert.equal(validateJobFilename(name,{from:'2026-10-05',account:'testaccount',scope:'custom_stores'}),name);
+ assert.throws(()=>validateJobFilename(name.replace('自定义门店','全部门店'),{from:'2026-10-05',account:'testaccount',scope:'custom_stores'}),/job_name_mismatch/);
+});
 test('恢复任务遇到不存在或未完成任务时不能创建重复导出', async () => {
   const name='门店_全部门店_20261005_20261005_testaccount_2026-10-06 15_45_31';
   const task={filter(){return this},async count(){return 0}};
