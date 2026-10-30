@@ -1,6 +1,6 @@
 <template>
   <section class="real-income-composition">
-    <header class="composition-heading"><div><h3>营业收入构成</h3><p>{{period?period+' · ':''}}真实数据 · 按支付方式与平台逐项展示</p></div><span class="field-count">{{result.rows.length}} 项字段</span></header>
+    <header class="composition-heading"><div><h3>营业收入构成</h3><p>{{period?period+' · ':''}}消费／营业全额 · 扣减及最终到手见下方</p></div><span class="field-count">{{result.rows.length}} 项字段</span></header>
     <div v-if="result.rows.length" class="composition-layout">
     <el-table :key="tableStateKey" :data="result.rows" row-key="key" stripe class="real-income-table" :row-class-name="({row})=>row.platformMissing?'platform-missing-row':'platform-complete-row'">
       <el-table-column prop="name" label="收入字段" min-width="160" fixed="left"/>
@@ -11,7 +11,7 @@
             <template #reference><button type="button" class="source-details" :aria-label="row.name+'：查看缺失的第三方数据日期'"><el-tag type="danger" size="small" effect="plain">{{row.source}}</el-tag></button></template>
             <div class="missing-details">
               <strong>{{row.name}} · 数据待核对</strong>
-              <p>{{row.source==='会员交易流水'?'会员流水或营业日关联待补齐，仅汇总已核实本金。':'仅汇总已导入的平台数据，缺失日期未使用收银机补数。'}}</p>
+              <p>{{row.source==='会员交易流水'?'会员流水或营业日关联待补齐，仅展示已核实消费全额；本金、赠金和到手见下方。':'仅汇总已导入的平台数据，缺失日期未使用收银机补数。'}}</p>
               <ul v-if="row.missingDays.length"><li v-for="day in row.missingDays" :key="[day.store_id,day.biz_date,day.reason].join('|')"><b>{{day.biz_date}}</b><span>{{day.store_name||'门店 '+day.store_id}}</span><small>{{day.reason}}</small></li></ul>
               <p v-else>请重新查询以获取缺失日期。</p>
             </div>
@@ -19,10 +19,9 @@
           <el-tag v-else :type="row.sourceTone" size="small" effect="plain">{{row.source}}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column v-if="hasGross" label="营业额" min-width="150" align="right"><template #default="{row}">{{money(row.gross)}}<small v-if="row.grossPending" class="member-receipt">部分营业日报待补齐</small></template></el-table-column>
-      <el-table-column label="消费／实收金额" min-width="175" align="right"><template #default="{row}"><template v-if="row.memberConsumption"><span>{{money(row.displayAmount)}}</span><small class="member-receipt">消费总额 · 到手 {{money(row.actual)}}</small></template><span v-else :class="{missing:row.actual===null}">{{row.actual===null?'未提供':money(row.actual)}}</span></template></el-table-column>
-      <el-table-column v-if="compare" label="实收环比" min-width="120" align="right"><template #default="{row}">{{row.compareRate===null?'—':(row.compareRate>0?'+':'')+(row.compareRate*100).toFixed(1)+'%'}}</template></el-table-column>
-      <el-table-column label="实收占比" min-width="110" align="right"><template #default="{row}">{{row.ratio===null?'—':(row.ratio*100).toFixed(1)+'%'}}</template></el-table-column>
+      <el-table-column label="全额" min-width="175" align="right"><template #default="{row}"><span :class="{missing:row.fullAmount===null}">{{row.fullAmount===null?'未提供':money(row.fullAmount)}}</span></template></el-table-column>
+      <el-table-column v-if="compare" label="全额环比" min-width="120" align="right"><template #default="{row}">{{row.fullCompareRate===null?'—':(row.fullCompareRate>0?'+':'')+(row.fullCompareRate*100).toFixed(1)+'%'}}</template></el-table-column>
+      <el-table-column label="全额占比" min-width="110" align="right"><template #default="{row}">{{row.fullRatio===null?'—':(row.fullRatio*100).toFixed(1)+'%'}}</template></el-table-column>
     </el-table>
     <aside class="income-ring-column" :aria-label="chartTitle">
       <h4>{{chartTitle}}</h4>
@@ -37,6 +36,7 @@
     </aside>
     </div>
     <el-empty v-else description="暂无营业收入构成数据" :image-size="64"/>
+    <p class="amount-note">支付方式按消费金额、平台按营业全额列示。构成合计与最终到手不同，扣减及结算见下方。<span v-if="result.fullMissingCount"> {{result.fullMissingCount}} 项未提供全额。</span><span v-if="result.fullPendingCount"> {{result.fullPendingCount}} 项覆盖范围待核对，仅展示已取得部分。</span></p>
     <MemberConsumption :data="data.member_card_consumption"/>
     <PlatformIncomeComposition :items="data.platform_income_composition||[]"/>
 
@@ -54,14 +54,13 @@ const result = computed(() => realRevenueComposition(props.data, props.previous)
 // A query can reuse the same payment/channel keys with different coverage.
 // Recreate the table when its warning state changes, including fixed cells.
 const tableStateKey = computed(() => JSON.stringify(result.value.rows.map(row => [row.key, row.platformMissing, row.missingDays])))
-const hasGross = computed(() => result.value.rows.some(r => r.gross !== null || r.grossPending))
 const money = v => v === null || v === undefined ? '—' : Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const colors = ['#2563eb', '#14b8a6', '#a78bfa', '#f59e0b', '#64748b', '#60a5fa', '#f97316', '#06b6d4', '#ec4899', '#22c55e']
 // Pie sectors represent positive receipts only. Keep zero, missing and refund
 // amounts intact in the table, rather than turning refunds into positive slices.
-const chartRows = computed(() => result.value.rows.map((row, index) => ({ ...row, color: colors[index % colors.length] })).filter(row => row.actual > 0))
+const chartRows = computed(() => result.value.rows.map((row, index) => ({ ...row, actual:row.fullAmount, color: colors[index % colors.length] })).filter(row => row.actual > 0))
 const chartTotal = computed(() => chartRows.value.reduce((cents, row) => cents + Math.round(row.actual * 100), 0) / 100)
-const chartTitle = computed(() => result.value.rows.some(row => row.actual < 0) ? '正向实收占比' : '实收占比')
+const chartTitle = computed(() => result.value.rows.some(row => row.fullAmount < 0) ? '正向全额占比' : '全额占比')
 const chartElement = ref(null)
 let chart = null, resizeObserver = null
 
@@ -82,7 +81,7 @@ function renderChart() {
     })
     resizeObserver.observe(element)
   }
-  const hasAmount = result.value.rows.some(row => row.actual !== null)
+  const hasAmount = result.value.rows.some(row => row.fullAmount !== null)
   chart.setOption({
     animation: false,
     aria: { enabled: true },
@@ -100,7 +99,7 @@ function renderChart() {
     }],
     graphic: [
       { type: 'text', left: 'center', top: '41%', style: { text: hasAmount ? money(chartTotal.value) : '—', fill: '#182230', fontSize: 19, fontWeight: 700, textAlign: 'center' } },
-      { type: 'text', left: 'center', top: '54%', style: { text: chartTitle.value === '正向实收占比' ? '正向实收' : '实收合计', fill: '#64748b', fontSize: 12, textAlign: 'center' } },
+      { type: 'text', left: 'center', top: '54%', style: { text: chartTitle.value === '正向全额占比' ? '正向全额' : '已取得全额', fill: '#64748b', fontSize: 12, textAlign: 'center' } },
     ],
   }, true)
 }
@@ -109,6 +108,7 @@ onMounted(renderChart)
 onBeforeUnmount(disposeChart)
 </script>
 <style scoped>
+.amount-note{padding:0 22px;font-size:12px;line-height:1.8;color:var(--el-text-color-secondary)}
 .real-income-composition{color:var(--el-text-color-primary)}
 .composition-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;border-bottom:1px solid var(--el-border-color-lighter)}
 h3{font-size:16px;margin:0;font-weight:600}.composition-heading p{font-size:12px;color:var(--el-text-color-secondary);margin:7px 0 0;line-height:1.6}

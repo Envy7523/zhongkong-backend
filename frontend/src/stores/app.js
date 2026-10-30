@@ -1,10 +1,14 @@
+import { workspaceId, workspaceForId } from '@/navigation/workspaces.mjs'
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { STAFF_GROUPS, staffWorkspaceId } from '@/navigation/staff.mjs'
 
 const PAGE_TITLES = {
+  'store-inventory':'门店库存',
+  'not-found':'页面不存在',
   'knowledge-base': '知识库管理',
-  workflows:'审批流程',
+  workflows:'审批申请',
+  'operation-reports':'问题申报', 'operation-personnel':'人员流程', 'operation-announcements':'公告与提醒',
   'store-operations':'门店流程与通知',
   'inspections':'巡检与整改',
   'store-tasks': '门店日常任务',
@@ -45,7 +49,7 @@ const SUB_LABELS = {
   'staff-management': { manager: '店长管理', clerk: '店员管理', test: '测试数据', employees: '员工管理', organizations:'组织与通讯录', 'daily-tasks':'每日任务', store: '店长分配', salary: '工资表制作', attendance: '月出勤管理', roster: '员工考勤', review: '工资审核', payslips: '员工工资条查询', dispatch: '员工调岗' },
   bookkeeping: { entry: '门店记账', categories: '记账分类', records: '门店账本', 'expense-tags':'字段分配' },
   'store-preparation': { '3d': '门店渲染' },
-  'data-import': { pos: '收银系统数据', 'pos-automation': '收银系统 · 自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' },
+  'data-import': { pos: '收银系统数据', 'pos-automation': '收银系统 · 自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据' },
 }
 
 // 从 menu index 解析 page 和 sub
@@ -70,6 +74,8 @@ export const useAppStore = defineStore('app', () => {
   const activeTabId = ref('')
 
   function getTabTitle(id) {
+    const group = workspaceForId(id)
+    if(group) return group.label
     const staffGroup = STAFF_GROUPS.find(group => group.id === id)
     if (staffGroup) return staffGroup.label
     const info = INDEX_TO_PAGE_SUB[id]
@@ -82,11 +88,13 @@ export const useAppStore = defineStore('app', () => {
   }
 
   function openTabFromId(id) {
-    id = staffWorkspaceId(id)
+    const pageId=id
+    id = workspaceId(staffWorkspaceId(id))
     if (id === 'menu-management-template') id = 'menu-management-overview'
     if (id === 'db-viewer' || id.startsWith('cost-accounting')) return
     const existing = tabs.value.find((t) => t.id === id)
     if (existing) {
+      existing.pageId = pageId
       existing.title = getTabTitle(id)
       activeTabId.value = id
       return
@@ -96,6 +104,7 @@ export const useAppStore = defineStore('app', () => {
     tabs.value.push({
       id,
       title,
+      pageId,
       closable: id !== 'dashboard',
     })
     activeTabId.value = id
@@ -123,12 +132,12 @@ export const useAppStore = defineStore('app', () => {
     tabs.value = tabs.value.filter(tab => tab.id !== 'menu-management-template')
     if (activeTabId.value === 'menu-management-template') openTabFromId('menu-management-overview')
     const seen = new Set()
-    tabs.value = tabs.value.map(tab => ({ ...tab, id: staffWorkspaceId(tab.id) })).filter(tab => {
+    tabs.value = tabs.value.map(tab => ({ ...tab, id: workspaceId(staffWorkspaceId(tab.id)) })).filter(tab => {
       if (seen.has(tab.id)) return false
       seen.add(tab.id)
       return true
     })
-    activeTabId.value = staffWorkspaceId(activeTabId.value)
+    activeTabId.value = workspaceId(staffWorkspaceId(activeTabId.value))
     tabs.value.forEach((tab) => { tab.title = getTabTitle(tab.id) })
   }
 

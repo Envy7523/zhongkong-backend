@@ -352,6 +352,7 @@ export const getCostAnalysis = (params) => http.get('/api/analysis/cost', { para
 export const getSalesAnalysis = () => http.get('/api/analysis/sales')
 export const getMonthlyOperatingDashboard = (params) => http.get('/api/analysis/monthly-operating-dashboard', { params })
 export const getBusinessAnalytics = (scope = 'overview', params) => http.get(`/api/business-analytics/views/${scope}`, { params })
+export const getOrderSalesInsights = params => http.get('/api/business-analytics/order-insights', { params })
 export const getMeituanOperation = (params) => http.get('/api/business-analytics/meituan-operation', { params })
 export const getGroupBuyDailySummary = (params) => http.get('/api/business-analytics/group-buy/daily-summary', { params })
 // all=1 直接写进 URL：不依赖 params 序列化与合并顺序，避免请求丢掉 all 后
@@ -413,13 +414,6 @@ export const deleteDishSalesMapping = (id) => http.delete(`/api/dish-sales/mappi
 export const autoBindDishSalesMappings = () => http.post('/api/dish-sales/mappings/auto-bind')
 // 智能推荐批量绑定：与「菜品销量」同一套识别规则（菜名归一化 + 编码互校 + 名称/规格唯一）
 export const autoBindDishSalesMappingsSmart = () => http.post('/api/dish-sales/mappings/auto-bind-smart')
-
-// ===== 日报导入 =====
-export const importDailyReport = (data) => http.post('/api/reports/daily/import', data)
-export const getDailyReportDB = (params) => http.get('/api/reports/daily/db', { params })
-
-// ===== 耗材 =====
-export const addSupply = (data) => http.post('/api/supplies', data)
 
 // ===== 推送日志 =====
 export const getPushLogs = (params) => http.get('/api/push-logs', { params })
@@ -585,5 +579,32 @@ export const organizationApi = {
  saveEntry: (id,data) => http.put(`/api/staff/organizations/directory/${id}`,data),
 }
 export const getAttendanceDailyTask = () => http.get('/api/staff/dingtalk/auto-sync')
+export const businessLedgerApi = {
+ approvals:params=>http.get('/api/business-ledger/approvals',{params}),
+ startApprovalQuery:data=>http.post('/api/business-ledger/approvals/query',data),
+ approvalQuery:id=>http.get(`/api/business-ledger/approvals/query/${id}`),
+ approvalAction:(id,data)=>http.post(`/api/business-ledger/approvals/${id}/action`,data),
+ approvalStoreBindings:params=>http.get('/api/business-ledger/approval-store-bindings',{params}),
+ saveApprovalStoreBinding:(id,data)=>http.post(`/api/business-ledger/approval-store-bindings/${id}`,data),
+ approvalProofs:id=>http.get(`/api/business-ledger/approvals/${id}/proofs`),
+ uploadApprovalProof:(id,version,file,{uploadKey,onProgress}={})=>http.post(`/api/business-ledger/approvals/${id}/proofs`,file,{params:{version,name:file.name,upload_key:uploadKey},headers:{'Content-Type':'application/octet-stream'},timeout:90000,onUploadProgress:e=>onProgress?.(e.total?Math.min(99,Math.round(e.loaded/e.total*100)):0)}),
+ removeApprovalProof:(id,proof)=>http.delete(`/api/business-ledger/approvals/${id}/proofs/${proof}`),
+ downloadApprovalProof:(id,proof)=>http.get(`/api/business-ledger/approvals/${id}/proofs/${proof}`,{responseType:'blob'}),
+ context:()=>http.get('/api/business-ledger/context'),
+ mine:()=>http.get('/api/business-ledger/payslips/mine'),
+ payslipConsent:version=>http.post('/api/business-ledger/payslips/consent',{version,accept:true}),
+ slip:id=>http.get(`/api/business-ledger/payslips/mine/${id}`),
+ receipt:(id,data)=>http.post(`/api/business-ledger/payslips/mine/${id}/receipt`,data),
+ published:period=>http.get('/api/business-ledger/payslips',{params:{period}}),
+ candidates:period=>http.get('/api/business-ledger/payslips/candidates',{params:{period}}),
+ publish:data=>http.post('/api/business-ledger/payslips/publish',data),
+ withdraw:(id,data)=>http.post(`/api/business-ledger/payslips/${id}/withdraw`,data),
+ remind:id=>http.post(`/api/business-ledger/payslips/${id}/remind`,{confirm:true}),
+ integrations:()=>http.get('/api/business-ledger/integrations'),
+ importApproval:data=>http.post('/api/business-ledger/integrations/import',data,{timeout:120000}),
+ audit:params=>http.get('/api/operation-audit',{params}),
+}
 
 export const staffTrainingApi={attendance:(id,params)=>http.get('/api/store-operations/training/records/'+id+'/attendance',{params}),options:()=>http.get('/api/store-operations/training/options'),list:()=>http.get('/api/store-operations/training/records'),mentors:store_id=>http.get('/api/store-operations/training/mentors',{params:{store_id}}),setup:(id,data)=>http.put('/api/store-operations/training/employees/'+id,data),start:data=>http.post('/api/store-operations/training/records',data),change:(id,data)=>http.post('/api/store-operations/training/records/'+id+'/action',data)}
+
+export const inventoryApi={suppliers:()=>http.get("/api/inventory/suppliers"),supplierCatalog:id=>http.get(`/api/inventory/suppliers/${id}/catalog`),previewSupplierImport:(id,b)=>http.post(`/api/inventory/suppliers/${id}/import-preview`,b),importSupplierCatalog:(id,b)=>http.post(`/api/inventory/suppliers/${id}/import`,b),context:()=>http.get("/api/inventory/context"),items:()=>http.get("/api/inventory/items"),saveItem:b=>http.post("/api/inventory/items",b),stock:q=>http.get("/api/inventory/stock",{params:q}),documents:q=>http.get("/api/inventory/documents",{params:q}),detail:id=>http.get("/api/inventory/documents/"+id),create:b=>http.post("/api/inventory/documents",b),update:(id,b)=>http.put("/api/inventory/documents/"+id,b),action:(id,b)=>http.post("/api/inventory/documents/"+id+"/action",b),loans:q=>http.get("/api/inventory/loans",{params:q}),convert:(id,b)=>http.post("/api/inventory/loans/"+id+"/convert",b)}

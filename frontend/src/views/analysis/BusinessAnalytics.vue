@@ -1275,31 +1275,7 @@
           <el-empty v-else :description="`暂无${incomeCompositionTitle}数据`" />
         </section>
         </template>
-        <section class="panel hourly-order-panel">
-          <header>
-            <div>
-              <h3>时段订单走势图</h3>
-              <p>
-                {{ rangeLabel }} · 从 00:00 至次日
-                00:00，每小时统计一次实际订单量<span
-                  v-if="dishAnalytics.notes.hourly"
-                  class="merged-source-note"
-                  >{{ dishAnalytics.notes.hourly }}</span
-                >
-              </p>
-            </div>
-            <span class="panel-badge">24 个时段</span>
-          </header>
-          <div
-            v-if="hourlyOrderTotal > 0"
-            ref="hourlyOrderChartRef"
-            class="hourly-order-chart"
-          ></div>
-          <el-empty
-            v-else
-            description="当前区间的数据不带下单时刻（收银机“品项销售明细”没有该字段），无法按小时统计"
-          />
-        </section>
+        <OrderSalesInsights :report-range="reportRange" :store-scope="currentStoreScope()" />
       </template>
       <template v-else>
         <section
@@ -2740,6 +2716,7 @@
 <script setup>
 import MeituanOperatingSource from '@/components/MeituanOperatingSource.vue'
 import RealRevenueComposition from "@/components/RealRevenueComposition.vue";
+import OrderSalesInsights from "@/components/OrderSalesInsights.vue";
 import { sortProductSales } from '@/utils/product-sales-sort.mjs'
 import MeituanSettlement from '@/components/MeituanSettlement.vue'
 import {
@@ -2796,8 +2773,7 @@ const activeTab = ref("overview"),
   storeOptions = ref([]),
   trendChartRef = ref(),
   compositionChartRef = ref(),
-  channelCompositionChartRef = ref(),
-  hourlyOrderChartRef = ref();
+  channelCompositionChartRef = ref();
 const groupQueryVisible = ref(false),
   groupQueryStep = ref(0);
 const groupQuerySteps = computed(() => {
@@ -2895,7 +2871,6 @@ const diagnosisVisible = ref(false),
 let trendChart,
   compositionChart,
   channelCompositionChart,
-  hourlyOrderChart,
   chartFrame;
 let mtTrendPlaybackTimer = null,
   mtTrendPlaybackToken = 0;
@@ -2991,7 +2966,6 @@ const dishPage = ref(1);
 const dishPageSize = ref(20);
 const dishTotal = ref(0);
 // 时段走势：24 个槽位即使全 0 也算“有数组”，所以要按订单合计判断是否真有数据
-const hourlyOrderTotal = computed(() => (dishAnalytics.hourly_trend || []).reduce((sum, row) => sum + (Number(row.order_count) || 0), 0));
 const productAnalytics = reactive({ products: [], totals: {} });
 const productLoading = ref(false);
 const productSort = ref("amount");
@@ -5494,7 +5468,6 @@ async function loadDishAnalytics() {
     });
     dishTotal.value = Number(result.total) || 0;
     await nextTick();
-    renderHourlyOrderChart();
   } catch (error) {
     Object.assign(dishAnalytics, {
       summary: {},
@@ -5662,73 +5635,6 @@ function renderPie(chartRef, chart, items, centerText, centerLabel) {
     true,
   );
   return instance;
-}
-function renderHourlyOrderChart() {
-  if (!hourlyOrderChartRef.value || analysisScope.value !== "total") return;
-  hourlyOrderChart = reuseChart(hourlyOrderChart, hourlyOrderChartRef.value);
-  const rows = dishAnalytics.hourly_trend || [];
-  // 24 个槽位即使全为 0 也算「有数组」，所以按合计判断是否真有数据；无数据时清空，避免残留上一次的图
-  if (!rows.length || hourlyOrderTotal.value <= 0) {
-    hourlyOrderChart.clear();
-    return;
-  }
-  const dark = false;
-  hourlyOrderChart.resize();
-  hourlyOrderChart.setOption(
-    {
-      color: ["#4b83ed"],
-      tooltip: {
-        trigger: "axis",
-        backgroundColor: dark ? "#172b48" : "#fff",
-        textStyle: { color: dark ? "#e7f0ff" : "#182230" },
-        formatter: (params) =>
-          `${params?.[0]?.axisValue || ""}<br/>订单量：<b>${numberText(params?.[0]?.value || 0)}</b> 单`,
-      },
-      grid: { left: 14, right: 22, top: 24, bottom: 16, containLabel: true },
-      xAxis: {
-        type: "category",
-        data: rows.map((row) => row.period),
-        boundaryGap: false,
-        axisLine: { lineStyle: { color: dark ? "#2d527e" : "#e4e9f1" } },
-        axisTick: { show: false },
-        axisLabel: {
-          color: dark ? "#aec4e4" : "#8a94a6",
-          interval: 1,
-          fontSize: 10,
-        },
-      },
-      yAxis: {
-        type: "value",
-        minInterval: 1,
-        axisLabel: {
-          color: dark ? "#aec4e4" : "#8a94a6",
-          formatter: (value) => numberText(value),
-        },
-        splitLine: {
-          lineStyle: {
-            color: dark ? "rgba(148,180,224,.14)" : "#edf1f6",
-            type: "dashed",
-          },
-        },
-      },
-      series: [
-        {
-          name: "订单量",
-          type: "line",
-          smooth: true,
-          data: rows.map((row) => Number(row.order_count) || 0),
-          symbol: "circle",
-          symbolSize: 5,
-          lineStyle: { width: 3 },
-          itemStyle: { color: "#4b83ed" },
-          areaStyle: {
-            color: dark ? "rgba(75,131,237,.24)" : "rgba(75,131,237,.14)",
-          },
-        },
-      ],
-    },
-    true,
-  );
 }
 function renderCharts() {
   if (isUnifiedRealView.value) {
@@ -5933,7 +5839,6 @@ function renderCharts() {
       displayedChannelCompositionTotal.value,
       channelCompositionTitle.value,
     );
-  renderHourlyOrderChart();
   if (isMeituanOperationView.value) renderMeituanTrends();
 }
 function queueChartRender() {
@@ -5947,7 +5852,6 @@ function resizeCharts() {
   trendChart?.resize();
   compositionChart?.resize();
   channelCompositionChart?.resize();
-  hourlyOrderChart?.resize();
   mtTrendChart?.resize();
 }
 watch(activeTab, async (value) => {
@@ -5989,7 +5893,6 @@ onBeforeUnmount(() => {
   trendChart?.dispose();
   compositionChart?.dispose();
   channelCompositionChart?.dispose();
-  hourlyOrderChart?.dispose();
   mtTrendChart?.dispose();
   window.removeEventListener("resize", resizeCharts);
 });

@@ -9,16 +9,16 @@ const storeStaff = require('../lib/store-staff');
 const {isGroupAffiliation} = require('../lib/staff-affiliation');
 let SQL;
 before(async()=> { SQL=await initSqlJs(); });
-async function fixture(monthNow=()=> '2026-09') {
+async function fixture(monthNow=()=> '2026-09', flowVersion=0) {
   const raw=new SQL.Database();
   const db={run:(sql,params=[])=>{raw.run(sql,params);return raw.getRowsModified();},queryAll:(sql,params=[])=>{const stmt=raw.prepare(sql);stmt.bind(params);const rows=[];while(stmt.step())rows.push(stmt.getAsObject());stmt.free();return rows;},save:()=>{}};
   db.queryOne=(sql,params)=>db.queryAll(sql,params)[0] || null;
   db.insert=(sql,params)=>{db.run(sql,params);return db.queryOne('SELECT last_insert_rowid() id').id;};
   raw.exec(`CREATE TABLE stores(id INTEGER PRIMARY KEY,store_name TEXT,status TEXT);INSERT INTO stores VALUES(1,'A店','营业中'),(2,'B店','营业中');
-    CREATE TABLE position_settings(id INTEGER PRIMARY KEY,permissions_json TEXT);
+    CREATE TABLE position_settings(id INTEGER PRIMARY KEY,name TEXT,permissions_json TEXT,is_system INTEGER DEFAULT 0);
     CREATE TABLE users(id INTEGER PRIMARY KEY,username TEXT,display_name TEXT,store_id INTEGER,position_id INTEGER);
     INSERT INTO users VALUES(1,'manager-a','A店长',1,1),(2,'hr','人事',NULL,2),(3,'reviewer','审核人',NULL,3),(4,'manager-b','B店长',2,1),(5,'unbound','未绑定',NULL,1),(6,'admin','管理员',NULL,4),(7,'preparer','制表人',NULL,5);
-    CREATE TABLE employees(id INTEGER PRIMARY KEY,store_id INTEGER,store_name TEXT,status TEXT DEFAULT '在职',salary REAL DEFAULT 0,leave_date TEXT,updated_at TEXT DEFAULT '');
+    CREATE TABLE employees(id INTEGER PRIMARY KEY,store_id INTEGER,store_name TEXT,status TEXT DEFAULT '在职',salary REAL DEFAULT 0,labor_relation TEXT DEFAULT '',leave_date TEXT,updated_at TEXT DEFAULT '');
     CREATE TABLE employee_salary_profiles(employee_id INTEGER,base_salary REAL,position_allowance REAL,performance_salary REAL,attendance_bonus REAL,housing_allowance REAL,weekday_overtime_rate REAL,restday_overtime_rate REAL,part_time_hourly_rate REAL);
     CREATE TABLE employee_store_dispatches(id INTEGER, status TEXT,employee_id INTEGER,origin_store_id INTEGER,support_store_id INTEGER,origin_store_name TEXT,dispatch_mode TEXT,dispatch_dates_json TEXT,start_date TEXT,end_date TEXT);
     CREATE TABLE employee_lifecycle_events(id INTEGER PRIMARY KEY,employee_id INTEGER,event_type TEXT,event_date TEXT,note TEXT,source TEXT,details_json TEXT);
@@ -27,22 +27,52 @@ async function fixture(monthNow=()=> '2026-09') {
     CREATE TABLE payroll_month_settings(period TEXT PRIMARY KEY,scheduled_days REAL,updated_by TEXT,updated_at TEXT);
     INSERT INTO payroll_month_settings VALUES('2026-09',25,'旧设置','2026-10-06');`);
   for (const field of storeStaff.FIELDS) db.run(`ALTER TABLE employees ADD COLUMN ${field} TEXT DEFAULT ''`);
-  for (const [id,permissions] of [[1,['staff.store.edit','payroll.view','payroll.prepare']],[2,['staff.view','payroll.view','payroll.prepare','payroll.attendance']],[3,['payroll.view','payroll.review']],[4,['*']],[5,['payroll.prepare']]]) db.insert('INSERT INTO position_settings VALUES(?,?)',[id,JSON.stringify(permissions)]);
+  for (const [id,permissions] of [[1,['staff.store.edit','payroll.view','payroll.prepare']],[2,['staff.view','payroll.view','payroll.prepare','payroll.attendance']],[3,['payroll.view','payroll.review']],[4,['*']],[5,['payroll.prepare']]]) db.insert('INSERT INTO position_settings(id,permissions_json) VALUES(?,?)',[id,JSON.stringify(permissions)]);
   db.run("INSERT INTO employees(id,store_id,store_name,name,salary,hire_type) VALUES(1,1,'A店','A员工',6500,'全职'),(2,2,'B店','B员工',6000,'全职'),(3,NULL,'永文总公司','集团员工',8000,'全职')");
   const source=fs.readFileSync(require.resolve('../server.js'),'utf8');
   const dispatchSource=source.slice(source.indexOf('function localDateString'),source.indexOf('function lifecycleDate'))+source.slice(source.indexOf('function normalizeAttendanceDate'),source.indexOf('function splitIntoChunks'))+source.slice(source.indexOf('function dispatchDates'),source.indexOf('// 跨店支援不变更'));
   const dispatchPresentation=new Function(dispatchSource+';return dispatchPresentation;')();
   const helpers=new Function('db','XLSX','isGroupAffiliation','dispatchPresentation','staffSupervisor',source.slice(source.indexOf('const PAYROLL_EDITABLE_NUMBERS'),source.indexOf('payrollWorkflow.mount({'))+';return {readPayrollSheet,payrollTemplateRows,formatPayrollRow,payrollWorkbook};')(db,XLSX,isGroupAffiliation,dispatchPresentation,require('../lib/staff-supervisor'));
   workflow.initialize(db);
+  require('../lib/personnel-access').initialize(db);
   const app=express();app.use(express.json());app.use((req,res,next)=>{req.user={id:Number(req.headers['x-fixture-user'] || ({'Bearer qa-hr':2,'Bearer qa-reviewer':3}[req.headers.authorization]) || 1)};next();});app.use(workflow.scopeGuard(db));
   workflow.mount({app,db,XLSX,monthNow,...helpers});storeStaff.mount({app,db,validateStaffFields:()=>null});
   app.get('/api/staff',(req,res)=>res.json({secret:'all staff'}));app.get('/api/db/stores',(req,res)=>res.json({secret:'all stores'}));app.get('/api/auth/me',(req,res)=>res.json({ok:true}));
   const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
-  const api=async(path,method='GET',body,user=1)=>{const response=await fetch(`http://127.0.0.1:${server.address().port}${path}`,{method,headers:{'x-fixture-user':String(user),'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,data:response.headers.get('content-type')?.includes('json')?await response.json():Buffer.from(await response.arrayBuffer())};};
+  const api=async(path,method='GET',body,user=1)=>{const response=await fetch(`http://127.0.0.1:${server.address().port}${path}`,{method,headers:{'x-fixture-user':String(user),'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});const data=response.headers.get('content-type')?.includes('json')?await response.json():Buffer.from(await response.arrayBuffer());if(path==='/api/payroll-sheets/prepare' && data.sheet && flowVersion===0){db.run('UPDATE payroll_sheets SET review_flow_version=0 WHERE id=?',[data.sheet.id]);data.sheet.review_flow_version=0;}return {status:response.status,data};};
   return {db,api,helpers,server,close:()=>new Promise(resolve=>{server.close(()=>{raw.close();resolve();});server.closeAllConnections();})};
 }
 async function check(fn){const f=await fixture();try{await fn(f);}finally{await f.close();}}
 const prepare=(api,name='A店',user=1,period='2026-09')=>api('/api/payroll-sheets/prepare','POST',{store_name:name,period},user);
+
+test('新工资表先人事核对再财务审核；退回重提重置核对，历史表保持原流程',async()=>{
+ const f=await fixture(()=> '2026-09',1);try{
+  const {api,db}=f;let sheet=(await prepare(api)).data.sheet;assert.equal(sheet.review_flow_version,1);
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}/submit`,'POST',{version:sheet.version})).data.sheet;assert.equal(sheet.review_stage,'hr');
+  assert.equal((await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{version:sheet.version,action:'approve'},3)).status,409);
+  assert.equal((await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{version:sheet.version,action:'hr_approve'},1)).status,403);
+  assert.equal((await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items:sheet.items},3)).status,403);
+  const checked=await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{version:sheet.version,action:'hr_approve'},2);assert.equal(checked.status,200);sheet=checked.data.sheet;assert.equal(sheet.review_stage,'finance');assert.equal(sheet.hr_checked_by,2);
+  assert.equal(sheet.can_edit_deductions,false);
+  assert.equal((await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{version:sheet.version,action:'approve'},2)).status,403);
+  const returned=await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{version:sheet.version,action:'return',note:'请核对支援'},3);assert.equal(returned.status,200);sheet=returned.data.sheet;
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}/submit`,'POST',{version:sheet.version})).data.sheet;assert.equal(sheet.review_stage,'hr');assert.equal(sheet.hr_checked_by,null);
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{version:sheet.version,action:'hr_approve'},2)).data.sheet;
+  sheet=(await api(`/api/payroll-sheets/${sheet.id}/review`,'POST',{version:sheet.version,action:'approve'},3)).data.sheet;assert.equal(sheet.status,'已审核');assert.equal(sheet.review_stage,'done');assert.equal(sheet.items[0].gross_salary,6500);
+  assert.equal(db.queryOne("SELECT COUNT(*) n FROM payroll_sheet_events WHERE action='人事核对通过'").n,2);
+ }finally{await f.close()}
+});
+
+test('店长录入门店扣项须有备注，社保个税及备注不能篡改，提交后锁定',()=>check(async({api,db})=>{
+ let sheet=(await prepare(api)).data.sheet,items=structuredClone(sheet.items);items[0].utilities_fee=20;
+ assert.equal((await api(`/api/payroll-sheets/${sheet.id}`,'PUT',{version:sheet.version,items})).status,400);
+ items[0].deduction_notes={utilities_fee:'宿舍水电分摊',uniform_deposit:'工衣领用',other_deduction:'代购物品'};items[0].uniform_deposit=10;items[0].other_deduction=5;
+ const saved=await api(`/api/payroll-sheets/${sheet.id}`,'PUT',{version:sheet.version,items});assert.equal(saved.status,200);sheet=saved.data.sheet;assert.equal(sheet.items[0].net_salary,6465);assert.equal(sheet.items[0].deduction_notes.utilities_fee,'宿舍水电分摊');
+ items=structuredClone(sheet.items);items[0].deduction_notes.income_tax='伪造';assert.equal((await api(`/api/payroll-sheets/${sheet.id}`,'PUT',{version:sheet.version,items})).status,403);
+ assert.equal(db.queryOne('SELECT version FROM payroll_sheets WHERE id=?',[sheet.id]).version,sheet.version);
+ sheet=(await api(`/api/payroll-sheets/${sheet.id}/submit`,'POST',{version:sheet.version})).data.sheet;
+ assert.equal((await api(`/api/payroll-sheets/${sheet.id}`,'PUT',{version:sheet.version,items:sheet.items})).status,409);
+}));
 
 test('旧月份基线保留到两组，迁移可重复执行',()=>check(async({db,api})=>{workflow.initialize(db);const {data}=await api('/api/payroll-month-settings/2026-09');assert.equal(data.settings.group.scheduled_days,25);assert.equal(data.settings.store.scheduled_days,25);assert.equal(db.queryOne('SELECT COUNT(*) n FROM payroll_attendance_settings').n,2);}));
 test('集团和门店基线独立，修复旧明细26天与月度25天不一致',()=>check(async({api,db})=>{let {data}=await prepare(api);assert.equal(data.sheet.items[0].actual_days,25);let result=await api('/api/payroll-month-settings/2026-09','PUT',{staff_group:'group',scheduled_days:22,version:1},2);assert.equal(result.status,200);result=await prepare(api,'永文总公司',2);assert.equal(result.data.sheet.scheduled_days,22);assert.equal(result.data.sheet.items[0].actual_days,22);assert.equal((await api('/api/payroll-month-settings/2026-09')).data.settings.store.scheduled_days,25);assert.equal(db.queryOne('SELECT store_id FROM employees WHERE id=3').store_id,null);}));
@@ -103,13 +133,13 @@ test('店长可编辑支援出勤和实际工资，标准薪酬与原店工资�
 
 test('店长和普通制表人员不可修改代扣，高权限填写后店长可原样保存',()=>check(async({db,api})=>{
   let sheet=(await prepare(api)).data.sheet;assert.equal(sheet.can_edit_deductions,false);
-  for(const key of ['social_insurance','income_tax','utilities_fee','uniform_deposit']) {
+  for(const key of ['social_insurance','income_tax']) {
     const items=structuredClone(sheet.items);items[0][key]=99;
     assert.equal((await api(`/api/payroll-sheets/${sheet.id}`,'PUT',{version:sheet.version,items})).status,403);
     assert.equal((await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items:items.map(r=>({id:r.id,employee_id:r.employee_id,[key]:99}))})).status,403);
   }
   assert.equal((await api(`/api/payroll-sheets/${sheet.id}`,'GET',undefined,7)).data.sheet.can_edit_deductions,false);
-  const result=await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items:sheet.items.map(r=>({id:r.id,employee_id:r.employee_id,social_insurance:100,income_tax:20,utilities_fee:30,uniform_deposit:40}))},2);assert.equal(result.status,200);
+  const result=await api(`/api/payroll-sheets/${sheet.id}/deductions`,'PUT',{version:sheet.version,items:sheet.items.map(r=>({id:r.id,employee_id:r.employee_id,social_insurance:100,income_tax:20,utilities_fee:30,uniform_deposit:40,deduction_notes:{utilities_fee:'水电分摊',uniform_deposit:'工衣押金'}}))},6);assert.equal(result.status,200);
   sheet=(await api(`/api/payroll-sheets/${sheet.id}`)).data.sheet;sheet.items[0].reward=50;
   const saved=await api(`/api/payroll-sheets/${sheet.id}`,'PUT',{version:sheet.version,items:sheet.items});assert.equal(saved.status,200);assert.equal(saved.data.sheet.items[0].net_salary,6360);
   assert.equal(db.queryOne('SELECT COUNT(*) n FROM payroll_sheet_events WHERE action=?',['填写代扣代缴']).n,1);
@@ -130,6 +160,30 @@ test('账号岗位绑定要求有效门店，管理员可不绑定',()=>check(as
 test('月末入职员工纳入本月工资，不因UTC日期换算漏人',()=>check(async({db,api})=>{db.insert("INSERT INTO employees(store_id,store_name,name,hire_type,entry_date,salary) VALUES(1,'A店','月末新人','全职','2026-09-30',5000)");assert.equal((await prepare(api)).data.sheet.items.length,2);}));
 
 const calendar=(period,work=22)=>Array.from({length:new Date(Date.UTC(Number(period.slice(0,4)),Number(period.slice(5)),0)).getUTCDate()},(_,index)=>({date:`${period}-${String(index+1).padStart(2,'0')}`,type:index<work?'work':index===work?'holiday':'rest',start_time:'09:00',end_time:'18:00',note:index===work?'放假':''}));
+test('工资条按承担门店筛选，保留跨店总额和历史快照，不放开店长或草稿权限',()=>check(async({api,db})=>{
+ db.run("INSERT INTO employee_store_dispatches VALUES(1,'有效',1,1,2,'A店','selected','[\"2026-09-10\",\"2026-09-11\"]','','')");
+ const a=(await prepare(api)).data.sheet,b=(await prepare(api,'B店',2)).data.sheet;
+ await api(`/api/payroll-sheets/${a.id}/submit`,'POST',{version:a.version});
+ const path='/api/employee-payslips/2026-09';
+ let result=(await api(path+'?store_name='+encodeURIComponent('B店'),'GET',undefined,2)).data;
+ assert.deepEqual(result.stores,['A店']);assert.deepEqual(result.employees,[]);
+ assert.equal((await api(path+'?view=all&store_name='+encodeURIComponent('B店'),'GET',undefined,3)).status,403);
+ for(const user of [1,4,5])assert.equal((await api(path+'?store_name='+encodeURIComponent('A店'),'GET',undefined,user)).status,403);
+ await api(`/api/payroll-sheets/${b.id}/submit`,'POST',{version:b.version},2);
+ const all=(await api(path,'GET',undefined,2)).data;
+ // A later profile move must not erase the employee's historical bearing store.
+ db.run("UPDATE employees SET store_id=2,store_name='B店' WHERE id=1");
+ result=(await api(path+'?store_name='+encodeURIComponent('A店'),'GET',undefined,2)).data;
+ assert.deepEqual(result.stores,['A店','B店']);assert.deepEqual(result.employees.map(e=>e.employee_id),[1]);
+ const employee=result.employees[0];assert.deepEqual(employee.contributions,all.employees.find(e=>e.employee_id===1).contributions);
+ assert.deepEqual(employee.totals,all.employees.find(e=>e.employee_id===1).totals);assert.equal(employee.totals.gross_salary,6500);
+ result=(await api(path+'?store_name='+encodeURIComponent('B店'),'GET',undefined,2)).data;
+ assert.deepEqual(result.employees.map(e=>e.employee_id).sort(),[1,2]);
+ assert.deepEqual((await api(path+'?store_name='+encodeURIComponent('无工资记录门店'),'GET',undefined,2)).data.employees,[]);
+ assert.deepEqual((await api(path+'?view=approved&store_name='+encodeURIComponent('A店'),'GET',undefined,3)).data.employees,[]);
+ assert.deepEqual((await api(path,'GET',undefined,2)).data.employees.map(e=>e.employee_id).sort(),[1,2]);
+}));
+
 test('员工工资合并本店与支援份额，不重复相加标准工资且提示缺失门店',()=>check(async({api,db})=>{
   db.run("INSERT INTO employee_store_dispatches VALUES(1,'有效',1,1,2,'A店','selected','[\"2026-09-10\",\"2026-09-11\"]','','')");
   let a=(await prepare(api)).data.sheet;a=(await api(`/api/payroll-sheets/${a.id}/submit`,'POST',{version:a.version})).data.sheet;
@@ -169,7 +223,7 @@ test('审核人不能打开草稿或预览导出，管理员审批入口也不�
   assert.equal((await api('/api/payroll-sheets','GET',undefined,3)).data.sheets.length,0);
   for(const suffix of ['','/export?draft=1'])assert.equal((await api(`/api/payroll-sheets/${sheet.id}${suffix}`,'GET',undefined,3)).status,404);
   assert.equal((await api(`/api/payroll-review/2026-09/sheets/${sheet.id}`,'GET',undefined,6)).status,404);
-  for(const user of [1,2,4])assert.equal((await api('/api/payroll-review/2026-09','GET',undefined,user)).status,403);
+  for(const user of [1,4])assert.equal((await api('/api/payroll-review/2026-09','GET',undefined,user)).status,403);assert.equal((await api('/api/payroll-review/2026-09','GET',undefined,2)).status,200);
   assert.equal((await api('/api/payroll-review/2026-13','GET',undefined,3)).status,400);
 }));
 test('退回退出待审进入待重提，重提恢复队列，通过进入独立已审历史',()=>check(async({api})=>{
@@ -225,7 +279,7 @@ test('人事与管理员工资表标准工资也只读，薪酬档案快照不�
   assert.equal(db.queryOne('SELECT data FROM payroll_sheet_items').data,before);
 }));
 test('原人事岗位明确获得出勤权限，其他岗位及账号不变，迁移重复不追加',()=>check(async({db})=>{
-  db.run("ALTER TABLE position_settings ADD COLUMN name TEXT DEFAULT ''");db.run("UPDATE position_settings SET name='人事',permissions_json='[\"staff.view\",\"collab.manage\"]' WHERE id=2");
+  db.run("UPDATE position_settings SET name='人事',permissions_json='[\"staff.view\",\"collab.manage\"]' WHERE id=2");
   const before=db.queryAll('SELECT * FROM users');workflow.initialize(db);workflow.initialize(db);
   assert.deepEqual(JSON.parse(db.queryOne('SELECT permissions_json FROM position_settings WHERE id=2').permissions_json),['staff.view','collab.manage','payroll.attendance']);
   assert.deepEqual(JSON.parse(db.queryOne('SELECT permissions_json FROM position_settings WHERE id=1').permissions_json),['staff.store.edit','payroll.view','payroll.prepare']);assert.deepEqual(db.queryAll('SELECT * FROM users'),before);
@@ -245,7 +299,7 @@ test('门店只维护天数，不接受统一排休日历；办公室可登记�
 
 
 test('多岗位权限并集合并，撤销即时生效；店长与人事组合使用集团范围',()=>check(async({db})=>{
- db.run('ALTER TABLE position_settings ADD COLUMN name TEXT');
+
  const roles=require('../lib/user-positions');roles.initialize(db);
  roles.assign(db,1,[{id:1},{id:2}]);
  let actor=workflow.actorFor(db,{user:{id:1}});assert(actor.canPrepare && actor.canAttendance && !actor.ownOnly && !actor.canReview);
@@ -275,4 +329,11 @@ test('督导从门店调整为集团后，旧草稿即时展示0，存储快照�
  db.run("UPDATE employees SET store_id=NULL,store_name='永文总公司' WHERE id=3");const supervisor=require('../lib/staff-supervisor');supervisor.initialize(db);supervisor.save(db,3,1);
  const result=await api('/api/payroll-sheets/'+old.id);assert.equal(result.status,200);const display=result.data.sheet.items.find(r=>r.employee_id===3);assert(display.supervisor_display_only);assert.equal(display.gross_salary,0);
  assert.equal(db.queryOne('SELECT data FROM payroll_sheet_items WHERE id=?',[row.id]).data,snapshot);
+}));
+
+test('工资预览导出保留财务列并追加已保存考勤与请假小时',()=>check(async({api,db})=>{
+ const sheet=(await prepare(api)).data.sheet,item=sheet.items[0],stored=JSON.parse(db.queryOne('SELECT data FROM payroll_sheet_items WHERE id=?',[item.id]).data);
+ stored.attendance_snapshot={available:true,attendance_days:18.5,personal_leave_hours:2,sick_leave_hours:null,as_of:'2026-09-30'};db.run('UPDATE payroll_sheet_items SET data=? WHERE id=?',[JSON.stringify(stored),item.id]);
+ const result=await api('/api/payroll-sheets/'+sheet.id+'/export?draft=1');assert.equal(result.status,200);const table=XLSX.utils.sheet_to_json(XLSX.read(result.data,{type:'buffer'}).Sheets['工资表'],{header:1});
+ for(const [key,value] of [['钉钉考勤出勤（天）',18.5],['已批事假（小时）',2],['已批病假（小时）','待核'],['考勤统计截止日','2026-09-30']])assert.equal(table[2][table[1].indexOf(key)],value);assert.equal((await api('/api/payroll-sheets/'+sheet.id)).data.sheet.items[0].actual_days,item.actual_days);
 }));

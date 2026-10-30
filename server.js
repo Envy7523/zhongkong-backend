@@ -91,6 +91,10 @@ wecomBot.setFileMessageHandler(async ({ buffer, filename }) => {
 
 // ===== 中间件 =====
 app.use(express.json({ limit: '50mb' }));
+app.use((req,res,next)=>{
+  if(req.path.startsWith('/api/')&&!db.persistenceState().available)return res.status(503).json({error:'数据库持久化异常，业务已暂停；请管理员检查磁盘并重启恢复'});
+  next();
+});
 
 // 岗位功能权限：权限码目录与接口映射都在 lib/permissions.js，岗位设置界面复用同一份目录。
 const positionPermissions = require('./lib/permissions');
@@ -121,6 +125,8 @@ app.use((req, res, next) => {
   }
 });
 
+app.use(require('./lib/operation-audit').middleware(db));
+require('./lib/operation-audit').mount(app,db);
 app.use(require('./lib/staff-profile-policy').middleware(db));
 app.use(personnelAccess.webGuard(db));
 app.use(payrollWorkflow.scopeGuard(db));
@@ -3989,21 +3995,6 @@ app.delete('/api/menu-templates/:id/items/:itemId', (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ===== 耗材消耗 =====
-app.get('/api/supplies', (req, res) => {
-  try { const { store_id, date_from, date_to, limit } = req.query; let sql = 'SELECT * FROM store_supplies WHERE 1=1'; const params = []; if (store_id) { sql += ' AND store_id=?'; params.push(store_id); } if (date_from) { sql += ' AND date>=?'; params.push(date_from); } if (date_to) { sql += ' AND date<=?'; params.push(date_to); } sql += ' ORDER BY date DESC, id DESC LIMIT ?'; params.push(limit || 100); res.json({ ok: true, rows: db.queryAll(sql, params) }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.post('/api/supplies', (req, res) => {
-  try { const { store_id, store_name, date, item, quantity, unit, unit_price } = req.body; if (!item) return res.status(400).json({ error: '耗材名称不能为空' }); const total = (quantity||1) * (unit_price||0); const id = db.insert('INSERT INTO store_supplies (store_id,store_name,date,item,quantity,unit,unit_price,total_cost) VALUES (?,?,?,?,?,?,?,?)', [store_id||null, store_name||'', date||new Date().toISOString().slice(0,10), item, quantity||1, unit||'个', unit_price||0, total]); db.save(); res.json({ ok: true, id, total_cost: total }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.delete('/api/supplies/:id', (req, res) => { try { db.run('DELETE FROM store_supplies WHERE id=?', [req.params.id]); db.save(); res.json({ ok: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.get('/api/analysis/supplies', (req, res) => {
-  try { const { store_id, date_from, date_to } = req.query; let sql = 'SELECT item, SUM(quantity) as total_qty, SUM(total_cost) as total_cost, unit FROM store_supplies WHERE 1=1'; const params = []; if (store_id) { sql += ' AND store_id=?'; params.push(store_id); } if (date_from) { sql += ' AND date>=?'; params.push(date_from); } if (date_to) { sql += ' AND date<=?'; params.push(date_to); } sql += ' GROUP BY item, unit ORDER BY total_cost DESC'; res.json({ ok: true, rows: db.queryAll(sql, params) }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 // ===== 成本核算 =====
 app.get('/api/cost-accounting', (req, res) => {
   try { const { store_id, period_type, date } = req.query; let sql = 'SELECT c.*, s.store_name FROM cost_accounting c LEFT JOIN stores s ON c.store_id=s.id WHERE 1=1'; const params = []; if (store_id) { sql += ' AND c.store_id=?'; params.push(store_id); } if (period_type) { sql += ' AND c.period_type=?'; params.push(period_type); } if (date) { sql += ' AND c.date=?'; params.push(date); } sql += ' ORDER BY c.date DESC, c.id DESC'; res.json({ ok: true, rows: db.queryAll(sql, params) }); }
@@ -4024,16 +4015,6 @@ app.get('/api/cost-accounting/weekly', (req, res) => {
 });
 app.get('/api/cost-accounting/monthly', (req, res) => {
   try { const { store_id, date_from, date_to } = req.query; let sql = "SELECT store_id, strftime('%Y-%m', date) as month, SUM(revenue) as revenue, SUM(actual_revenue) as actual_revenue, SUM(fixed_daily_cost) as fixed_daily_cost, SUM(food_cost) as food_cost, SUM(other_cost) as other_cost, SUM(net_profit) as net_profit FROM cost_accounting WHERE period_type='日'"; const params = []; if (store_id) { sql += ' AND store_id=?'; params.push(store_id); } if (date_from) { sql += ' AND date>=?'; params.push(date_from); } if (date_to) { sql += ' AND date<=?'; params.push(date_to); } sql += ' GROUP BY month ORDER BY month DESC LIMIT 12'; res.json({ ok: true, rows: db.queryAll(sql, params) }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// ===== 日报入库 =====
-app.get('/api/reports/daily/db', (req, res) => {
-  try { const { store_id, date, date_from, date_to, limit } = req.query; let sql = 'SELECT * FROM daily_reports WHERE 1=1'; const params = []; if (store_id) { sql += ' AND store_id=?'; params.push(store_id); } if (date) { sql += ' AND date=?'; params.push(date); } if (date_from) { sql += ' AND date>=?'; params.push(date_from); } if (date_to) { sql += ' AND date<=?'; params.push(date_to); } sql += ' ORDER BY date DESC LIMIT ?'; params.push(limit || 100); res.json({ ok: true, rows: db.queryAll(sql, params) }); }
-  catch (e) { res.status(500).json({ error: e.message }); }
-});
-app.post('/api/reports/daily/import', (req, res) => {
-  try { const stores = parseDailyExcel(); let imported = 0; for (const s of stores) { const matched = db.queryOne("SELECT id FROM stores WHERE store_name LIKE ? LIMIT 1", ['%'+s.storeName+'%']); if (!matched) continue; db.run('INSERT OR REPLACE INTO daily_reports (store_id,store_name,date,revenue,actual_revenue,order_count,instore,pickup,mt_waimai,tb_flash,jd_waimai,mt_pay,mt_tuan,dy_tuan,stored_value,coupon,discount_amount,discount_rate) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [matched.id, s.storeName, s.date, s.revenue, s.actualRevenue, s.orderCount, s.raw?.instore||0, s.raw?.pickup||0, s.raw?.mtWaimai||0, s.raw?.tbFlash||0, s.raw?.jdWaimai||0, s.raw?.mtPay||0, s.raw?.mtTuan||0, s.raw?.dyTuan||0, s.raw?.stored||0, s.raw?.coupon||0, s.discountAmount, s.discountRate]); imported++; } db.save(); res.json({ ok: true, message: `已导入 ${imported} 条日报` }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -5542,6 +5523,7 @@ app.post('/api/analysis-agents/runs/:id/retry-ai', (req, res) => {
     res.status(202).json({ ok: true, id: Number(req.params.id) });
   } catch (error) { res.status(400).json({ error: error.message }); }
 });
+require('./lib/store-order-insights').mount({app,db,getUser:id=>userPositions.enrich(db,db.queryOne('SELECT * FROM users WHERE id=?',[id]))});
 app.get('/api/business-analytics/overview', (req, res) => {
   try {
     res.json({ ok: true, ...businessAnalytics.getOverview(db, req.query) });
@@ -6682,6 +6664,7 @@ app.post('/api/internal/syncbot/test-cleanup', express.raw({ type: () => true, l
 
 /** 概览：最近一次运行 / 最近成功时间 / 今日成功失败等待人工数 / 待处理异常数 */
 app.use('/api/knowledge', require('./lib/knowledge-router').createRouter({db,authenticate:(req,res,next)=>{const user=getAuthUserById(req.user?.id);if(!user)return res.status(401).json({error:'请先登录'});req.knowledgeUser=user;next()}}));
+app.use('/api/inventory',require('./lib/store-inventory-router').createRouter({db}));
 app.use('/api/store-operations',require('./lib/store-operations-router').createRouter({db,authenticate:(req,res,next)=>{const user=getAuthUserById(req.user?.id);if(!user)return res.status(401).json({error:'请先登录'});req.operationUser=user;next()}}));
 app.use('/api/store-tasks', require('./lib/store-task-router').createRouter({
   db,
@@ -6919,6 +6902,7 @@ app.get('/api/bot/status', (_req, res) => {
   const taskPlanTimer=setInterval(taskPlanTick,60000);taskPlanTimer.unref();
   }
   payrollWorkflow.initialize(db);
+  require('./lib/business-ledger').initialize(db);
   dingScheduleModule.initialize(db);
   require('./lib/dingtalk-approvals').initialize(db);
   staffRoster.initialize(db);

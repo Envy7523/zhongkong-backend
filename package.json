@@ -8,7 +8,8 @@
     "dev": "node --watch server.js",
     "build:frontend": "cd frontend && npm run build",
     "install:frontend": "cd frontend && npm install",
-    "check:release": "node scripts/check-report-fonts.js"
+    "check:release": "node scripts/check-report-fonts.js && node scripts/check-mini-privacy.cjs",
+    "test:consolidation": "node --test tests/business-ledger.test.cjs tests/consolidation-foundations.test.cjs tests/workspace-consolidation.test.mjs tests/payroll-workflow.test.js tests/system-navigation.test.mjs tests/operations-navigation.test.mjs tests/staff-navigation.test.mjs tests/user-positions.test.js tests/notifications-access.test.js tests/group-analysis-access.test.cjs tests/delivery-platform-access.test.cjs tests/finance-approval-summaries.test.cjs tests/finance-approval-refresh.test.cjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.2",

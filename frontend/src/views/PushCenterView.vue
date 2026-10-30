@@ -5,7 +5,7 @@
       <button type="button" :class="{ active: section === 'group-buy' }" :aria-current="section === 'group-buy' ? 'page' : undefined" @click="router.push('/pipeline/group-buy-daily')">团购日报推送</button>
       <button v-if="canManage" type="button" :class="{ active: section === 'pos' }" :aria-current="section === 'pos' ? 'page' : undefined" @click="router.push('/pipeline/pos-daily')">收银全店汇总</button>
       <button v-if="canManage" type="button" :class="{ active: section === 'finance' }" :aria-current="section === 'finance' ? 'page' : undefined" @click="router.push('/pipeline/store-finance-daily')">门店财务日报</button>
-      <button v-if="canManage" type="button" :class="{ active: section === 'pos-schedule' }" :aria-current="section === 'pos-schedule' ? 'page' : undefined" @click="router.push('/pipeline/pos-daily/schedule')">汇总自动发送</button>
+      <button v-if="auth.isAdmin" type="button" :class="{ active: section === 'pos-schedule' }" :aria-current="section === 'pos-schedule' ? 'page' : undefined" @click="router.push('/pipeline/pos-daily/schedule')">汇总自动发送</button>
       <button v-if="canManage" type="button" :class="{ active: section === 'pos-store' }" :aria-current="section === 'pos-store' ? 'page' : undefined" @click="router.push('/pipeline/pos-store-daily')">门店群机器人</button>
     </nav>
     <KeepAlive>

@@ -1,0 +1,23 @@
+/* Inventory shares a single surface with the operations navigation. */
+.inventory-workspace-shell {
+  display: block;
+  width: 100%;
+  max-width: 1560px;
+  min-width: 0;
+  margin: 0 auto;
+  box-sizing: border-box;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+  color: var(--el-text-color-primary);
+}
+.inventory-workspace-shell > .operations-workspace-nav {
+  border-radius: 8px 8px 0 0;
+}
+.content-area .inventory-workspace-shell > .inventory-page {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  border: 0;
+  border-radius: 0 0 8px 8px;
+}

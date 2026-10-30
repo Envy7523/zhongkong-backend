@@ -1,4 +1,10 @@
 /* Shared by all web notification dialogs, including independent previews. */
+/* Keep long forms within the viewport; only the shared content region scrolls. */
+.app-notification-dialog{display:flex;flex-direction:column;max-height:calc(100vh - var(--el-dialog-margin-top,15vh) - 24px);max-height:calc(100dvh - var(--el-dialog-margin-top,15vh) - 24px)}
+.app-notification-dialog .el-dialog__header,.app-notification-dialog .el-dialog__footer{flex-shrink:0}
+.app-notification-dialog .el-dialog__body{display:flex;flex-direction:column;min-height:0;flex:1 1 auto;overflow:hidden}
+.app-notification-content{min-height:0;flex:1 1 auto}
+@media(max-width:600px){.app-notification-dialog{--el-dialog-margin-top:16px;max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);margin-bottom:16px}}
 .app-notification-dialog{--el-dialog-border-radius:14px;--el-dialog-padding-primary:24px;--notice-accent:var(--el-color-primary);--notice-icon-bg:var(--el-color-primary-light-9);--notice-border:var(--el-border-color-lighter);box-sizing:border-box;max-width:calc(100vw - 32px);box-shadow:0 20px 64px #15253b24,0 4px 16px #15253b0a}
 .app-notification-dialog.notification-tone-success{--notice-accent:#528567;--notice-icon-bg:#eef7f1}.app-notification-dialog.notification-tone-warning{--notice-accent:#b5782f;--notice-icon-bg:#fff5e5}.app-notification-dialog.notification-tone-danger{--notice-accent:#b85839;--notice-icon-bg:#fff1ec}
 .app-notification-dialog .el-dialog__header{margin:0;padding:0 28px 20px 0;border-bottom:1px solid var(--notice-border)}.app-notification-dialog .el-dialog__body{padding:20px 0 0;color:var(--el-text-color-regular)}.app-notification-dialog .el-dialog__footer{margin:20px 0 0;padding:16px 0 0;border-top:1px solid var(--notice-border)}

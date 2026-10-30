@@ -347,7 +347,13 @@ function applyFile(nextFile) {
   }
 }
 
-function selectFile(event) { applyFile(event.target.files?.[0]) }
+function selectFile(event) {
+  const input = event.target
+  applyFile(input.files?.[0])
+  // File is retained in Vue state; reset the native input so choosing the same
+  // original again triggers change after a successful import or retry.
+  input.value = ''
+}
 function dropFile(event) { applyFile(event.dataTransfer?.files?.[0]) }
 function selectPlatform(value) { platform.value = value; deliveryReportKind.value = 'operating'; groupReportKind.value = 'benefit'; file.value = null; detectedFileLabel.value = ''; result.value = null }
 function selectDeliveryReport(value) { deliveryReportKind.value = value; file.value = null; detectedFileLabel.value = ''; result.value = null }
@@ -429,7 +435,7 @@ async function submitImport() {
       : response.data_kind === 'delivery_operation'
       ? [{ label: '运营日报', value: `${imported} 条` }, { label: '原始记录', value: `${response.raw_imported || 0} 条` }, { label: '匹配门店', value: `${response.matched_stores || 0} 家` }, { label: '运营周期', value: response.date_from && response.date_to ? `${response.date_from} 至 ${response.date_to}` : '—' }]
       : settlementBills
-        ? [{ label: '已写入日账', value: `${response.revenue_records || 0} 条` }, { label: '优惠后收入', value: `¥${formatMoney(response.delivery_amount_total)}` }, { label: '平台费用', value: `¥${formatMoney(response.fee_total)}` }, { label: '真实实收', value: `¥${formatMoney(response.net_total)}` }, { label: '账单原始明细', value: `${response.raw_imported || 0} 条` }, { label: '匹配门店', value: `${response.matched_stores || 0} 家` }]
+        ? [{ label: '已写入日账', value: `${response.revenue_records ?? imported} 条` }, { label: '优惠后收入', value: `¥${formatMoney(response.delivery_amount_total)}` }, { label: '平台费用', value: `¥${formatMoney(response.fee_total)}` }, { label: '真实实收', value: `¥${formatMoney(response.net_total)}` }, { label: '账单原始明细', value: `${response.raw_imported || 0} 条` }, { label: '匹配门店', value: `${response.matched_stores || 0} 家` }]
         : [{ label: '已写入日报', value: `${imported} 条` }, { label: '原始记录', value: `${response.raw_imported || 0} 条` }, { label: '匹配门店', value: `${response.matched_stores || 0} 家` }]
     result.value = {
       type: imported > 0 ? 'success' : 'error',
@@ -444,7 +450,7 @@ async function submitImport() {
           : response.data_kind === 'douyin_group_settlement'
           ? `已读取抖音团购正向/退款两张分账明细：${response.raw_imported || 0} 条流水汇总为 ${imported} 条门店日账；U列售卖金额 ¥${formatMoney(response.gross_total)}，BK列到手收入 ¥${formatMoney(response.net_total)}。X–BI 的费用金额已逐项保留用于费用明细展示，不会从到手收入重复扣减；${response.product_rows || 0} 条团购菜品已进入绑定来源。${response.unmatched ? ` ${response.unmatched} 条未匹配门店暂不参与看板。` : ''}`
           : settlementBills
-          ? `已写入 ${response.revenue_records || 0} 条结算记录；${settlementLabel}原始明细 ${response.raw_imported || 0} 条${response.unmatched ? `，${response.unmatched} 条因未登记${platform.value}门店 ID 暂未计入` : '，全部匹配门店'}。优惠后收入 ¥${formatMoney(response.delivery_amount_total)} − 平台费用 ¥${formatMoney(response.fee_total)} = 真实实收 ¥${formatMoney(response.net_total)}；营业额和客户优惠继续由日报提供。${response.extra_headers?.length ? `本次发现新增列：${response.extra_headers.join('、')}，已随原始行自动收录。` : ''}${skipped ? `；跳过 ${skipped} 行异常数据` : ''}`
+          ? `已写入 ${response.revenue_records ?? imported} 条结算记录；${settlementLabel}原始明细 ${response.raw_imported || 0} 条${response.unmatched ? `，${response.unmatched} 条因未登记${platform.value}门店 ID 暂未计入` : '，全部匹配门店'}。优惠后收入 ¥${formatMoney(response.delivery_amount_total)} − 平台费用 ¥${formatMoney(response.fee_total)} = 真实实收 ¥${formatMoney(response.net_total)}；营业额和客户优惠继续由日报提供。${response.extra_headers?.length ? `本次发现新增列：${response.extra_headers.join('、')}，已随原始行自动收录。` : ''}${skipped ? `；跳过 ${skipped} 行异常数据` : ''}`
           : response.data_kind === 'all_channel_orders'
           ? `全渠道订单明细已写入 ${imported} 条订单，匹配 ${response.matched_stores} 家门店、${response.covered_store_days || 0} 个门店营业日（${response.date_from} 至 ${response.date_to}）；付款与退款构成用于逐笔计算堂食手续费。`
           : response.data_kind === 'cashier_composite'

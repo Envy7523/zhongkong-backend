@@ -1,0 +1,46 @@
+/* Human resources pages share one frame; other workspaces retain their layout. */
+.workspace-route-frame:not(.staff-workspace-shell):not(.inventory-workspace-shell){display:contents}
+.staff-workspace-shell{--hr-text:var(--el-text-color-primary);--hr-muted:var(--el-text-color-regular);--hr-border:var(--el-border-color-light);--hr-surface:var(--el-bg-color);--hr-soft:var(--el-fill-color-light);width:100%;max-width:1560px;margin:0 auto;border:1px solid var(--hr-border);border-radius:8px;background:var(--hr-surface);box-sizing:border-box;color:var(--hr-text)}
+.content-area .staff-workspace-shell>.staff-workspace-nav{width:100%;max-width:none;margin:0;box-sizing:border-box}
+.content-area .staff-workspace-shell>:is(.staff-ui,.roster-page,.attendance-page,.review-workbench,.payslips,.payroll-workbench,.staff-dispatch-page,.store-staff){width:100%;max-width:none;margin:0;padding:20px;box-sizing:border-box;min-width:0}
+.staff-workspace-shell :is(.staff-eyebrow,.roster-header .eyebrow,.dispatch-hero>div>span){display:none}
+.staff-workspace-shell :is(.staff-page-heading h1,.manager-header h2,.roster-header h2,.month-card>.heading h2,.review-workbench>section:first-child h2,.payslips>section:first-child h2,.payroll-page-heading h1,.dispatch-hero h1,.store-staff>header h2){font-size:22px;font-weight:600;line-height:1.4;margin:0 0 6px;letter-spacing:0;color:var(--hr-text)}
+.staff-workspace-shell :is(.staff-page-heading,.manager-header,.payroll-page-heading){margin:0 0 20px}
+.staff-workspace-shell .payroll-page-heading{margin-bottom:0}
+.staff-workspace-shell :is(.staff-page-heading p,.manager-header p,.roster-header p,.dispatch-hero p){margin:0;font-size:13px;line-height:1.7;color:var(--hr-muted)}
+.staff-workspace-shell :is(.staff-table-card,.staff-summary-strip,.staff-directory-filters,.staff-panel,.directory-card,.payroll-panel,.payroll-sheet,.card-compact){border-radius:8px;box-shadow:none}
+
+/* Flatten the attendance page so its title, controls and grid share the tab frame. */
+.content-area .staff-workspace-shell .roster-page{--roster-primary:var(--el-color-primary);--roster-ink:var(--hr-text);--roster-muted:var(--hr-muted);--roster-border:var(--hr-border)}
+.content-area .staff-workspace-shell .roster-panel{border:0;border-radius:0;background:transparent;overflow:visible}
+.content-area .staff-workspace-shell .roster-header{padding:0 0 18px;gap:16px}
+.staff-workspace-shell .roster-header h2{font-size:22px;margin:0 0 6px;gap:10px}
+.staff-workspace-shell .roster-header .header-actions{gap:8px;justify-content:flex-end}
+.staff-workspace-shell .roster-header .header-actions>.el-button{margin-left:0}
+.staff-workspace-shell .roster-header .header-actions>small{font-size:12px;color:var(--hr-muted);margin-right:8px}
+.content-area .staff-workspace-shell .roster-filters{padding:14px 0;background:transparent;gap:12px}
+.content-area .staff-workspace-shell .week-caption{padding:16px 0;gap:12px}
+.staff-workspace-shell .legend-list{gap:12px;flex-wrap:wrap}
+.content-area .staff-workspace-shell .roster-scroll{margin:0 0 16px;border-radius:6px}
+.content-area .staff-workspace-shell .roster-page .roster-table thead th{height:56px;background:var(--hr-soft)}
+.content-area .staff-workspace-shell .roster-page .roster-table tbody th,.content-area .staff-workspace-shell .roster-page .roster-table td{background:var(--hr-surface)}
+.content-area .staff-workspace-shell .roster-page .roster-table td.today-column{background:var(--hr-soft)}
+.staff-workspace-shell .roster-table .date-number{font-size:14px}
+.content-area .staff-workspace-shell .roster-page .shift-cell{border-radius:6px}
+.content-area .staff-workspace-shell .roster-page .shift-cell:is(.unassigned,.rest){background:var(--hr-surface)}
+.content-area .staff-workspace-shell .roster-page .shift-cell b{font-size:14px;font-weight:500}
+.staff-workspace-shell .shift-cell.unassigned{border-color:var(--hr-border);color:var(--hr-muted)}
+.content-area .staff-workspace-shell .roster-footer{padding:0;line-height:1.7}
+.staff-workspace-shell .roster-panel>.el-alert{border-radius:6px;margin:0 0 14px}
+
+/* Existing modules keep their controls and business rules, with a common heading rhythm. */
+.content-area .staff-workspace-shell .dispatch-hero{padding:0;margin:0 0 20px;border:0;border-radius:0;background:transparent;box-shadow:none}
+.content-area .staff-workspace-shell .staff-dispatch-page>.card{padding:16px 18px;border-radius:8px;box-shadow:none}
+.content-area .staff-workspace-shell :is(.attendance-page,.review-workbench,.payslips)>section:first-child{padding:0 0 20px;border:0;border-radius:0;box-shadow:none;background:transparent}
+.staff-workspace-shell .attendance-page>section+section{margin-top:4px}
+.staff-workspace-shell .store-staff>header{margin:0 0 20px}
+.staff-workspace-shell .payroll-workbench--detail{padding:0}
+
+@media(max-width:900px){.staff-workspace-shell .roster-header{flex-wrap:wrap}.staff-workspace-shell .roster-header .header-actions{justify-content:flex-start}.staff-workspace-shell .scope-controls{flex-wrap:wrap}}
+@media(max-width:540px){.content-area .staff-workspace-shell>:is(.staff-ui,.roster-page,.attendance-page,.review-workbench,.payslips,.payroll-workbench,.staff-dispatch-page,.store-staff){padding:16px 12px}.staff-workspace-shell :is(.staff-page-heading h1,.manager-header h2,.roster-header h2,.month-card>.heading h2,.review-workbench>section:first-child h2,.payslips>section:first-child h2,.payroll-page-heading h1,.dispatch-hero h1,.store-staff>header h2){font-size:20px}.staff-workspace-shell .week-controls{flex-wrap:wrap}.staff-workspace-shell .roster-filters{align-items:flex-start}.staff-workspace-shell .legend-list{gap:8px}.staff-workspace-shell .header-actions{width:100%}}
+@media(prefers-reduced-motion:reduce){.staff-workspace-shell .staff-workspace-nav a{transition:none}}

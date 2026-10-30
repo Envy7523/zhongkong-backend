@@ -43,7 +43,7 @@ const punchRange=(segment,date)=>`${punchClock(segment.start_time,date)} — ${p
 const resultLabel=code=>({Normal:'正常',Late:'迟到',SeriousLate:'严重迟到',Early:'早退',NotSigned:'缺卡',Absenteeism:'旷工（钉钉）'})[code] || code
 const approvalState=item=>item.status==='TERMINATED'?'已撤销':item.result==='refuse'?'已拒绝':item.effective?'已同意':'审批中'
 const hoursText=hours=>{const total=Math.round(hours*60),h=Math.floor(total/60),m=total%60;return `${h?h+'小时':''}${m?m+'分':''}` || '0分'}
-const cellHeight=computed(()=>96)
+const cellHeight=computed(()=>80)
 const color=day=>day.display?.state || (['rest','holiday'].includes(day.type)?'rest':'unassigned')
 const label=day=>day.display?.label || (['rest','holiday'].includes(day.type)?'休息':'未获取')
 const detailShifts=computed(()=>{const day=selectedDay.value;if(!day)return [];const plans=day.segments||[],actual=day.attendance?.segments||[];return Array.from({length:Math.max(plans.length,actual.length)},(_,i)=>({plan:plans[i]?punchRange(plans[i],day.date):'未获取',actual:actual[i]?punchRange(actual[i],day.date):'未打卡'}))})

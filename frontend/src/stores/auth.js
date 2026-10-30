@@ -36,9 +36,8 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const res = await getMe()
       user.value = res.user
-    } catch {
-      setToken('')
-      user.value = null
+    } catch(error) {
+      if((error?.status||error?.response?.status)===401){setToken('');user.value=null}
     }
   }
 

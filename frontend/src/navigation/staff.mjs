@@ -16,6 +16,7 @@ export const STAFF_GROUPS = [
     { id: 'staff-management-salary', path: '/staff-management/salary', label: '工资表制作', permissions: ['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'] },
     { id: 'staff-management-review', path: '/staff-management/review', label: '工资审核', permissions: ['payroll.review', 'payroll.attendance'] },
     { id: 'staff-management-payslips', path: '/staff-management/payslips', label: '员工工资条查询', permissions: ['staff.view', 'payroll.view', 'payroll.prepare', 'payroll.attendance', 'payroll.review'] },
+    { id:'staff-management-payslip-delivery',path:'/staff-management/payslip-delivery',label:'工资条发布与签收',permissions:['payroll.publish'] },
   ] },
 ]
 export const STAFF_PAGES = STAFF_GROUPS.flatMap(group => group.pages)

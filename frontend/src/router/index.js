@@ -3,10 +3,28 @@ import { ElMessage } from 'element-plus'
 import { getMe, inspectionApi } from '@/api'
 import LoginView from '@/views/LoginView.vue'
 import { staffPageForPath } from '@/navigation/staff.mjs'
+import { permits } from '@/permissions'
+import { systemPageForPath, isAdminPath } from '@/navigation/system.mjs'
+import { OPERATION_PAGES, legacyReportRedirect } from '@/navigation/operations.mjs'
 // 菜品绑定是高频关键页。直接随入口加载，避免旧标签页请求已失效的异步分包后只剩页面外壳。
 import ProductBinding from '@/views/analysis/ProductBinding.vue'
 
 const routes = [
+  {path:'/:pathMatch(.*)*',name:'not-found',component:()=>import('@/views/NotFoundView.vue'),meta:{ledgerPage:true,pageTitle:'页面不存在'}},
+  {path:'/finance/payments',redirect:'/finance/approvals'},
+  {path:'/finance/approvals',name:'finance-approvals',component:()=>import('@/views/finance/ApprovalSummary.vue'),meta:{ledgerPage:true,pageTitle:'请款审批清单',requiredPermission:'finance.payments.manage'}},
+  {path:'/my/requests',redirect:'/notifications'},
+  {path:'/my/payslips',name:'my-payslips',component:()=>import('@/views/staff/PayslipDelivery.vue'),props:{mode:'mine'},meta:{ledgerPage:true,ledgerMode:'mine',pageTitle:'我的工资条'}},
+  {path:'/staff-management/payslip-delivery',name:'staff-management-payslip-delivery',component:()=>import('@/views/staff/PayslipDelivery.vue'),meta:{ledgerPage:true,pageTitle:'工资条发布与签收',requiredPermission:'payroll.publish'}},
+  {path:'/admin/operation-audit',name:'operation-audit',component:()=>import('@/views/OperationAudit.vue'),meta:{ledgerPage:true,pageTitle:'操作日志',requiredPermission:'*'}},
+  {path:'/admin/finance-integrations',name:'finance-integrations',component:()=>import('@/views/FinanceIntegration.vue'),meta:{ledgerPage:true,pageTitle:'审批与提醒接入',requiredPermission:'*'}},
+  {path:'/admin/approval-store-bindings',name:'approval-store-bindings',component:()=>import('@/views/finance/ApprovalStoreBindings.vue'),meta:{ledgerPage:true,pageTitle:'审批门店绑定',requiredPermission:'*'}},
+  ...OPERATION_PAGES.filter(page => page.path.startsWith('/operations/')).map(page => ({
+    path: page.path, name: page.index,
+    component: page.index === 'store-inventory' ? () => import('@/views/inventory/StoreInventory.vue') : page.index === 'operation-reports' ? () => import('@/views/StoreReportsView.vue') : () => import('@/views/StoreOperations.vue'),
+    props: ['store-inventory','operation-reports'].includes(page.index) ? undefined : { section: page.index === 'operation-personnel' ? 'personnel' : 'announcements' },
+    meta: { requiredPermission: page.permissions, pageTitle: page.label },
+  })),
   {path:'/store-operations',name:'store-operations',component:()=>import('@/views/StoreOperations.vue'),meta:{requiredPermission:['staff.transfers.view','staff.support.view','staff.offboarding.view','staff.onboarding.view','workflow.manage','store-notices.manage'],pageTitle:'门店流程与通知'}},
   {path:'/workflows',name:'workflows',component:()=>import('@/views/Workflows.vue'),meta:{requiredPermission:['workflow.start','store-reports.view','workflow.manage','workflow.view','workflow.execute','staff.hq.manage'],pageTitle:'审批流程'}},
   {path:'/knowledge-base',name:'knowledge-base',component:()=>import('@/views/KnowledgeBase.vue'),meta:{requiredPermission:'knowledge.edit',pageTitle:'知识库管理'}},
@@ -183,24 +201,18 @@ const routes = [
     meta: { importMode: 'delivery' },
   },
   {
-    path: '/data-import/legacy',
-    name: 'data-import-legacy',
-    component: () => import('@/views/DataImportView.vue'),
-    meta: { importMode: 'legacy' },
-  },
-  {
     path: '/store-management',
     redirect: '/store-management/info-basic',
   },
   // 常规工作台页面同样使用真实子路由。页面仍由 App 的标签容器承载，
   // 此路由记录用于地址栏、刷新恢复和链接分享。
-  { path: '/store-management/:section', name: 'workspace-store-management', component: { render: () => null } },
+  { path: '/store-management/:section(info-basic|info-circle|info-platform|info-config|region|map|fixed|operating)', name: 'workspace-store-management', component: { render: () => null } },
   {
     path: '/menu-management',
     redirect: '/menu-management/overview',
   },
   { path: '/menu-management/template', redirect: '/menu-management/overview' },
-  { path: '/menu-management/:section', name: 'workspace-menu-management', component: { render: () => null } },
+  { path: '/menu-management/:section(overview|category|cost|expiry|accounting)', name: 'workspace-menu-management', component: { render: () => null } },
   {
     path: '/menu-management/category',
     name: 'menu-management-category',
@@ -214,7 +226,7 @@ const routes = [
   },
   { path: '/cost-accounting/:pathMatch(.*)*', redirect: '/dashboard' },
   { path: '/bookkeeping', redirect: '/bookkeeping/entry' },
-  { path: '/bookkeeping/:section', name: 'workspace-bookkeeping', component: { render: () => null } },
+  { path: '/bookkeeping/:section(entry|categories|records|expense-tags)', name: 'workspace-bookkeeping', component: { render: () => null } },
   { path: '/pipeline', redirect: '/pipeline/group-buy-daily' },
   { path: '/pipeline/group-buy-daily', name: 'workspace-pipeline-group-buy', component: { render: () => null }, meta: { pushSection: 'group-buy' } },
   { path: '/pipeline/pos-daily', name: 'workspace-pipeline-pos', component: { render: () => null }, meta: { pushSection: 'pos', requiredPermission: 'enterprise-settings.manage' } },
@@ -326,6 +338,8 @@ router.afterEach(() => {
 
 const TOKEN_KEY = 'etaigong_token'
 
+router.beforeEach(legacyReportRedirect)
+
 // 路由 → 权限码。按 name 前缀匹配，覆盖全部业务路由；login 不做校验。
 const ROUTE_PERMISSION_RULES = [
   ['dashboard', 'dashboard.view'],
@@ -363,6 +377,8 @@ const ROUTE_PERMISSION_RULES = [
 ]
 
 function permissionFor(route) {
+  if(isAdminPath(route.path))return '*'
+  if(route.name==='collab-list'||route.name==='collab-detail')return 'collab.manage'
   if (route.meta.requiredPermission) return route.meta.requiredPermission
   const staffPage = staffPageForPath(route.path)
   if (staffPage) return staffPage.permissions
@@ -388,7 +404,7 @@ router.beforeEach((to, from, next) => {
     const permissions = res?.user?.position_permissions || []
     if (to.path === '/dashboard' && !permissions.some(p=>['*','staff.view','payroll.attendance','payroll.review'].includes(p)) && permissions.includes('staff.store.edit')) return next('/staff-management/employees')
     if (to.name === 'staff-management-payslips' && !permissions.some(p=>['*','staff.view','payroll.attendance','payroll.review'].includes(p)) && permissions.includes('staff.store.edit')) { ElMessage.warning('跨店工资查询仅开放给人事及上级'); return next('/staff-management/salary') }
-    const allowed = permissions.includes('*') || (Array.isArray(required) ? required.some(code => permissions.includes(code)) : permissions.includes(required))
+    const allowed = permits(permissions,required)
     if (allowed) return next()
     if (to.name === 'inspections') {
       try {
@@ -399,9 +415,9 @@ router.beforeEach((to, from, next) => {
     if (to.path === '/dashboard') return next() // 无任何权限时仍允许落到首页，避免死循环
     ElMessage.warning('当前岗位没有该模块权限，已跳回首页')
     return next('/dashboard')
-  }).catch(() => {
-    localStorage.removeItem(TOKEN_KEY)
-    return next('/login')
+  }).catch(error => {
+    if((error?.status||error?.response?.status)===401){localStorage.removeItem(TOKEN_KEY);return next('/login')}
+    ElMessage.error('暂时无法核验权限，请稍后重试');return next(false)
   })
 })
 

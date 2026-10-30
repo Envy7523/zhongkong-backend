@@ -14,6 +14,7 @@
         <el-menu
           :default-active="sidebarActive"
           :collapse="isSidebarCollapsed"
+          :popper-style="popupMenu.visible ? { display: 'none' } : undefined"
           background-color="transparent"
           text-color="#93a0b8"
           active-text-color="#fff"
@@ -61,7 +62,7 @@
             index="menu-management-group"
             @mouseenter="showPopup('menu-management', $event)"
             @mouseleave="scheduleHidePopup"
-            :class="{ 'is-popup-open': popupMenu.group === 'menu-management', 'is-active': store.activeTabId?.startsWith('menu-management-') }"
+            :class="{ 'is-popup-open': popupMenu.group === 'menu-management', 'is-active': router.currentRoute.value.path.startsWith('/menu-management/') }"
           >
             <el-icon><DishDot /></el-icon>
             <template #title><span>菜品管理</span><span class="nav-arrow">›</span></template>
@@ -82,19 +83,15 @@
           </el-menu-item>
 
           <div v-if="canSeeNavGroup('operation-tools')" class="sidebar-section-label">运营工具</div>
-          <el-menu-item v-if="canSeeNav('collab-list')" index="collab-list">
-            <el-icon><List /></el-icon>
-            <template #title><span>协同事项</span><small class="nav-badge new">NEW</small></template>
+          <el-menu-item v-for="group in visibleOperations" :key="group.index" :index="group.index" :ref="element => setPopupMenuRef(group.key, element)"
+            :aria-label="group.label" aria-haspopup="true" :aria-expanded="popupMenu.visible && popupMenu.group === group.key"
+            @mouseenter="showPopup(group.key, $event)" @mouseleave="scheduleHidePopup"
+            @click="showGroupPopup(group.key, $event)" @keydown.enter.prevent="showGroupPopup(group.key, $event)" @keydown.space.prevent="showGroupPopup(group.key, $event)"
+            :class="{ 'is-popup-open': popupMenu.group === group.key, 'is-active': operationGroupForPath(router.currentRoute.value.path)?.key === group.key }">
+            <el-icon><List v-if="group.key === 'operations-affairs'"/><Shop v-else/></el-icon>
+            <template #title><span>{{ group.label }}</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
           <el-menu-item v-if="canSeeNav('knowledge-base')" index="knowledge-base"><el-icon><List /></el-icon><template #title>知识库管理</template></el-menu-item>
-          <el-menu-item v-if="canSeeNav('store-operations')" index="store-operations"><el-icon><Bell /></el-icon><template #title>门店流程与通知</template></el-menu-item>
-          <el-menu-item v-if="canSeeNav('workflows')" index="workflows"><el-icon><Bell /></el-icon><template #title>审批流程</template></el-menu-item>
-          <el-menu-item v-if="canSeeNav('inspections')" index="inspections"><el-icon><List /></el-icon><template #title>巡检与整改</template></el-menu-item>
-          <el-menu-item v-if="canSeeNav('store-tasks')" index="store-tasks"><el-icon><List /></el-icon><template #title>门店日常任务</template></el-menu-item>
-          <el-menu-item v-if="canSeeNav('bookkeeping-entry')" index="bookkeeping-entry">
-            <el-icon><Notebook /></el-icon>
-            <template #title><span>记账本</span><small class="nav-badge new">NEW</small></template>
-          </el-menu-item>
           <el-menu-item
             v-if="canSeeNav('data-import-group')"
             index="data-import-group"
@@ -113,31 +110,16 @@
             <el-icon><ChatDotRound /></el-icon>
             <template #title><span>AI 助手</span><small class="nav-badge beta">BETA</small></template>
           </el-menu-item>
-          <el-menu-item v-if="canSeeNav('notifications')" index="notifications">
-            <el-icon><Bell /></el-icon>
-            <template #title><span>消息通知</span><small v-if="notificationPending" class="nav-badge">{{ notificationPending > 99 ? '99+' : notificationPending }}</small></template>
-          </el-menu-item>
+          <el-menu-item v-for="group in visibleBusiness" :key="group.index" :index="group.index" :ref="element=>setPopupMenuRef(group.key,element)" :aria-label="group.label" aria-haspopup="true" :aria-expanded="popupMenu.visible&&popupMenu.group===group.key" @mouseenter="showPopup(group.key,$event)" @mouseleave="scheduleHidePopup" @click="showGroupPopup(group.key,$event)" @keydown.enter.prevent="showGroupPopup(group.key,$event)" @keydown.space.prevent="showGroupPopup(group.key,$event)" :class="{'is-popup-open':popupMenu.group===group.key,'is-active':group.pages.some(p=>router.currentRoute.value.path===p.path)}"><el-icon><Notebook v-if="group.key==='finance-tools'"/><User v-else/></el-icon><template #title><span>{{group.label}}</span><small v-if="group.key==='personal-workspace'&&notificationPending" class="nav-badge">{{notificationPending}}</small><span class="nav-arrow">›</span></template></el-menu-item>
 
-          <div v-if="canSeeNavGroup('system')" class="sidebar-section-label">系统管理</div>
-          <el-menu-item v-if="canSeeNav('notification-rules')" index="notification-rules">
-            <el-icon><Bell /></el-icon>
-            <template #title><span>通知规则</span></template>
-          </el-menu-item>
-          <el-menu-item v-if="canSeeNav('enterprise-settings')" index="enterprise-settings">
-            <el-icon><Setting /></el-icon>
-            <template #title>企业设置</template>
-          </el-menu-item>
-          <el-menu-item v-if="canSeeNav('user-management')" index="user-management">
-            <el-icon><User /></el-icon>
-            <template #title>人员管理</template>
-          </el-menu-item>
-          <el-menu-item v-if="canSeeNav('position-settings')" index="position-settings">
-            <el-icon><Setting /></el-icon>
-            <template #title>岗位设置</template>
-          </el-menu-item>
-          <el-menu-item v-if="canSeeNav('settings')" index="settings">
-            <el-icon><Setting /></el-icon>
-            <template #title>网页设置</template>
+          <div v-if="auth.isAdmin" class="sidebar-section-label">管理员专区</div>
+          <el-menu-item v-for="group in visibleSystem" :key="group.index" :index="group.index" :ref="element => setPopupMenuRef(group.key, element)"
+            :aria-label="group.label" aria-haspopup="true" :aria-expanded="popupMenu.visible && popupMenu.group === group.key"
+            @mouseenter="showPopup(group.key, $event)" @mouseleave="scheduleHidePopup"
+            @click="showGroupPopup(group.key, $event)" @keydown.enter.prevent="showGroupPopup(group.key, $event)" @keydown.space.prevent="showGroupPopup(group.key, $event)"
+            :class="{ 'is-popup-open': popupMenu.group === group.key, 'is-active': systemGroupForPath(router.currentRoute.value.path)?.key === group.key }">
+            <el-icon><User v-if="group.key === 'system-access'"/><Setting v-else/></el-icon>
+            <template #title><span>{{ group.label }}</span><span class="nav-arrow">›</span></template>
           </el-menu-item>
         </el-menu>
       </div>
@@ -165,7 +147,7 @@
               v-for="item in section.items.filter(canSeePopupItem)"
               :key="item.index"
               class="popup-item"
-              :class="{ active: store.activeTabId === item.index }"
+              :class="{ active: store.activeTabId === item.index || operationPageForPath(router.currentRoute.value.path)?.index === item.index || systemPageForPath(router.currentRoute.value.path)?.index === item.index }"
               role="button"
               tabindex="0"
               @keydown.enter.prevent="selectPopupItem(item.index)"
@@ -257,15 +239,21 @@
       </div>
 
       <div ref="contentAreaRef" class="content-area">
-        <StaffWorkspaceNav v-if="isStaffManagementRoute" />
-        <router-view v-slot="{ Component, route }">
+        <div class="workspace-route-frame" :class="{ 'staff-workspace-shell': isStaffManagementRoute, 'inventory-workspace-shell': router.currentRoute.value.name === 'store-inventory' }">
+          <StaffWorkspaceNav v-if="isStaffManagementRoute" />
+          <OperationsWorkspaceNav v-else-if="operationGroupForPath(router.currentRoute.value.path)" />
+          <SystemWorkspaceNav v-else-if="systemGroupForPath(router.currentRoute.value.path)" />
+          <PersonalWorkspaceNav v-else-if="personalPageForPath(router.currentRoute.value.path)" />
+          <FinanceWorkspaceNav v-else-if="router.currentRoute.value.path.startsWith('/finance/')" />
+          <router-view v-slot="{ Component, route }">
+            <KeepAlive :max="30">
+              <component v-if="isSpecialRoute && Component" :is="Component" :key="isCollabRoute ? route.path : (route.name || route.path)" />
+            </KeepAlive>
+          </router-view>
           <KeepAlive :max="30">
-            <component v-if="isSpecialRoute && Component" :is="Component" :key="route.name || route.path" />
+            <component v-if="!isSpecialRoute" :is="currentView" :key="store.activeTab?.pageId || store.activeTabId" />
           </KeepAlive>
-        </router-view>
-        <KeepAlive :max="30">
-          <component v-if="!isSpecialRoute" :is="currentView" :key="store.activeTabId" />
-        </KeepAlive>
+        </div>
       </div>
       <!-- 首次弹窗：进入后台时把还没弹过的新通知弹一次，每条只弹一次 -->
       <NotificationPopup v-if="auth.user" />
@@ -276,6 +264,8 @@
 <script setup>
 import DailyUpdateNotice from '@/components/DailyUpdateNotice.vue'
 import StaffWorkspaceNav from '@/components/StaffWorkspaceNav.vue'
+import '@/styles/staff-workspace-frame.css'
+import '@/styles/inventory-workspace-frame.css'
 import { STAFF_GROUPS, STAFF_PAGES, staffPageForPath, staffWorkspaceId, staffRouteForId, visibleStaffGroups, canAccessStaffPage } from '@/navigation/staff.mjs'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
@@ -288,7 +278,6 @@ import LoginView from '@/views/LoginView.vue'
 
 import DashboardView from '@/views/DashboardView.vue'
 import PushCenterView from '@/views/PushCenterView.vue'
-import DataImportView from '@/views/DataImportView.vue'
 import BusinessDataImport from '@/views/BusinessDataImport.vue'
 import UserManagementView from '@/views/UserManagementView.vue'
 import NotificationCenterView from '@/views/NotificationCenterView.vue'
@@ -298,7 +287,6 @@ import PositionSettingsView from '@/views/PositionSettingsView.vue'
 import AiAssistantView from '@/views/AiAssistantView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 import SalesAnalysis from '@/views/analysis/SalesAnalysis.vue'
-import SuppliesAnalysis from '@/views/analysis/SuppliesAnalysis.vue'
 import StoreBasic from '@/views/store/StoreBasic.vue'
 import StorePlatform from '@/views/store/StorePlatform.vue'
 import StoreConfig from '@/views/store/StoreConfig.vue'
@@ -329,28 +317,43 @@ import BookkeepingEntry from '@/views/bookkeeping/BookkeepingEntry.vue'
 import BookkeepingCategories from '@/views/bookkeeping/BookkeepingCategories.vue'
 import BookkeepingRecords from '@/views/bookkeeping/BookkeepingRecords.vue'
 import BookkeepingExpenseTags from '@/views/bookkeeping/BookkeepingExpenseTags.vue'
+import { BUSINESS_GROUPS, visibleBusinessGroups, canAccessBusinessPage, personalPageForPath } from '@/navigation/business-workspaces.mjs'
+import PersonalWorkspaceNav from '@/components/PersonalWorkspaceNav.vue'
+import FinanceWorkspaceNav from '@/components/FinanceWorkspaceNav.vue'
+import { workspaceForPath, workspaceForId, workspaceRoute } from '@/navigation/workspaces.mjs'
 import { NAV_GROUP_PERMISSIONS, NAV_ITEM_PERMISSIONS } from '@/permissions'
+import { OPERATION_GROUPS, OPERATION_PAGES, canAccessOperationPage, visibleOperationGroups, operationGroupForPath, operationPageForPath } from '@/navigation/operations.mjs'
+import OperationsWorkspaceNav from '@/components/OperationsWorkspaceNav.vue'
+import { SYSTEM_GROUPS, SYSTEM_PAGES, canAccessSystemPage, visibleSystemGroups, systemGroupForPath, systemPageForPath } from '@/navigation/system.mjs'
+import SystemWorkspaceNav from '@/components/SystemWorkspaceNav.vue'
+const visibleOperations = computed(() => visibleOperationGroups(auth.permissions))
+const visibleBusiness = computed(()=>visibleBusinessGroups(auth.permissions))
+const visibleSystem = computed(() => visibleSystemGroups(auth.permissions))
 
 // 左侧导航按岗位权限过滤：分组标题与菜单项都由这里判断，
 // 权限来自 /api/auth/me（后端每次从岗位表读取，分配岗位后重新登录即生效）。
 const canSeePopupItem = item => {
+  const businessPage=BUSINESS_GROUPS.flatMap(g=>g.pages).find(p=>p.index===item.index)
+  if(businessPage)return canAccessBusinessPage(businessPage,auth.permissions)
+  const systemPage = SYSTEM_PAGES.find(page => page.index === item.index)
+  if (systemPage) return canAccessSystemPage(systemPage, auth.permissions)
+  const operation = OPERATION_PAGES.find(page => page.index === item.index)
+  if (operation) return canAccessOperationPage(operation, auth.permissions)
   if (item.index.startsWith('staff-management-')) {
     const group = STAFF_GROUPS.find(group => group.id === item.index)
     return group ? visibleStaffGroups(auth.permissions).some(item => item.id === group.id) : canAccessStaffPage(STAFF_PAGES.find(page => page.id === item.index), auth.permissions)
   }
   return true
 }
-const canSeeNav = index => auth.can(NAV_ITEM_PERMISSIONS[index])
+const canSeeNav = index => ['user-management','position-settings','operation-audit','finance-integrations','approval-store-bindings','data-import-pos-automation','automation-schedule','analysis-sync-runs','settings','notification-rules','enterprise-settings'].includes(index) ? auth.isAdmin : auth.can(NAV_ITEM_PERMISSIONS[index])
 const canSeeNavGroup = group => auth.canAny(NAV_GROUP_PERMISSIONS[group] || [])
 
 const COMPONENT_MAP = {
   dashboard: DashboardView,
   pipeline: PushCenterView,
-  'data-import': DataImportView,
   'data-import-pos': BusinessDataImport,
   'data-import-group-buy': BusinessDataImport,
   'data-import-delivery': BusinessDataImport,
-  'data-import-legacy': DataImportView,
   'user-management': UserManagementView,
   notifications: NotificationCenterView,
   'notification-rules': NotificationRulesView,
@@ -358,7 +361,6 @@ const COMPONENT_MAP = {
   'ai-assistant': AiAssistantView,
   settings: SettingsView,
   'analysis-sales': SalesAnalysis,
-  'analysis-supplies': SuppliesAnalysis,
   'store-management-info-basic': StoreBasic,
   'store-management-info-circle': StoreBusinessCircle,
   'store-management-info-platform': StorePlatform,
@@ -393,6 +395,9 @@ const COMPONENT_MAP = {
 
 // ===== 浮动弹出菜单配置 =====
 const POPUP_CONFIG = {
+  ...Object.fromEntries(BUSINESS_GROUPS.map(group=>[group.key,{sections:[{title:group.label,items:group.pages.map(page=>({index:page.index,label:page.label}))}]}])),
+  ...Object.fromEntries(SYSTEM_GROUPS.map(group => [group.key, { sections: [{ title: group.label, items: group.pages.map(page => ({ index: page.index, label: page.label })) }] }])),
+  ...Object.fromEntries(OPERATION_GROUPS.map(group => [group.key, { sections: [{ title: group.label, items: group.pages.map(page => ({ index: page.index, label: page.label })) }] }])),
   analysis: {
     sections: [
       {
@@ -495,14 +500,10 @@ const POPUP_CONFIG = {
         title: '经营数据',
         items: [
           { index: 'data-import-pos', label: '收银系统数据' },
-          { index: 'data-import-pos-automation', label: '自动导报表' },
+
           { index: 'data-import-group-buy', label: '团购平台数据' },
           { index: 'data-import-delivery', label: '外卖平台数据' },
         ],
-      },
-      {
-        title: '其他数据',
-        items: [{ index: 'data-import-legacy', label: '日报与耗材' }],
       },
     ],
   },
@@ -512,6 +513,7 @@ const store = useAppStore()
 const router = useRouter()
 const contentAreaRef = ref(null)
 const staffMenuRef = ref(null)
+const popupMenuRefs = new Map()
 const auth = useAuthStore()
 const currentView = shallowRef(DashboardView)
 const pipelineLastPath = ref('/pipeline/group-buy-daily')
@@ -548,6 +550,9 @@ const isNotificationRoute = computed(() => router.currentRoute.value.path.starts
 const isNotificationRulesRoute = computed(() => router.currentRoute.value.path.startsWith('/notification-rules'))
 const workspaceRouteTabId = computed(() => {
   const route = router.currentRoute.value
+  const catalogPage=systemPageForPath(route.path)
+  if(catalogPage)return catalogPage.index
+  if(route.meta.ledgerPage)return route.name
   const section = String(route.params?.section || '').trim()
   const prefix = {
     'workspace-store-management': 'store-management',
@@ -567,6 +572,7 @@ const workspaceRouteTabId = computed(() => {
     'workspace-settings': 'settings',
     'knowledge-base':'knowledge-base',
     workflows:'workflows', 'store-operations':'store-operations',
+    'store-inventory':'store-inventory', 'operation-reports':'operation-reports', 'operation-personnel':'operation-personnel', 'operation-announcements':'operation-announcements',
     'inspections':'inspections',
     'store-tasks': 'store-tasks',
     // 挂在工作台下的独立静态路由（不是 :section 通配），刷新/直接访问时必须能反查回标签 id，
@@ -576,14 +582,13 @@ const workspaceRouteTabId = computed(() => {
   }[route.name] || ''
 })
 const isWorkspaceRoute = computed(() => Boolean(workspaceRouteTabId.value))
-const isSpecialRoute = computed(() => ['knowledge-base','workflows','store-operations','inspections'].includes(router.currentRoute.value.name) || router.currentRoute.value.name === 'store-tasks' || isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value)
+const isSpecialRoute = computed(() => router.currentRoute.value.meta.ledgerPage || ['store-inventory','knowledge-base','workflows','store-operations','inspections','operation-reports','operation-personnel','operation-announcements'].includes(router.currentRoute.value.name) || router.currentRoute.value.name === 'store-tasks' || isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value)
 const businessRouteTabId = computed(() => router.currentRoute.value.meta.analysisKey || 'analysis-total-brand')
 const dataImportRouteTabId = computed(() => ({
   pos: 'data-import-pos',
   'pos-automation': 'data-import-pos-automation',
   'group-buy': 'data-import-group-buy',
   delivery: 'data-import-delivery',
-  legacy: 'data-import-legacy',
 }[router.currentRoute.value.meta.importMode] || 'data-import-pos'))
 const staffCurrentPage = computed(() => staffPageForPath(router.currentRoute.value.path))
 const staffRouteTabId = computed(() => staffWorkspaceId(staffCurrentPage.value?.id || 'staff-management-employees'))
@@ -593,6 +598,13 @@ watch(() => router.currentRoute.value.path, path => {
   if (page) staffLastPaths[staffWorkspaceId(page.id)] = path
 }, { immediate: true })
 const pageTitle = computed(() => {
+  const personal=personalPageForPath(router.currentRoute.value.path)
+  if(personal)return '我的工作台 · '+personal.label
+  if(router.currentRoute.value.meta.ledgerPage)return router.currentRoute.value.meta.pageTitle
+  const systemPage = systemPageForPath(router.currentRoute.value.path)
+  if (systemPage) return systemGroupForPath(router.currentRoute.value.path).label + ' · ' + systemPage.label
+  const operationPage = operationPageForPath(router.currentRoute.value.path)
+  if (operationPage) return operationGroupForPath(router.currentRoute.value.path).label + ' · ' + operationPage.label
   if (router.currentRoute.value.name === 'knowledge-base') return '知识库管理'
   if (router.currentRoute.value.name === 'inspections') return '巡检与整改'
   if (router.currentRoute.value.name === 'store-tasks') return '门店日常任务'
@@ -601,7 +613,7 @@ const pageTitle = computed(() => {
     return `数据分析 · ${router.currentRoute.value.meta.analysisTitle || '总数据视角'}`
   }
   if (isDataImportRoute.value) {
-    const label = { pos: '收银系统数据', 'pos-automation': '自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据', legacy: '日报与耗材' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
+    const label = { pos: '收银系统数据', 'pos-automation': '自动导报表', 'group-buy': '团购平台数据', delivery: '外卖平台数据' }[router.currentRoute.value.meta.importMode] || '收银系统数据'
     return `数据导入 · ${label}`
   }
   if (isEnterpriseSettingsRoute.value) return '企业设置 · 机器人设置'
@@ -611,6 +623,10 @@ const pageTitle = computed(() => {
   return store.activeTab?.title || '数据概括'
 })
 const sidebarActive = computed(() => {
+  const systemGroup = systemGroupForPath(router.currentRoute.value.path)
+  if (systemGroup) return systemGroup.index
+  const operationGroup = operationGroupForPath(router.currentRoute.value.path)
+  if (operationGroup) return operationGroup.index
   if (router.currentRoute.value.name === 'knowledge-base') return 'knowledge-base'
   if (router.currentRoute.value.name === 'inspections') return 'inspections'
   if (router.currentRoute.value.name === 'store-tasks') return 'store-tasks'
@@ -765,12 +781,25 @@ const popupStyle = computed(() => ({
 
 function showPopup(group, event) {
   clearTimeout(hideTimer)
-  const rect = event.currentTarget.getBoundingClientRect()
+  const element = event?.currentTarget
+  if (!element?.getBoundingClientRect) return
+  const rect = element.getBoundingClientRect()
   popupMenu.group = group
   popupMenu.sections = POPUP_CONFIG[group]?.sections || []
   popupMenu.top = Math.max(12, Math.min(rect.top - 4, window.innerHeight - (group === 'staff-management' ? 300 : 240)))
   popupMenu.left = group === 'staff-management' ? Math.max(12, Math.min(rect.right + 10, window.innerWidth - 352)) : rect.right + 10
   popupMenu.visible = true
+}
+
+function setPopupMenuRef(group, element) {
+  if (element) popupMenuRefs.set(group, element)
+  else popupMenuRefs.delete(group)
+}
+
+function showGroupPopup(group, event) {
+  // ElMenuItem的click传出菜单项对象，键盘/鼠标事件才带currentTarget。
+  const element = event?.currentTarget || popupMenuRefs.get(group)?.$el
+  if (element) showPopup(group, { currentTarget: element })
 }
 
 function showStaffPopup() {
@@ -794,8 +823,15 @@ async function leaveSpecialRoute() {
   if (isCollabRoute.value || isBusinessAnalyticsRoute.value || isDataImportRoute.value || isEnterpriseSettingsRoute.value || isStore3dRoute.value || isStaffManagementRoute.value) await router.replace('/')
 }
 
+const workspaceLastPaths = reactive({})
+watch(()=>router.currentRoute.value.fullPath,()=>{const r=router.currentRoute.value,g=workspaceForPath(r.path);if(g)workspaceLastPaths[g.key]=r.fullPath},{immediate:true})
+
 const WORKSPACE_TAB_ROUTES = {
+  'my-payslips':'/my/payslips',
+  'operation-audit':'/admin/operation-audit','finance-integrations':'/admin/finance-integrations',
+  'approval-store-bindings':'/admin/approval-store-bindings',
   workflows:'/workflows', 'store-operations':'/store-operations',
+  'store-inventory':'/operations/inventory', 'operation-reports':'/operations/reports', 'operation-personnel':'/operations/personnel', 'operation-announcements':'/operations/announcements',
   'knowledge-base':'/knowledge-base',
   'inspections':'/inspections',
   'store-tasks': '/store-tasks',
@@ -834,6 +870,23 @@ async function openWorkspaceTab(id) {
 }
 
 async function selectPopupItem(index) {
+  const businessPage=BUSINESS_GROUPS.flatMap(g=>g.pages).find(p=>p.index===index)
+  if(businessPage){if(!canAccessBusinessPage(businessPage,auth.permissions))return;await router.push(businessPage.path);popupMenu.visible=false;popupMenu.group=null;popupMenu.sections=[];return}
+  const systemPage = SYSTEM_PAGES.find(page => page.index === index)
+  if (systemPage) {
+    if (!canAccessSystemPage(systemPage, auth.permissions)) return
+    await router.push(systemPage.path)
+    popupMenu.visible = false; popupMenu.group = null; popupMenu.sections = []
+    return
+  }
+  const operation = OPERATION_PAGES.find(page => page.index === index)
+  if (operation) {
+    if (!canAccessOperationPage(operation, auth.permissions)) return
+    store.openTabFromId(operation.tabId || operation.index)
+    await router.push(operation.path)
+    popupMenu.visible = false; popupMenu.group = null; popupMenu.sections = []
+    return
+  }
   if (index === 'store-preparation-3d') {
     store.openTabFromId(index)
     await router.push('/store-3d')
@@ -882,7 +935,6 @@ async function selectPopupItem(index) {
       'data-import-pos-automation': '/data-import/pos/automation',
       'data-import-group-buy': '/data-import/group-buy',
       'data-import-delivery': '/data-import/delivery',
-      'data-import-legacy': '/data-import/legacy',
     }[index]
     await router.push(routePath)
     popupMenu.visible = false
@@ -922,6 +974,7 @@ async function handleMenuSelect(index) {
 }
 
 async function selectTab(id) {
+  if(workspaceForId(id)){const target=workspaceRoute(id,workspaceLastPaths);if(target)await router.push(target);return}
   if (id === 'store-preparation-3d') {
     store.activeTabId = id
     await router.push('/store-3d')
@@ -974,7 +1027,6 @@ async function selectTab(id) {
       'data-import-pos-automation': '/data-import/pos/automation',
       'data-import-group-buy': '/data-import/group-buy',
       'data-import-delivery': '/data-import/delivery',
-      'data-import-legacy': '/data-import/legacy',
     }[id]
     await router.push(routePath)
     return
@@ -991,24 +1043,17 @@ async function selectTab(id) {
 }
 
 async function closeTab(id) {
-  const closingStaffWorkspace = isStaffManagementRoute.value && staffRouteTabId.value === id
+  const wasActive=store.activeTabId===id
   store.closeTab(id)
-  if (closingStaffWorkspace) {
-    if (store.activeTabId) await selectTab(store.activeTabId)
+  if(wasActive&&store.activeTabId!==id){
+    if(store.activeTabId)await selectTab(store.activeTabId)
     else await router.push('/dashboard')
-    return
   }
-  if (id === 'collab' && isCollabRoute.value) await router.push('/')
-  if (id.startsWith('analysis-') && isBusinessAnalyticsRoute.value) await router.push('/')
-  if (id.startsWith('data-import-') && isDataImportRoute.value) await router.push('/')
-  if (id === 'enterprise-settings' && isEnterpriseSettingsRoute.value) await router.push('/')
-  if (id === 'store-preparation-3d' && isStore3dRoute.value) await router.push('/')
-  if (WORKSPACE_TAB_ROUTES[id] && isWorkspaceRoute.value && workspaceRouteTabId.value === id) await router.push('/dashboard')
 }
 
-watch(() => store.activeTabId, (id) => {
+watch(() => [store.activeTabId,store.activeTab?.pageId], ([id,page]) => {
   if (!id) return
-  currentView.value = COMPONENT_MAP[id] || DashboardView
+  currentView.value = COMPONENT_MAP[page || id] || DashboardView
 })
 
 watch(isCollabRoute, (active) => {
@@ -1070,9 +1115,7 @@ onMounted(async () => {
     return
   }
   try {
-    if (!auth.isAdmin && auth.can('staff.store.edit')) await auth.init()
-    else await getConfig()
-    store.setServerStatus(true)
+    store.setServerStatus(Boolean(auth.user))
   } catch {
     store.setServerStatus(false)
   }
