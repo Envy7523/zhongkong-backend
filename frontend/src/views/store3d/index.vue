@@ -65,6 +65,10 @@
     </section>
 
     <section v-else class="preview-wrap">
+      <div v-if="canShowDemo" class="spatial-demo-banner">
+        <div><b>红山汇 · 空间交互示例</b><p>{{ demoMode ? '点击摄像头、厨房或仓库，体验视角转移与缓慢呼吸光。点位为示例，待现场校准。' : '用已上传的真实模型，演示区域与设备的定位交互。' }}</p></div>
+        <div class="spatial-demo-actions"><button v-if="demoMode" :aria-pressed="demoMotion" @click="toggleDemoMotion">动效{{ demoMotion ? '：开' : '：关' }}</button><button v-if="demoMode" @click="resetDemoView">全店视角</button><button class="demo-primary" @click="toggleDemo">{{ demoMode ? '退出示例' : '查看交互示例' }}</button></div>
+      </div>
       <div v-if="previewLoading" class="preview-loading">
         <el-progress type="circle" :percentage="previewLoading.percent" :width="96" :stroke-width="8" />
         <b>正在从服务器下载模型…</b>
@@ -85,7 +89,13 @@
             <div><span>空间标注</span><b>{{ annotations.length }} 个已保存</b></div>
             <div><span>版本</span><b>v{{ modelFor(previewStore || {})?.version || '—' }}</b></div>
           </div>
-          <section class="twin-section">
+          <section v-if="demoMode" class="twin-section demo-locations">
+            <header><span>示例点位</span><small>点击平滑定位</small></header>
+            <p v-if="!demoPoints.length">模型加载完成后显示点位</p>
+            <button v-for="(point, index) in demoPoints" :key="point.id" :aria-pressed="selectedAnnotation?.id === point.id" :class="{ active: selectedAnnotation?.id === point.id }" @click="selectAnnotation(point)"><span class="demo-point-number">{{ index + 1 }}</span><span><b>{{ point.title }}</b><small>{{ point.kind }} · 示例位置</small></span><span aria-hidden="true">↗</span></button>
+            <div class="demo-location-note">点位可穿透遮挡显示。这里只演示定位效果，尚未绑定真实设备或库存。</div>
+          </section>
+          <section v-else class="twin-section">
             <header><span>空间导航</span><small>点击切换检查重点</small></header>
             <button v-for="zone in zones" :key="zone.key" class="zone-button" :class="{ active: activeZone.key === zone.key }" @click="selectZone(zone)">
               <i :class="`zone-dot ${zone.status}`" /><span>{{ zone.name }}</span><small>{{ zone.note }}</small>
@@ -104,11 +114,12 @@
             <div><span class="panel-kicker">DIGITAL TWIN · {{ activeZone.name }}</span><b>{{ activeZone.headline }}</b></div>
             <div class="twin-shots">
               <button @click="setStandardView('top')">鸟瞰</button><button @click="setStandardView('front')">正面</button><button @click="setStandardView('left')">侧面</button>
-              <button class="annotation-toggle" :class="{ active: annotationMode }" @click="annotationMode = !annotationMode">{{ annotationMode ? '退出标注' : '标注空间' }}</button>
+              <button v-if="!demoMode" class="annotation-toggle" :class="{ active: annotationMode }" @click="annotationMode = !annotationMode">{{ annotationMode ? '退出标注' : '标注空间' }}</button>
             </div>
           </div>
           <div v-if="annotationMode" class="annotation-tip">标注模式已开启：请直接点击模型上的实际位置</div>
-          <Store3DViewer ref="viewerRef" :key="modelUrl" :model-url="modelUrl" :model-name="modelFileName" :render-profile="renderProfile" :annotations="annotations" :annotation-mode="annotationMode" @annotation-picked="onAnnotationPicked" @annotation-selected="selectAnnotation" />
+          <Store3DViewer ref="viewerRef" :key="modelUrl" :model-url="modelUrl" :model-name="modelFileName" :render-profile="renderProfile" :annotations="visibleAnnotations" :annotation-mode="annotationMode || calibratingDemo" @model-ready="onModelReady" @annotation-picked="onAnnotationPicked" @annotation-selected="selectAnnotation" />
+          <div v-if="demoMode && selectedAnnotation?.is_demo" class="demo-selection-summary" role="status"><b>{{ selectedAnnotation.title }} · 示例位置</b><span>{{ selectedAnnotation.description }}</span><button :aria-pressed="calibratingDemo" @click="calibratingDemo = !calibratingDemo">{{ calibratingDemo ? '取消调整' : '调整这个点位' }}</button><small v-if="calibratingDemo">请点击模型上的目标表面；仅修改本次示例，不保存到服务器。</small></div>
         </main>
 
         <aside class="twin-sidebar twin-detail">
@@ -117,7 +128,7 @@
             <h3>{{ selectedAnnotation.title }}</h3>
             <p>{{ selectedAnnotation.description || '暂未填写说明' }}</p>
             <div class="detail-status"><i class="zone-dot" :class="{ ready: selectedAnnotation.status === '已完成' }" />{{ selectedAnnotation.status }}</div>
-            <section class="twin-section annotation-meta"><header><span>模型定位</span><small>已保存</small></header><div><span>节点</span><b>{{ selectedAnnotation.node_name || '未命名节点' }}</b></div><div><span>坐标</span><b>{{ Number(selectedAnnotation.position_x).toFixed(2) }}, {{ Number(selectedAnnotation.position_y).toFixed(2) }}, {{ Number(selectedAnnotation.position_z).toFixed(2) }}</b></div><div><span>创建人</span><b>{{ selectedAnnotation.created_by_name || '当前用户' }}</b></div></section>
+            <section class="twin-section annotation-meta"><header><span>模型定位</span><small>{{ selectedAnnotation.is_demo ? '本次示例' : '已保存' }}</small></header><div><span>节点</span><b>{{ selectedAnnotation.node_name || (selectedAnnotation.is_demo ? '待现场校准' : '未命名节点') }}</b></div><div><span>坐标</span><b>{{ Number(selectedAnnotation.position_x).toFixed(2) }}, {{ Number(selectedAnnotation.position_y).toFixed(2) }}, {{ Number(selectedAnnotation.position_z).toFixed(2) }}</b></div><div v-if="!selectedAnnotation.is_demo"><span>创建人</span><b>{{ selectedAnnotation.created_by_name || '当前用户' }}</b></div><div v-else><span>数据关联</span><b>未接入</b></div></section>
             <button class="return-zone" @click="selectedAnnotation = null">返回区域检查模板</button>
           </template>
           <template v-else>
@@ -197,6 +208,12 @@ const annotationMode = ref(false)
 const annotationDialog = ref(false)
 const annotationSaving = ref(false)
 const selectedAnnotation = ref(null)
+const demoMode = ref(false)
+const demoMotion = ref(true)
+const demoPoints = ref([])
+const calibratingDemo = ref(false)
+const canShowDemo = computed(() => String(previewStore.value?.store_name || '').includes('红山汇'))
+const visibleAnnotations = computed(() => [...annotations.value, ...(demoMode.value ? demoPoints.value : [])])
 const annotationForm = reactive({ title: '', zone_key: 'facade', description: '', node_name: '', position_x: null, position_y: null, position_z: null, normal_x: 0, normal_y: 1, normal_z: 0, status: '待完善' })
 const renderModes = [
   { key: 'day', label: '日间', icon: Sunny },
@@ -239,10 +256,33 @@ function modelFor(store) { return modelsByStore.value[store.id] || null }
 function regionOf(store) { return [store.province, store.city, store.district].filter(Boolean).join(' / ') || '—' }
 function tableIndex(index) { return (page.value - 1) * pageSize + index + 1 }
 function statusTag(value) { return ({ '正常营业': 'success', '筹建中': 'warning', '已闭店': 'info', '迁址': 'danger' })[value] || '' }
-function setStandardView(view) { viewerRef.value?.setView?.(view) }
+function setStandardView(view) { calibratingDemo.value = false; selectedAnnotation.value = null; viewerRef.value?.setView?.(view) }
 function selectZone(zone) { activeZoneKey.value = zone.key; selectedAnnotation.value = null; setStandardView(zone.view) }
-function selectAnnotation(annotation) { selectedAnnotation.value = annotation; viewerRef.value?.focusPoint?.(annotation) }
+function selectAnnotation(annotation) { calibratingDemo.value = false; annotationMode.value = false; selectedAnnotation.value = annotation; viewerRef.value?.focusPoint?.(annotation) }
+function onModelReady() {
+  demoPoints.value = viewerRef.value?.createDemoPoints?.() || []
+  viewerRef.value?.setMotionEnabled?.(demoMotion.value)
+  if (demoMode.value) viewerRef.value?.focusOverview?.()
+}
+function toggleDemo() {
+  demoMode.value = !demoMode.value
+  annotationMode.value = false
+  calibratingDemo.value = false
+  selectedAnnotation.value = null
+  viewerRef.value?.setSelectedPoint?.()
+  if (demoMode.value && !demoPoints.value.length) onModelReady()
+  if (demoMode.value) viewerRef.value?.focusOverview?.()
+  else viewerRef.value?.resetView?.()
+}
+function toggleDemoMotion() { demoMotion.value = !demoMotion.value; viewerRef.value?.setMotionEnabled?.(demoMotion.value) }
+function resetDemoView() { calibratingDemo.value = false; selectedAnnotation.value = null; viewerRef.value?.focusOverview?.() }
 function onAnnotationPicked(point) {
+  if (calibratingDemo.value && selectedAnnotation.value?.is_demo) {
+    const updated = { ...selectedAnnotation.value, ...point }
+    demoPoints.value = demoPoints.value.map(item => item.id === updated.id ? updated : item)
+    selectAnnotation(updated)
+    return
+  }
   Object.assign(annotationForm, point, { title: '', zone_key: activeZone.value.key, description: '', status: '待完善' })
   annotationDialog.value = true
 }
@@ -440,6 +480,9 @@ async function openPreview(store) {
     annotations.value = annotationResult.annotations || []
     annotationMode.value = false
     selectedAnnotation.value = null
+    demoPoints.value = []
+    demoMode.value = canShowDemo.value
+    calibratingDemo.value = false
     previewing.value = true
   } catch (error) {
     previewLoading.value = null
@@ -451,6 +494,8 @@ async function openPreview(store) {
 }
 
 function backToSetup() {
+  demoMode.value = false
+  calibratingDemo.value = false
   previewing.value = false
   previewFromCache.value = false
   if (temporaryUrl) {
@@ -506,6 +551,7 @@ onBeforeUnmount(() => { if (temporaryUrl) URL.revokeObjectURL(temporaryUrl) })
 </script>
 
 <style scoped>
+.spatial-demo-banner{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:16px;padding:17px 20px;border:1px solid #a5d7e2;border-radius:12px;background:#edfafd;color:#164e63}.spatial-demo-banner b{font-size:16px}.spatial-demo-banner p{margin:7px 0 0;font-size:12px;line-height:1.6;color:#3e6272}.spatial-demo-actions{display:flex;gap:8px;flex-wrap:wrap;flex:none}.spatial-demo-actions button,.demo-selection-summary button{min-height:44px;padding:0 12px;border:1px solid #9ecbd6;border-radius:8px;background:#fff;color:#164e63;cursor:pointer}.spatial-demo-actions .demo-primary{background:#0e7490;border-color:#0e7490;color:white}.demo-locations>button{display:flex;align-items:center;gap:10px;width:100%;min-height:64px;margin:6px 0;padding:10px;border:1px solid #d9e7ec;border-radius:10px;background:#fff;color:#345769;cursor:pointer;text-align:left}.demo-locations>button.active{border-color:#0891b2;background:#e8f9fc}.demo-locations>button>span:nth-child(2){flex:1}.demo-locations b,.demo-locations small{display:block}.demo-locations b{font-size:14px}.demo-locations small{margin-top:5px;font-size:11px;color:#566c7a}.demo-point-number{display:grid;place-items:center;width:25px;height:25px;background:#d9f0f6;border-radius:50%;font-size:12px}.demo-location-note{margin-top:12px;font-size:11px;line-height:1.7;color:#5e7282}.demo-selection-summary{display:flex;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-top:12px;padding:14px;border:1px solid #bddce4;border-radius:10px;background:#f2fbfd;font-size:12px;color:#284b5d}.demo-selection-summary>b{flex:none;line-height:1.8}.demo-selection-summary>span{flex:1;min-width:180px;line-height:1.8}.demo-selection-summary small{width:100%;color:#885c15}.spatial-demo-actions button:focus-visible,.demo-locations button:focus-visible,.demo-selection-summary button:focus-visible{outline:3px solid #1d4ed8;outline-offset:3px}@media(max-width:1000px){.spatial-demo-banner{align-items:flex-start;flex-direction:column}.spatial-demo-actions{width:100%}}@media(max-width:560px){.spatial-demo-actions button{flex:1}.demo-selection-summary>span{min-width:100%}}
 .store3d-page{min-width:0;max-width:1480px;margin:0 auto;color:#1d2b43}.store3d-header{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:15px;padding:23px 28px;border-radius:17px;color:#fff;background:radial-gradient(circle at 88% 15%,rgba(123,190,255,.38),transparent 28%),linear-gradient(120deg,#142c5c,#21559d 62%,#3682dc);box-shadow:0 14px 32px rgba(35,75,141,.18)}.eyebrow,.section-kicker{display:block;font-size:10px;font-weight:800;letter-spacing:.16em}.eyebrow{color:#b9d7ff}.section-kicker{color:#5b86ce}.store3d-header h2{margin:7px 0 5px;font-size:25px;letter-spacing:.01em}.store3d-header p{margin:0;color:rgba(255,255,255,.78);font-size:12px}.store3d-header :deep(.el-tag),.back-button{display:flex;align-items:center;gap:4px;border-color:rgba(255,255,255,.38);background:rgba(239,255,248,.94);color:#157658}.back-button{background:rgba(255,255,255,.14);color:#fff}.model-directory{padding:21px;border:1px solid #e1e8f1;border-radius:13px;background:#fff;box-shadow:0 8px 22px rgba(31,62,106,.05)}.directory-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding-bottom:17px;border-bottom:1px solid #e8edf4}.directory-header h3{margin:5px 0;color:#273f62;font-size:20px}.directory-header p{margin:0;color:#8b99aa;font-size:12px}.directory-filters{display:grid;grid-template-columns:minmax(220px,1.5fr) minmax(140px,.82fr) minmax(140px,.82fr) auto;gap:11px;padding:17px 0}.model-table{width:100%;overflow:hidden;border:1px solid #e4eaf2;border-radius:8px}.model-file{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;color:#42617f;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.model-file>.el-icon{flex:none;color:#4381da}.model-file small{color:#93a0b1;font-size:10px}.empty-model{color:#a0abb9;font-size:12px}.inline-upload{display:inline-flex;margin-right:10px}.pagination{justify-content:flex-end;margin-top:16px}@media(max-width:820px){.store3d-header{align-items:flex-start;flex-direction:column;padding:20px}.store3d-header h2{font-size:20px}.model-directory{padding:16px}.directory-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:560px){.directory-header{align-items:flex-start;flex-direction:column}.directory-filters{grid-template-columns:1fr}.directory-filters :deep(.el-button){width:max-content}}
 @keyframes sm-spin{to{transform:rotate(360deg)}}
 .directory-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:9px}

@@ -47,6 +47,10 @@ export function useThreeViewer() {
   const isRoaming = ref(false)
   const isFullscreen = ref(false)
   const renderProfile = ref('day')
+  const hotspots = ref([])
+  const selectedPointId = ref(null)
+  const motionEnabled = ref(true)
+  const isFlying = ref(false)
   const statusText = computed(() => {
     if (error.value) return '加载失败'
     if (loading.value) return `正在加载模型 ${progress.value}%`
@@ -73,6 +77,9 @@ export function useThreeViewer() {
   let envTexture = null
   let annotationGroup = null
   let annotationItems = []
+  let flight = null
+  let motionPreference = null
+  let disposed = false
   const raycaster = new THREE.Raycaster()
   const pointerNdc = new THREE.Vector2()
   const keys = new Set()
@@ -87,6 +94,7 @@ export function useThreeViewer() {
   let pageVisible = !(typeof document !== 'undefined' && document.hidden)
 
   function requestRender() {
+    if (disposed) return
     dirty = true
     if (running || !onScreen || !pageVisible) return
     running = true
@@ -111,17 +119,64 @@ export function useThreeViewer() {
     requestRender()
   }
 
+  // 呼吸光由 CSS 合成层绘制；静止时不为闪光重复渲染整店的数百万三角面。
+  function updateHotspots() {
+    if (!camera || !host) return
+    camera.updateMatrixWorld()
+    hotspots.value = annotationItems.filter(item => item.is_demo).map(item => {
+      const projected = new THREE.Vector3(item.position_x, item.position_y, item.position_z).project(camera)
+      return { ...item, x: (projected.x + 1) * host.clientWidth / 2, y: (1 - projected.y) * host.clientHeight / 2,
+        visible: projected.z > -1 && projected.z < 1 && Math.abs(projected.x) < 0.94 && Math.abs(projected.y) < 0.9 }
+    })
+  }
+
+  function cancelFlight() {
+    if (flight && orbit) orbit.enableDamping = flight.damping
+    flight = null
+    isFlying.value = false
+  }
+
+  function flyTo(position, target, animate = true) {
+    if (!camera || !orbit) return
+    cancelFlight()
+    setAutoRotate(false)
+    if (isRoaming.value) exitRoam()
+    // 先清掉控制器残留阻尼，避免上一次拖动和本次转场争夺视角。
+    const damping = orbit.enableDamping
+    orbit.enableDamping = false
+    orbit.update()
+    if (!animate || !motionEnabled.value || motionPreference?.matches) {
+      camera.position.copy(position)
+      orbit.target.copy(target)
+      orbit.update()
+      orbit.enableDamping = damping
+    } else {
+      flight = { start: performance.now(), from: camera.position.clone(), to: position.clone(),
+        fromTarget: orbit.target.clone(), target: target.clone(), damping }
+      isFlying.value = true
+    }
+    requestRender()
+  }
+
+  function setMotionEnabled(value) {
+    motionEnabled.value = Boolean(value)
+    if (!motionEnabled.value && flight) {
+      const { to, target } = flight
+      flyTo(to, target, false)
+    }
+  }
+
+  function setSelectedPoint(id = null) { selectedPointId.value = id; requestRender() }
+
   function setCamera(distance, direction = VIEW_DIRECTIONS.front) {
     if (!boundingBox || !camera || !orbit) return
     const center = boundingBox.getCenter(new THREE.Vector3())
     const unit = direction.clone().normalize()
-    camera.position.copy(center).addScaledVector(unit, distance)
+    const position = center.clone().addScaledVector(unit, distance)
     camera.near = Math.max(0.01, distance / 120)
     camera.far = Math.max(1000, distance * 120)
     camera.updateProjectionMatrix()
-    orbit.target.copy(center)
-    orbit.update()
-    requestRender()
+    flyTo(position, center, !loading.value)
   }
 
   function frameModel() {
@@ -136,12 +191,18 @@ export function useThreeViewer() {
     setCamera(distance)
   }
 
-  function resetView() { frameModel() }
+  function resetView() { setSelectedPoint(); frameModel() }
+  function focusOverview() {
+    if (!boundingBox) return
+    setSelectedPoint()
+    setCamera(Math.max(modelInfo.value.maxDimension * 0.88, 4), new THREE.Vector3(.65, .8, 1))
+  }
   function setView(view) {
     if (!boundingBox) return
     const size = boundingBox.getSize(new THREE.Vector3())
     const maxDimension = Math.max(size.x, size.y, size.z, 0.01)
     const distance = Math.max(maxDimension * 1.9, 2)
+    setSelectedPoint()
     setCamera(distance, VIEW_DIRECTIONS[view] || VIEW_DIRECTIONS.front)
   }
 
@@ -204,6 +265,7 @@ export function useThreeViewer() {
       head.position.y = 0.36
       marker.add(stem, head)
       marker.position.set(Number(annotation.position_x), Number(annotation.position_y), Number(annotation.position_z))
+      if (annotation.is_demo) marker.visible = false // 示例使用可点击的屏幕热点，并明确显示其示例身份。
       annotationGroup.add(marker)
     })
     scene.add(annotationGroup)
@@ -243,12 +305,26 @@ export function useThreeViewer() {
   function focusPoint(point) {
     if (!camera || !orbit || !point) return
     const target = new THREE.Vector3(Number(point.position_x), Number(point.position_y), Number(point.position_z))
-    const direction = camera.position.clone().sub(orbit.target).normalize()
-    const distance = Math.max((modelInfo.value?.maxDimension || 10) * 0.62, 4)
-    orbit.target.copy(target)
-    camera.position.copy(target).addScaledVector(direction, distance)
-    orbit.update()
-    requestRender()
+    if (![target.x, target.y, target.z].every(Number.isFinite)) return
+    const direction = point.view_direction ? new THREE.Vector3(...point.view_direction).normalize() : camera.position.clone().sub(orbit.target).normalize()
+    const distance = Math.max((modelInfo.value?.maxDimension || 10) * (point.is_demo ? 0.38 : 0.62), 4)
+    setSelectedPoint(point.id)
+    flyTo(target.clone().addScaledVector(direction, distance), target)
+  }
+
+  function createDemoPoints() {
+    if (!boundingBox) return []
+    const size = boundingBox.getSize(new THREE.Vector3())
+    // 相对包围盒的演示坐标，仅用于展示交互，不冒充经过测绘的业务点位。
+    const presets = [
+      { id: 'demo-camera', title: '摄像头', kind: '监控点位', u: .48, v: .67, height: .48, view_direction: [0.1, .65, 1], description: '演示摄像头定位。接入悠络客后，此处可打开对应通道的实时画面、回放与告警。当前未绑定设备。' },
+      { id: 'demo-kitchen', title: '厨房', kind: '经营区域', u: .43, v: .40, height: .27, view_direction: [-.5, .9, 1], description: '演示厨房区域定位。后续可关联厨房摄像头、设备及巡检记录；当前位置需由现场人员校准。' },
+      { id: 'demo-storage', title: '仓库', kind: '库存区域', u: .65, v: .38, height: .27, view_direction: [1, .8, .6], description: '演示仓库区域定位。后续可关联本店库存、收货与盘点入口；当前尚未关联业务数据。' },
+    ]
+    return presets.map(item => ({ ...item, is_demo: true, status: '示例位置',
+      position_x: boundingBox.min.x + size.x * item.u,
+      position_y: boundingBox.min.y + size.y * item.height,
+      position_z: boundingBox.min.z + size.z * item.v }))
   }
 
   function onKeyDown(event) {
@@ -276,6 +352,7 @@ export function useThreeViewer() {
 
   function enterRoam() {
     if (!pointer || !renderer) return
+    cancelFlight()
     orbit.enabled = false
     pointer.lock()
   }
@@ -313,17 +390,26 @@ export function useThreeViewer() {
   }
 
   function animate() {
+    if (disposed || !timer || !renderer || !scene || !camera) { running = false; rafId = 0; return }
     // 没人动就彻底停下 RAF 循环：闲置时 CPU/GPU 都不再工作
     if (!dirty) { running = false; rafId = 0; return }
     dirty = false
     timer.update()
     const delta = timer.getDelta()
+    if (flight) {
+      const t = Math.min(1, (performance.now() - flight.start) / 2200)
+      const eased = t * t * t * (t * (t * 6 - 15) + 10)
+      camera.position.lerpVectors(flight.from, flight.to, eased)
+      orbit.target.lerpVectors(flight.fromTarget, flight.target, eased)
+      if (t === 1) cancelFlight()
+    }
     if (isRoaming.value && keys.size) updateRoam(delta)
     let moving = false
     if (!isRoaming.value && orbit) moving = orbit.update()
     renderer.render(scene, camera)
+    updateHotspots()
     // 阻尼未停 / 自动旋转 / 漫游中按着移动键 → 继续下一帧
-    if (moving || isAutoRotate.value || (isRoaming.value && keys.size)) dirty = true
+    if (flight || moving || isAutoRotate.value || (isRoaming.value && keys.size)) dirty = true
     if (dirty && onScreen && pageVisible) rafId = requestAnimationFrame(animate)
     else { running = false; rafId = 0 }
   }
@@ -377,6 +463,7 @@ export function useThreeViewer() {
     const loader = new GLTFLoader()
     loader.setMeshoptDecoder(MeshoptDecoder)
     loader.load(url, gltf => {
+      if (disposed) { disposeObject(gltf.scene); return }
       if (modelRoot) { scene.remove(modelRoot); disposeObject(modelRoot) }
       modelRoot = gltf.scene
       // 顺便统计模型规模：排查"为什么这个模型卡"时，mesh 数和三角面数是第一手依据
@@ -426,8 +513,10 @@ export function useThreeViewer() {
       loading.value = false
       requestRender()
     }, event => {
+      if (disposed) return
       progress.value = event.total ? Math.min(99, Math.round(event.loaded / event.total * 100)) : Math.min(95, progress.value + 2)
     }, loadError => {
+      if (disposed) return
       console.error('[Store3D] GLB load failed', loadError)
       error.value = '模型未能加载，请确认文件路径和 GLB 文件完整性。'
       loading.value = false
@@ -435,7 +524,9 @@ export function useThreeViewer() {
   }
 
   function init(element, modelUrl) {
+    disposed = false
     host = element
+    motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
     scene = new THREE.Scene()
     scene.background = new THREE.Color(0xf4f7fb)
     camera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000)
@@ -480,6 +571,8 @@ export function useThreeViewer() {
     orbit.screenSpacePanning = true
     orbit.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
     orbit.addEventListener('change', requestRender)
+    renderer.domElement.addEventListener('pointerdown', cancelFlight, true)
+    renderer.domElement.addEventListener('wheel', cancelFlight, { passive: true, capture: true })
 
     pointer = new PointerLockControls(camera, renderer.domElement)
     // 漫游时纯鼠标转头也要重绘（否则画面会停在上一帧）
@@ -510,6 +603,8 @@ export function useThreeViewer() {
   }
 
   function dispose() {
+    disposed = true
+    cancelFlight()
     stopLoop()
     exitRoam()
     resizeObserver?.disconnect()
@@ -531,9 +626,10 @@ export function useThreeViewer() {
     renderer?.dispose()
     renderer?.forceContextLoss?.()
     renderer?.domElement?.remove()
+    hotspots.value = []
     host = scene = camera = renderer = orbit = pointer = grid = modelRoot = boundingBox = timer = keyLight = fillLight = ambientLight = pmrem = envTexture = null
   }
 
   onBeforeUnmount(dispose)
-  return { loading, progress, error, statusText, modelInfo, isGridVisible, isAutoRotate, isRoaming, isFullscreen, renderProfile, init, dispose, resetView, setView, setGridVisible, setAutoRotate, setRenderProfile, setAnnotations, pickAt, pickAnnotationAt, focusPoint, enterRoam, exitRoam, toggleFullscreen }
+  return { loading, progress, error, statusText, modelInfo, hotspots, selectedPointId, motionEnabled, isFlying, setMotionEnabled, setSelectedPoint, createDemoPoints, focusOverview, isGridVisible, isAutoRotate, isRoaming, isFullscreen, renderProfile, init, dispose, resetView, setView, setGridVisible, setAutoRotate, setRenderProfile, setAnnotations, pickAt, pickAnnotationAt, focusPoint, enterRoam, exitRoam, toggleFullscreen }
 }
