@@ -70,6 +70,8 @@ async function prepareOperatingReportImpl(page, { from, to = from, storeIds }, p
   progress.step='store_selection';if(storeIds)await selectOperatingStores(page,storeIds);
   const labels = visible(page.locator('label.roo-checkbox'));
   for (const metric of contract.metrics) await labels.filter({hasText:exact(metric)}).waitFor({state:'visible',timeout:30000});
+  let selected=[];
+  for(let pass=0,stable=0;pass<6;pass++){
   const available = await labels.evaluateAll(elements => elements.map(el => ({
     name: el.textContent.trim(), checked: !!el.querySelector('input')?.checked,
     disabled: !!el.querySelector('input')?.disabled,
@@ -87,7 +89,10 @@ async function prepareOperatingReportImpl(page, { from, to = from, storeIds }, p
     if (await label.evaluate(el=>!!el.querySelector('input')?.checked) !== wanted) await label.click();
   }
   // 日期由报表固定输出，界面仅有其余五个不可取消的基础字段复选框。
-  const selected = ['日期', ...await labels.evaluateAll(elements => elements.filter(el => {const input=el.querySelector('input');return input?.checked&&(input.value||input.disabled);}).map(el => el.textContent.trim()))];
+  await new Promise(resolve=>setTimeout(resolve,350));
+  selected = ['日期', ...await labels.evaluateAll(elements => elements.filter(el => {const input=el.querySelector('input');return input?.checked&&(input.value||input.disabled);}).map(el => el.textContent.trim()))];
+  if(selected.length===contract.fields.length&&contract.fields.every(name=>selected.includes(name))){if(++stable===2)break;}else stable=0;
+  }
   if (selected.length !== contract.fields.length || contract.fields.some(name => !selected.includes(name))) {
     const error=Error('operating_ui_selection_mismatch');
     // Only public report field labels are recorded. Never capture input values,

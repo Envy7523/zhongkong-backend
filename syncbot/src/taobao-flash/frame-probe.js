@@ -8,8 +8,7 @@ async function runFlashFrameStep(frame,{step,date,root,retry=false}){
  else if(step==='open-date')await frame.locator('input[placeholder="开始日期"]').filter({visible:true}).click();
  else if(step==='select-day'){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date||''))throw Error('flash_date_invalid');
-  const day=frame.locator('.cook-picker-dropdown td.cook-picker-cell-in-view:not(.cook-picker-cell-disabled)[title="'+date+'"]');
-  if(await day.count()!==1)throw Error('flash_calendar_day_missing');await day.click();await day.click();
+  await require('../jd-delivery/calendar').selectAntDay(frame,{date,prefix:'cook',inspect:'inspectFlashReport',error:'flash_calendar_day_missing'});
  }
  else if(step==='export-summary'){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date||''))throw Error('flash_date_invalid');

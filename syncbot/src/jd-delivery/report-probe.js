@@ -5,9 +5,7 @@ async function runJdReportStepImpl(frame,{step,date,type,filename,root,retry=fal
  if(step==='open-date')await frame.locator('input[placeholder="开始日期"]').filter({visible:true}).click();
  else if(step==='select-day'){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date||''))throw Error('jd_date_invalid');
-  const day=frame.locator('.ant-picker-dropdown td.ant-picker-cell-in-view:not(.ant-picker-cell-disabled)[title="'+date+'"]') .filter({visible:true});
-  await day.waitFor({state:'visible',timeout:10000});
-  if(await day.count()!==1)throw Error('jd_report_day_missing');await day.click();await day.click();
+  await require('./calendar').selectAntDay(frame,{date,prefix:'ant',inspect:'inspectJdReport',error:'jd_report_day_missing'});
  }
  else if(step==='download-list')await frame.getByText('下载列表',{exact:true}).filter({visible:true}).click();
  else if(step==='confirm-list'){

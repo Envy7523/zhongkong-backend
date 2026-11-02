@@ -2594,6 +2594,9 @@ function payrollWorkbook(sheet) {
 
 payrollWorkflow.mount({ app, db, readPayrollSheet, payrollTemplateRows, formatPayrollRow, payrollWorkbook, XLSX });
 const rosterEngine=staffRoster.mount({app,db,readPayrollSheet,formatPayrollRow,dingSchedule});
+const dingDetailsModule=require('./lib/dingtalk-attendance-details');
+const dingAttendanceDetails=dingDetailsModule.service(db);
+dingDetailsModule.mountInternal({app,express,db,audit:syncJobAudit,details:dingAttendanceDetails});
 storeStaff.mount({ app, db, validateStaffFields });
 
 // 工资表制作：仅根据员工档案和 C 级薪酬构成生成新的月度工作表，不会改动第三方工资文件或员工薪酬档案。
@@ -2666,7 +2669,7 @@ app.get('/api/staff/dingtalk/status', (req, res) => {
 // 考勤同步核心：端点与每日自动同步共用同一段逻辑，避免两套实现漂移。
 // 幂等：dingtalk_attendance_records 上有 (dingtalk_user_id, check_time, check_type) 唯一键，
 // 重复跑同一天只会更新 synced_at，不会产生重复打卡。
-async function runDingTalkAttendanceSync({ dateFrom, dateTo, employeeIds = [] }) {
+async function runDingTalkAttendanceSync({ dateFrom, dateTo, employeeIds = [], waitForDetails = true }) {
   const from = normalizeAttendanceDate(dateFrom);
   const to = normalizeAttendanceDate(dateTo) || from;
   if (!from) throw new Error('请提供同步开始日期');
@@ -2699,10 +2702,12 @@ async function runDingTalkAttendanceSync({ dateFrom, dateTo, employeeIds = [] })
         location_result=excluded.location_result,source_data=excluded.source_data,synced_at=excluded.synced_at`,
       [employee?.id || null, record.dingtalkUserId, record.workDate, record.checkTime, record.checkType, record.timeResult, record.locationResult, JSON.stringify(record.raw)]);
   }
-  const message = `已同步 ${mapped.length} 名员工的 ${records.length} 条打卡记录，已匹配 ${matchedCount} 条`;
+  const details=await dingDetailsModule.forRequest(dingAttendanceDetails,{from,to,employeeIds:requestedEmployeeIds},{wait:waitForDetails,onError:e=>console.warn('[dingtalk-details] '+(/^[a-z_]+$/.test(e.message)?e.message:'sync_failed'))});
+  const detailMessage=details.already_running?'；另有考勤后台同步正在执行，本次仅更新打卡，请稍后重试':details.pending?'；考勤结果和审批正在后台同步，请稍后刷新':`；考勤结果 ${details.result_count} 条、审批 ${details.approval_count} 条`;
+  const message = `已同步 ${mapped.length} 名员工的 ${records.length} 条打卡记录，已匹配 ${matchedCount} 条${detailMessage}`;
   db.insert('INSERT INTO dingtalk_attendance_sync_runs (date_from,date_to,status,record_count,matched_count,unmatched_count,message) VALUES (?,?,?,?,?,?,?)', [from, to, 'success', records.length, matchedCount, unmatchedCount, message]);
   db.save();
-  return { date_from: from, date_to: to, employee_count: mapped.length, record_count: records.length, matched_count: matchedCount, unmatched_count: unmatchedCount, message };
+  return { date_from: from, date_to: to, employee_count: mapped.length, record_count: records.length, matched_count: matchedCount, unmatched_count: unmatchedCount, details, message };
 }
 
 // 人工补录接口保留；每日自动任务共用相同导入核心，员工页展示任务状态。
@@ -2710,7 +2715,7 @@ app.post('/api/staff/dingtalk/sync', async (req, res) => {
   const dateFrom = normalizeAttendanceDate(req.body?.date_from) || new Date().toISOString().slice(0, 10);
   const dateTo = normalizeAttendanceDate(req.body?.date_to) || dateFrom;
   try {
-    const result = await runDingTalkAttendanceSync({ dateFrom, dateTo, employeeIds: req.body?.employee_ids });
+    const result = await runDingTalkAttendanceSync({ dateFrom, dateTo, employeeIds: req.body?.employee_ids, waitForDetails:false });
     res.json({ ok: true, ...result });
   } catch (e) {
     const message = String(e.message || '钉钉同步失败');
@@ -2783,6 +2788,7 @@ app.get('/api/staff/dingtalk/auto-sync', (req, res) => {
       configured: Boolean(dingtalkAttendance.getDingTalkConfig().configured),
       mapped_employees: mappedEmployees,
       ...getAttendanceDailyTask().status(),
+      detail_sync:dingAttendanceDetails.status(),
       mapped_employees: mappedEmployees,
       server_time: localDateText() + ' ' + new Date().toTimeString().slice(0, 8),
       next_run_at: getAttendanceDailyTask().status().next_run_at,
@@ -6905,6 +6911,7 @@ app.get('/api/bot/status', (_req, res) => {
   require('./lib/business-ledger').initialize(db);
   dingScheduleModule.initialize(db);
   require('./lib/dingtalk-approvals').initialize(db);
+  dingDetailsModule.initialize(db);
   staffRoster.initialize(db);
   if (!LOCAL_WEB_PREVIEW) dingSchedule.start();
   // Replay balances after midnight and after punch corrections; unchanged accounts do not write.

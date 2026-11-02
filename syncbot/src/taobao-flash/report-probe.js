@@ -7,8 +7,7 @@ async function runFlashReportStepImpl(frame,{step,date,type,filename,root,retry=
  if(step==='open-date'){await frame.locator('input[placeholder="开始日期"]').filter({visible:true}).click();return frame.broker.call(frame.descriptor,{action:'inspectFlashCalendar'});}
  else if(step==='select-day'){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date||''))throw Error('flash_date_invalid');
-  const day=frame.locator('.ant-picker-dropdown td.ant-picker-cell-in-view:not(.ant-picker-cell-disabled)[title="'+date+'"]') .filter({visible:true});
-  if(await day.count()!==1)throw Error('flash_calendar_day_missing');await day.click();await day.click();return frame.broker.call(frame.descriptor,{action:'inspectFlashCalendar'});
+  await require('../jd-delivery/calendar').selectAntDay(frame,{date,prefix:'ant',inspect:'inspectFlashReport',error:'flash_calendar_day_missing'});return frame.broker.call(frame.descriptor,{action:'inspectFlashCalendar'});
  }
  else if(step==='operating-columns'){
   for(const label of operatingLabels){const field=frame.locator('label.ant-checkbox-wrapper').filter({visible:true,hasText:new RegExp('^'+label+'$')});

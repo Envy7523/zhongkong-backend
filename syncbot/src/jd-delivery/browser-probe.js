@@ -1,7 +1,7 @@
 'use strict';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function visiblePage(page){await page.bringToFront();for(let i=0;i<12;i++){const health=await page.broker.call(page.descriptor,{action:'documentHealth'});if(health.visibility==='visible')return;await pause(200);}throw Error('client_browser_not_visible');}
-async function runJdStep(page,{step,date,jobId,partId,root}){
+async function runJdStepImpl(page,{step,date,jobId,partId,root}){
  if(new URL(page.url()).origin!=='https://store.jddj.com')throw Error('jd_origin_invalid');
  await visiblePage(page);
  if(step==='dismiss-guide'){
@@ -11,11 +11,7 @@ async function runJdStep(page,{step,date,jobId,partId,root}){
  else if(step==='open-date')await page.locator('form.dj-form input.el-range-input').nth(0).click();
  else if(step==='calendar-day'){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date||''))throw Error('jd_date_invalid');
-  const state=await page.broker.call(page.descriptor,{action:'inspectJdReport'});
-  const panel=state.overlays.find(e=>e.className.includes('el-date-range-picker'));
-  if(!panel||!panel.text.startsWith(`${date.slice(0,4)} 年 ${Number(date.slice(5,7))} 月 `))throw Error('jd_calendar_month_mismatch');
-  const day=page.locator('.el-picker-panel td.available').filter({visible:true,hasText:new RegExp('^'+Number(date.slice(8))+'$')}).first();
-  await day.click();await day.click();
+  await require('./calendar').selectElDay(page,date);
  }
  else if(step==='confirm-date'){
   const panel=page.locator('.el-date-range-picker').filter({visible:true});
@@ -27,7 +23,7 @@ async function runJdStep(page,{step,date,jobId,partId,root}){
  else if(step==='close-stores')await page.locator('.dj-modal .dj-modal-close').filter({visible:true}).filter({hasText:/^$/}).click();
  else if(step==='open-operating-menu'){
   const close=page.locator('.dj-modal .dj-modal-close').filter({visible:true,hasText:/^$/});if(await close.count()===1)await close.click();
-  await page.locator('.jd-sub-menu__title').filter({visible:true,hasText:/^经营罗盘$/}).click();
+  await page.locator('.jd-sub-menu__title').filter({visible:true,hasText:/^经营罗盘(?:\s*新)?$/}).click();
  }
  else if(step==='open-operating-report')await page.locator('.jd-menu-item').filter({visible:true,has:page.getByText('报表下载',{exact:true})}).click();
  else if(step==='refresh-records')await page.locator('button.dj-button').filter({visible:true,hasText:/^刷新$/}).click();
@@ -72,4 +68,5 @@ async function runJdStep(page,{step,date,jobId,partId,root}){
  else throw Error('jd_probe_step_invalid');
  return page.broker.call(page.descriptor,{action:'inspectJdReport'});
 }
+async function runJdStep(page,options){try{return await runJdStepImpl(page,options);}catch(e){e.operation='jd_'+options.step.replaceAll('-','_');throw e;}}
 module.exports={runJdStep,visiblePage};

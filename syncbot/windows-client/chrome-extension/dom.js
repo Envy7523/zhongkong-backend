@@ -30,6 +30,22 @@
    const labels={shop:'门店',product:'商品',finance:'财务管理',finance_download:'下载专区',reports:'报表下载',data:'数据中心',data_download:'数据下载',materials:'资料下载',shop_download:'门店下载',product_download:'商品下载',download_management:'下载管理'};
    const codes=['document_'+(doc.visibilityState==='visible'?'visible':'hidden')];
    for(const [key,text]of Object.entries(labels)){const nodes=query(doc,[{kind:'text',match:{text,exact:true}}]);codes.push('nav_'+key+'_'+Math.min(nodes.length,99)+'_visible_'+Math.min(nodes.filter(visible).length,99));}
+   if(['https://store.jddj.com','https://kunce-store.jddj.com'].includes(doc.location.origin)){
+    codes.unshift('jd_route_'+(doc.location.pathname==='/v3/financial/statement/newDownload'?'statement':doc.location.pathname==='/waimai/report-download'?'report':'other'));
+    for(const [key,selector]of Object.entries({jd_submenu:'.jd-sub-menu__title',jd_menu:'.jd-menu-item',jd_frame:'iframe',jd_login:'input[type="password"]'})){
+     const nodes=[...doc.querySelectorAll(selector)];codes.unshift(key+'_'+Math.min(nodes.length,99)+'_visible_'+Math.min(nodes.filter(visible).length,99));
+    }
+    for(const [key,text]of Object.entries({compass:'经营罗盘',login:'登录',scan:'扫码登录',verify:'安全验证'})){
+     const nodes=query(doc,[{kind:'text',match:{regex:'^'+text+'(?:新)?$'}}]);codes.unshift('jd_'+key+'_'+Math.min(nodes.filter(visible).length,99));
+    }
+    const encode=s=>Array.from(new TextEncoder().encode(s),b=>b.toString(16).padStart(2,'0')).join('');
+    for(const [key,text]of Object.entries({statement:'对账单下载',bills:'账单下载',finance:'财务管理',compass:'经营罗盘',report:'报表下载'})){
+     const nodes=query(doc,[{kind:'text',match:{regex:'^'+text+'(?:\\s*新)?$'}},{kind:'filter',visible:true}]);
+     for(const [index,node]of nodes.slice(0,2).entries()){
+      const link=node.closest('a[href]');if(link){try{const u=new URL(link.getAttribute('href'),doc.location.href);if(allowed.has(u.origin)&&/^\/[a-zA-Z0-9_/-]{1,90}$/.test(u.pathname))codes.unshift('jd_link_'+key+'_'+index+'_'+encode(u.pathname.replace(/\d+/g,'n')).slice(0,90));}catch{}}
+     }
+    }
+   }
    return codes;
   }
   if(command.action==='reloadFlashDownloadPage'){
