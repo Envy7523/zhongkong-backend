@@ -102,6 +102,7 @@ function build(over = {}) {
     archiveFn: over.archiveFn || (async () => ({ file: path.join(TMP, 'a.xlsx'), size: 1, sha256: 'x', archived: true, duplicate: false })),
     waitForDownloadFile: async (o) => { waitCalls.push(o); return (over.waitForDownloadFile || (async () => ({ ok: true, file: path.join(TMP, 'd.xlsx'), name: 'd.xlsx', size: 1 })))(o); },
     incomingDir: TMP, audit: (r) => audited.push(r), now: () => '2026-09-18T00:00:00.000Z',
+    ...(over.queryFlow?{queryFlow:over.queryFlow}:{}),
     // 确认弹窗轮询：测试默认零等待（只读轮询本身可注入超时/间隔，语义不变）
     sleep: over.sleep || (async () => {}),
     exportConfirm: over.exportConfirm || { timeoutMs: 0, intervalMs: 0 },
@@ -115,6 +116,11 @@ const row = (no, dateStr, applyTime, status, controls) => ({
 });
 
 (async () => {
+  {
+    const {ad,client}=build({queryFlow:async({client:c})=>{await c.region('#calendar',{maxDepth:4});await c.inspect('#next-month',{});return {ok:true,declared_count:22,declared_dynamic:22};}});
+    const result=await ad.navigateAndQuery({ctx:CTX});
+    ck('跨月日历通过真实适配器提供区域与按钮检查，不绕过 host 白名单',result.ok===true&&client.log.cmds.some(c=>c.cmd==='region'&&c.args.selector==='#calendar')&&client.log.cmds.some(c=>c.cmd==='inspect'&&c.args.selector==='#next-month'),'');
+  }
   // 1) 白名单动作映射全覆盖
   {
     const { ad } = build();
