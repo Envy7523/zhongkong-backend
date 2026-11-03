@@ -136,8 +136,8 @@ async function prepareOperatingReport(page, options) {
           const alternative=visible(page.locator('label.roo-checkbox')).filter({hasText:/^订单收入$/});
           if(await alternative.count()===1)await alternative.hover();
           const definition=await page.broker.call(page.descriptor,{action:'reportMetricDefinition'});
-          const encoded=Buffer.from(JSON.stringify(definition),'utf8').toString('hex');
-          for(let offset=0;offset<encoded.length&&offset<2500;offset+=100)trace.push('fields_definition_'+(offset/100)+'_'+encoded.slice(offset,offset+100));
+          const encoded=require('node:zlib').deflateRawSync(Buffer.from(JSON.stringify(definition),'utf8')).toString('hex');
+          for(let offset=0;offset<encoded.length&&offset<3400;offset+=100)trace.push('fields_definition_z_'+(offset/100)+'_'+encoded.slice(offset,offset+100));
         }
         const names=await visible(page.locator('label.roo-checkbox')).allTextContents();
         trace.push('fields_visible_'+names.length);
