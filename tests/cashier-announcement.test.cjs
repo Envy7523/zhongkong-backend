@@ -3,6 +3,14 @@ const assert=require('node:assert/strict');
 const {readOverlays}=require('../syncbot/src/phase2/dom-probe');
 const {navigateAndQueryReportA}=require('../syncbot/src/phase2/report-a-query-flow');
 const {selectNavigationCandidate}=require('../syncbot/src/phase2/report-a-query-flow');
+test('scoped menu discovery uses the visible portal instead of its retained hidden tab',()=>{
+ const {collectByText}=require('../syncbot/src/phase2/dom-probe'),label={children:[],textContent:'营业报表'},hidden={getBoundingClientRect:()=>({width:0,height:0})},visible={getBoundingClientRect:()=>({width:200,height:500}),querySelectorAll:()=>[label]};
+ const prior={window:global.window,document:global.document};
+ try{global.window={getComputedStyle:()=>({display:'block',visibility:'visible'}),__probeHelpers:{pick:()=>({selector:'#current-menu',visible:true})}};global.document={querySelectorAll:()=>[hidden,visible]};
+  assert.equal(collectByText({texts:['营业报表'],scopeSelector:'#menu'}).营业报表.exact[0].selector,'#current-menu');
+  global.document.querySelectorAll=()=>[hidden];assert.equal(collectByText({texts:['营业报表'],scopeSelector:'#menu'}).__error,'scope_missing_or_ambiguous');
+ }finally{Object.assign(global,prior);}
+});
 test('fresh menu candidates tolerate nested text and reject separate identical controls',()=>{
  const c=(selector,x,y,w,h)=>({selector,visible:true,unique:true,clickable:true,frameIndex:0,rect:{x,y,w,h}});
  const outer=c('#current-tab li',10,100,200,40),leaf=c('#current-tab span',40,110,80,20);

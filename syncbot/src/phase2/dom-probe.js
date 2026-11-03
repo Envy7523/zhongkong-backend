@@ -116,7 +116,15 @@ function collectByText(input) {
   const H = window.__probeHelpers;
   if (!H) return { __error: 'probe helpers 未安装' };
   const out = {};
-  const root = scopeSelector ? document.querySelector(scopeSelector) || document : document;
+  let root=document;
+  if(scopeSelector){
+    const scopes=Array.from(document.querySelectorAll(scopeSelector)).filter(el=>{
+      const r=el.getBoundingClientRect(),style=window.getComputedStyle(el);
+      return r.width>0&&r.height>0&&style.visibility!=='hidden'&&style.display!=='none';
+    });
+    if(scopes.length!==1)return {__error:'scope_missing_or_ambiguous'};
+    root=scopes[0];
+  }
   const all = Array.from(root.querySelectorAll('*'));
   for (const t of texts) {
     const want = String(t).trim();
