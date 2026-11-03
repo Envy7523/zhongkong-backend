@@ -26,6 +26,11 @@
  }
  async function execute(doc,command){
   if(!allowed.has(doc.location.origin))throw Error('extension_origin_denied');
+  if(command.action==='reportMetricDefinition'){
+   if(doc.location.pathname!=='/bizdata_pc/report/download')throw Error('extension_origin_denied');
+   const labels=[...doc.querySelectorAll('label.roo-checkbox')].filter(visible).filter(el=>['营业收入','订单收入'].includes(normalize(el.textContent)));
+   return {fields:labels.map(el=>({name:normalize(el.textContent),key:String(el.querySelector('input')?.value||'').slice(0,80),titles:[el,...el.querySelectorAll('[title],[data-tip]')].map(e=>e.getAttribute('title')||e.getAttribute('data-tip')||'').filter(Boolean).slice(0,4)})),tooltips:[...doc.querySelectorAll('[role="tooltip"],.roo-tooltip,.roo-popover')].filter(visible).map(el=>normalize(el.textContent).slice(0,600)).filter(Boolean).slice(0,4)};
+  }
   if(command.action==='collectorLayout'){
    const labels={shop:'门店',product:'商品',finance:'财务管理',finance_download:'下载专区',reports:'报表下载',data:'数据中心',data_download:'数据下载',materials:'资料下载',shop_download:'门店下载',product_download:'商品下载',download_management:'下载管理'};
    const codes=['document_'+(doc.visibilityState==='visible'?'visible':'hidden')];

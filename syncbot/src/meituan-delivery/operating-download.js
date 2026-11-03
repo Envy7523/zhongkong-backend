@@ -132,6 +132,13 @@ async function prepareOperatingReport(page, options) {
     const trace=['operating_fields_'+progress.step.replace(/-/g,'n')];
     if(progress.step.startsWith('metric_ready_')) {
       try {
+        if(page.broker&&page.descriptor){
+          const alternative=visible(page.locator('label.roo-checkbox')).filter({hasText:/^订单收入$/});
+          if(await alternative.count()===1)await alternative.hover();
+          const definition=await page.broker.call(page.descriptor,{action:'reportMetricDefinition'});
+          const encoded=Buffer.from(JSON.stringify(definition),'utf8').toString('hex');
+          for(let offset=0;offset<encoded.length&&offset<2500;offset+=100)trace.push('fields_definition_'+(offset/100)+'_'+encoded.slice(offset,offset+100));
+        }
         const names=await visible(page.locator('label.roo-checkbox')).allTextContents();
         trace.push('fields_visible_'+names.length);
         const related=Buffer.from(names.filter(name=>/收入|营业|收款|优惠|实收/.test(name)).map(name=>name.trim()).join('|'),'utf8').toString('hex');
