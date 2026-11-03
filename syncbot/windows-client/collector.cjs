@@ -103,10 +103,13 @@ class Collector {
   }
   async close(){const connection=this.connection;this.connection=null;this.context=null;this.page=null;if(connection)await connection.disconnect();}
   async reuseServerProof(job,scope){
-    if(!this.recoveredState)return false;
+    // Local history and download journals are caches, not proof that the server
+    // lacks this report. Every cloud-backed start checks the accepted original
+    // before opening Chrome, including manual and recent-day recovery jobs.
+    if(!this.cloud.enabled)return false;
     try{const proof=await this.cloud.call('/finish',{platform:job.platform||'meituan_delivery',type:job.reportType,date:job.date,scope_version:scope.version,dryRun:false});
-      if(proof.verification?.storage_verified!==true)throw Error('client_cloud_receipt_invalid');
-      Object.assign(job,{status:proof.status==='success'?'completed':'unverified',cloudReceipt:proof,reusedServerProof:true,message:'状态恢复后已独立核对云端既有原件及入库数据，未重新导出。'});return true;
+      if(!['success','unverified'].includes(proof.status)||proof.verification?.storage_verified!==true)throw Error('client_cloud_receipt_invalid');
+      Object.assign(job,{status:proof.status==='success'?'completed':'unverified',cloudReceipt:proof,reusedServerProof:true,message:proof.status==='success'?'云端已有原件，已独立回读核验通过；未重新导出。':'云端已有原件，已回读核验，来源或门店范围仍待核对；未重新导出。'});return true;
     }catch(error){if(error.message==='collector_files_incomplete')return false;throw error;}
   }
   recovery(type,day){
