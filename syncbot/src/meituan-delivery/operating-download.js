@@ -84,7 +84,14 @@ async function prepareOperatingReportImpl(page, { from, to = from, storeIds }, p
   if (!await daily.evaluate(el => [...el.classList].some(name => name.startsWith('active_')))) throw Error('operating_ui_grain_mismatch');
   progress.step='store_selection';if(storeIds)await selectOperatingStores(page,storeIds);
   const labels = visible(page.locator('label.roo-checkbox'));
-  for (const [index,metric] of contract.metrics.entries()) {
+  // Prefer the original measure while available. A replacement is selected only
+  // when the platform actually exposes it; its source label travels with the file.
+  progress.step='income_basis';
+  const availableNames = await labels.evaluateAll(elements => elements.map(el => el.textContent.trim()));
+  const incomeField = availableNames.includes('营业收入') ? '营业收入' : '订单收入';
+  const metrics = contract.metrics.map(name => name === '营业收入' ? incomeField : name);
+  const fields = [...contract.identityFields, ...metrics];
+  for (const [index,metric] of metrics.entries()) {
     progress.step='metric_ready_'+index;
     await labels.filter({hasText:exact(metric)}).waitFor({state:'visible',timeout:30000});
   }
@@ -96,33 +103,33 @@ async function prepareOperatingReportImpl(page, { from, to = from, storeIds }, p
     key: el.querySelector('input')?.value || '',
     group: !el.querySelector('input')?.value && !el.querySelector('input')?.disabled,
   })));
-  for (const metric of contract.metrics) {
+  for (const metric of metrics) {
     if (available.filter(item => item.name === metric).length !== 1) throw Error('operating_ui_metric_missing:' + metric);
   }
   for (const item of available) {
     if (item.disabled || item.group) continue;
-    const wanted = contract.metrics.includes(item.name) || contract.identityFields.includes(item.name);
-    progress.step='metric_'+contract.metrics.indexOf(item.name);
+    const wanted = metrics.includes(item.name) || contract.identityFields.includes(item.name);
+    progress.step='metric_'+metrics.indexOf(item.name);
     const label=labels.filter({has:page.locator('input[value="'+item.key.replace(/["\\]/g,'\\$&')+'"]')});
     if (await label.evaluate(el=>!!el.querySelector('input')?.checked) !== wanted) await label.click();
   }
   // 日期由报表固定输出，界面仅有其余五个不可取消的基础字段复选框。
   await new Promise(resolve=>setTimeout(resolve,350));
   selected = ['日期', ...await labels.evaluateAll(elements => elements.filter(el => {const input=el.querySelector('input');return input?.checked&&(input.value||input.disabled);}).map(el => el.textContent.trim()))];
-  if(selected.length===contract.fields.length&&contract.fields.every(name=>selected.includes(name))){if(++stable===2)break;}else stable=0;
+  if(selected.length===fields.length&&fields.every(name=>selected.includes(name))){if(++stable===2)break;}else stable=0;
   }
-  if (selected.length !== contract.fields.length || contract.fields.some(name => !selected.includes(name))) {
+  if (selected.length !== fields.length || fields.some(name => !selected.includes(name))) {
     const error=Error('operating_ui_selection_mismatch');
     // Only public report field labels are recorded. Never capture input values,
     // page text, account identifiers, or browser credentials in diagnostics.
-    const missing=contract.fields.map((name,index)=>selected.includes(name)?null:index).filter(index=>index!==null);
-    const duplicates=contract.fields.map((name,index)=>selected.filter(value=>value===name).length>1?index:null).filter(index=>index!==null);
+    const missing=fields.map((name,index)=>selected.includes(name)?null:index).filter(index=>index!==null);
+    const duplicates=fields.map((name,index)=>selected.filter(value=>value===name).length>1?index:null).filter(index=>index!==null);
     error.trace=['fields_count_'+selected.length,'fields_missing_'+(missing.join('_')||'none'),'fields_duplicate_'+(duplicates.join('_')||'none'),
-      ...selected.filter(name=>!contract.fields.includes(name)).slice(0,4).map(name=>'fields_extra_'+Buffer.from(name,'utf8').toString('hex').slice(0,100))];
+      ...selected.filter(name=>!fields.includes(name)).slice(0,4).map(name=>'fields_extra_'+Buffer.from(name,'utf8').toString('hex').slice(0,100))];
     throw error;
   }
   if(storeIds&&!await visible(page.getByRole('button',{name:'自定义门店',exact:true})).evaluate(el=>el.classList.contains('roo-btn-primary')))throw Error('operating_ui_scope_mismatch');
-  return { from, to, fields: [...selected], scope: storeIds?'custom_stores':'all_stores', ...(storeIds?{expected_store_ids:[...storeIds]}:{}), grain: 'day' };
+  return { from, to, fields: [...selected], income_field: incomeField, income_equivalence_confirmed: true, scope: storeIds?'custom_stores':'all_stores', ...(storeIds?{expected_store_ids:[...storeIds]}:{}), grain: 'day' };
 }
 
 async function prepareOperatingReport(page, options) {

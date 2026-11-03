@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const XLSX = require('xlsx');
 const contract = require('./operating-contract');
 const key = value => String(value ?? '').trim().replace(/[\s（）()]/g, '').toLowerCase();
-const aliases = { 门店所在城市: ['门店所在城市', '城市'], 区县市: ['区县市', '区县'] };
+const aliases = { 门店所在城市: ['门店所在城市', '城市'], 区县市: ['区县市', '区县'], 营业收入: ['营业收入', '订单收入'] };
 function plainDate(value) {
   let text = String(value ?? '').trim();
   if (typeof value === 'number') {
@@ -62,6 +62,7 @@ function parseOperatingBuffer(buffer, { from, to = from, expectedStoreIds } = {}
     columns[field] = hits[0];
   }
   if (headers.filter(v => String(v).trim()).length !== contract.fields.length) throw Error('operating_selection_mismatch');
+  const incomeField = String(headers[columns.营业收入]).trim();
   const counts = new Set(['有效订单', '曝光人数', '入店人数', '下单人数']);
   const rows = [], seen = new Set(), stores = new Set(), dates = new Set();
   const blankMetricCounts = Object.fromEntries(contract.metrics.map(field => [field, 0]));
@@ -106,6 +107,8 @@ function parseOperatingBuffer(buffer, { from, to = from, expectedStoreIds } = {}
   return { ok: true, report_type: contract.reportType, from, to, row_count: rows.length,
     store_ids: [...stores].sort(), store_count: stores.size, dates: [...dates].sort(),
     expected_stores_checked: !!expected, income_cents: incomeCents, gross_cents: grossCents,
+    income_field: incomeField, income_equivalence_confirmed: true,
+    source_fields: contract.fields.map(field => field === '营业收入' ? incomeField : field),
     blank_metric_counts: blankMetricCounts,
     totals_complete: ['营业收入', '优惠前总额', '有效订单'].every(field => blankMetricCounts[field] === 0),
     order_count: orderCount,

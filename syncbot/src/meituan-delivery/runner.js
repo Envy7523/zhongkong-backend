@@ -147,6 +147,7 @@ async function runOperating({ page, context, root, date, account = process.env.M
     if (report) { const {rows,...receipt}=parsed; return {...receipt,phase:'downloaded',date,file:state.file,uploaded:false}; }
     if (downloadOnly === true || downloadOnly === 'true') return { ok: true, phase: 'downloaded', date,
       row_count: parsed.row_count, store_count: parsed.store_count, income_cents: parsed.income_cents,
+      income_field: parsed.income_field, income_equivalence_confirmed: true,
       gross_cents: parsed.gross_cents, order_count: parsed.order_count, totals_complete: parsed.totals_complete,
       blank_metric_counts: parsed.blank_metric_counts, sha256: parsed.sha256, file: state.file, uploaded: false };
     state.phase = 'import_pending'; persist();

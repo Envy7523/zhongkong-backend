@@ -246,7 +246,7 @@
             isMeituanGroupBuyView ? incomeLabel : isMeituanOperationView
               ? isTaobaoOperation
                 ? "实际收入"
-                : "实收（营业收入）"
+                : isMeituanPage ? meituanIncomeLabel : "实收（营业收入）"
               : incomeLabel
           }}</span
           ><small>{{
@@ -255,7 +255,7 @@
                 ? "平台营业日报 · 未扣第三方费用"
                 : isJdOperation
                   ? "平台结算口径 · 已扣第三方费用"
-                  : `${operationPlatformName}营业日报口径`
+                  : isMeituanPage ? meituanOpTotals.income_basis?.note : `${operationPlatformName}营业日报口径`
               : incomeHint
           }}</small>
         </div>
@@ -400,7 +400,7 @@
       </el-tooltip>
       <b>=</b>
       <div class="settlement-result">
-        <span>{{ isMeituanPage && !mtOpTot.settlement?.has_bills ? '营业收入' : '实际到账' }}</span><strong>{{ money(chainActual) }}</strong>
+        <span>{{ isMeituanPage && !mtOpTot.settlement?.has_bills ? meituanIncomeLabel : '实际到账' }}</span><strong>{{ money(chainActual) }}</strong>
       </div>
       <b>−</b>
       <el-tooltip effect="light" placement="bottom" :show-after="140" popper-class="delivery-expense-tooltip">
@@ -702,6 +702,9 @@
           {{ meituanOpTotals.days || 0 }} 天</span
         >
       </header>
+      <el-alert v-if="isMeituanPage && meituanOpTotals.income_basis?.fields?.length" :type="meituanOpTotals.income_basis.mixed ? 'warning' : 'info'" :closable="false" :title="meituanOpTotals.income_basis.note">
+        <template v-if="meituanOpTotals.income_basis.mixed" #default><span v-for="basis in meituanOpTotals.income_basis.fields" :key="basis.field" style="margin-right: 16px">{{ basis.field }}：{{ money(basis.amount) }}（{{ basis.row_count }} 条）</span></template>
+      </el-alert>
       <el-alert v-if="effectivePlatform==='美团团购' && meituanOpTotals.metric_coverage?.order_count?.missing_dates?.length" type="warning" :closable="false" :title="`成交订单数仅汇总原始报表已提供的记录，${meituanOpTotals.metric_coverage.order_count.missing_dates.length} 天缺少该字段；不能用购买人数代替订单数。`" />
       <el-alert v-if="effectivePlatform==='抖音团购' && meituanOpTotals.metric_coverage?.click_users?.missing_dates?.length" type="warning" :closable="false" title="新增经营指标仅汇总已采集日期，覆盖范围见各指标卡片；比率按同一批已采集记录计算，不将历史缺失记为零。" />
       <div
@@ -744,12 +747,12 @@
           }}</strong>
         </article>
         <article>
-          <span>{{ isGroupOperationView ? "收入" : "实收" }}</span
+          <span>{{ isGroupOperationView ? "收入" : isMeituanPage ? meituanIncomeLabel : "实收" }}</span
           ><strong>{{
             money(
               isGroupOperationView
                 ? meituanOpTotals.totals.income_amount
-                : (meituanOpTotals.totals.actual_amount ?? meituanOpTotals.totals.income_amount),
+                : isMeituanPage ? meituanOpTotals.totals.income_amount : (meituanOpTotals.totals.actual_amount ?? meituanOpTotals.totals.income_amount),
             )
           }}</strong>
         </article>
@@ -942,7 +945,7 @@
         >
         <el-table-column
           prop="income_amount"
-          label="实收"
+          :label="isMeituanPage ? meituanIncomeLabel : '实收'"
           min-width="122"
           align="center"
           header-align="center"
@@ -3231,6 +3234,7 @@ const isDirectSettlementOperation = computed(
 );
 const meituanOpLoaded = ref(false);
 const meituanOpTotals = ref({ days: 0, stores_count: 0, totals: {} });
+const meituanIncomeLabel = computed(() => meituanOpTotals.value.income_basis?.label || '来源收入');
 const meituanOpStores = ref([]);
 const meituanOpTrend = ref([]);
 const mtTrendChartRef = ref();
@@ -3240,7 +3244,7 @@ const groupMtMetricOptions = computed(
   () => groupOperationMetrics[effectivePlatform.value] || [],
 );
 const currentMtMetricOptions = computed(() =>
-  isGroupOperationView.value ? groupMtMetricOptions.value : mtMetricOptions,
+  isGroupOperationView.value ? groupMtMetricOptions.value : mtMetricOptions.value,
 );
 const mtGroupMetricOn = reactive({});
 function mtGroupMetricActive(key) {
@@ -3271,8 +3275,8 @@ function switchGroupMtSection(section) {
   mtGroupTrendSection.value = section;
   renderMeituanTrends();
 }
-const mtMetricOptions = [
-  { key: "income_amount", label: "营业收入", unit: "money", group: true },
+const mtMetricOptions = computed(() => [
+  { key: "income_amount", label: isMeituanPage.value ? meituanIncomeLabel.value : "营业收入", unit: "money", group: true },
   { key: "gross_amount", label: "优惠前总额", unit: "money", group: true },
   { key: "order_count", label: "有效订单", unit: "count", group: true },
   { key: "impression_users", label: "曝光人数", unit: "count" },
@@ -3281,7 +3285,7 @@ const mtMetricOptions = [
   { key: "store_rating", label: "门店评分", unit: "rating" },
   { key: "visit_rate", label: "入店转化率", unit: "percent" },
   { key: "order_rate", label: "下单转化率", unit: "percent" },
-];
+]);
 // 交互：营业收入/优惠前总额/有效订单 可叠加共存（点击切换显隐）；
 // 其它字段（曝光/入店/下单/转化率）点击后清掉组合，只单独渲染该字段走势图
 const mtGroupOn = reactive({
@@ -3702,7 +3706,7 @@ function renderMeituanTrends() {
   };
   if (mtGroupOn.income_amount)
     series.push({
-      name: "营业收入",
+      name: isMeituanPage.value ? meituanIncomeLabel.value : "营业收入",
       type: "bar",
       data: mtNumSeries(rows, "income_amount"),
       barWidth: 14,
