@@ -31,7 +31,7 @@ function fakeClient(over = {}) {
     tableSummary: { pagination: { declared_count: 22, declared_text: '共 22 条记录' }, total_row: { cells: ['合计', '--', '--', '--', '--', '--', '22', '22', '1'], cell_count: 9, class_name: 'summary', depth: 16 }, tables: [], grids: [] },
     filterState: { best: { groups: [] } },
     pageText: { text: '本次导出数据共22条，请前往【下载清单】查看下载状态' },
-    probe: { merged: {} },
+    probe: { merged: Object.fromEntries([['报表中心','#rc'],['营业报表','#br'],['综合营业统计','#tr']].map(([text,selector])=>[text,{exactCount:1,exact:[{selector,visible:true,clickable:true,unique:true,frameIndex:0,rect:{x:0,y:0,w:80,h:20}}]}])) },
     click: { clicked: 'sel' },
     screenshot: { path: '/tmp/x.png', bytes: 1 },
     // dateRow/picker/mouse fake（供共享日期动作 setDateRangeExact 使用）
@@ -474,7 +474,7 @@ const row = (no, dateStr, applyTime, status, controls) => ({
         JSON.stringify({ mode: r.confirmation_mode, export: clicksWith(client, 'export').length, confirm: clicksWith(client, 'export_dialog_confirm').length }));
     }
 
-    // 14b2 平台异步通知 +「我知道了」：只点一次该按钮并保存原文。
+    // A confirmed asynchronous notice does not require clicking its close button.
     {
       const notice = '本次导出数据共20条，请前往「下载清单」查看下载状态 我知道了 前往下载清单';
       const overlay = { frameCount: 1, has_blocking_overlay: true, frames: [{ frameIndex: 1,
@@ -485,10 +485,9 @@ const row = (no, dateStr, applyTime, status, controls) => ({
       const { ad, client } = build({ approvals: EXPORT_APPROVALS,
         client: { replies: { overlays: overlay, inspect: { exists: true, visible: true, enabled: true, text: '我知道了' } } } });
       const r = await ad.submitExport({ ctx: CTX });
-      ck('14b2 异步通知：仅点「我知道了」一次，原文保留',
-        r.ok === true && r.record.notice_text === notice && r.dialog_candidate_label === '我知道了'
-        && clicksWith(client, 'export_dialog_confirm').length === 1
-        && clicksWith(client, 'export_dialog_confirm')[0].args.selector === '#notice-ok'
+      ck('14b2 异步通知：保留原文，无额外确认或下载点击',
+        r.ok === true && r.record.notice_text === notice && r.confirmation_mode === 'async_notice_observed'
+        && clicksWith(client, 'export_dialog_confirm').length === 0
         && clicksWith(client, 'download').length === 0,
         JSON.stringify({ ok: r.ok, label: r.dialog_candidate_label, clicks: clicksWith(client, 'export_dialog_confirm').length }));
     }

@@ -289,7 +289,7 @@ function createProductionAdapters(deps) {
     async navigateAndQuery({ ctx }) {
       const c = ctxOf({ ctx });
       const queryClient = reportName === '品项销售明细' || reportName === '门店收支统计' ? client
-        : { call: (cmd, args, o) => client.call(cmd, args, o), mouse: (a, o) => client.call('mouse', a, o), picker: (a, o) => client.call('picker', a, o), press: (sel, key, o) => client.call('press', { selector: sel, key }, o) };
+        : { call: (cmd, args, o) => client.call(cmd, args, o), probe: (texts, args = {}) => hostCmd('probe', { texts, ...args }), mouse: (a, o) => client.call('mouse', a, o), picker: (a, o) => client.call('picker', a, o), press: (sel, key, o) => client.call('press', { selector: sel, key }, o) };
       const r = await queryFlow({
         client: queryClient, businessDate: c.businessDate,
         flow, hostCmd, rules, S, ctx: c, expectStores: expectStoresOf(),
