@@ -1,8 +1,8 @@
 {
-  "root": "/opt/zhongkong/releases/meituan-income-rename-v4-20261103",
-  "pid": "3185842",
-  "cwd": "/opt/zhongkong/releases/meituan-income-rename-v4-20261103",
-  "backend_commit": "05cd731813b9c255859738cde3cbf985ff6727b1",
+  "root": "/opt/zhongkong/releases/delivery-reliability-20261103",
+  "pid": "3192401",
+  "cwd": "/opt/zhongkong/releases/delivery-reliability-20261103",
+  "backend_commit": "c371eda323c46f3ab1cb4f173121335e8b15a7f2",
   "frontend_dist": "/opt/zhongkong/frontend-releases/meituan-income-rename-v2-20261103/dist",
   "frontend_index_sha256": "f696291c4a9178d48bb012d91c4d7a293bbebf158af9ab82a2c614fa109eb54b",
   "frontend_entry": [
@@ -1142,9 +1142,9 @@
       "bytes": 7519
     },
     "lib/delivery-client-sync.js": {
-      "sha256": "3a3a8288a9f085525a5849a497dc8eca54eedadb2e9f33bf9f636a616aade61b",
-      "normalized_sha256": "3a3a8288a9f085525a5849a497dc8eca54eedadb2e9f33bf9f636a616aade61b",
-      "bytes": 22601
+      "sha256": "bedf5a0e06d7308f08ed2c5e52d630fdf4d05d6297c1421e460bf8dd9029d9aa",
+      "normalized_sha256": "bedf5a0e06d7308f08ed2c5e52d630fdf4d05d6297c1421e460bf8dd9029d9aa",
+      "bytes": 25555
     },
     "lib/delivery-client-tasks.js": {
       "sha256": "7906684197264db0561e7fe3252e4c2c813697a305065a314ded020225f20a0c",
@@ -1162,14 +1162,14 @@
       "bytes": 7366
     },
     "lib/delivery-platform-sync.js": {
-      "sha256": "c6a7b5d57bfe966bf3d5f460d6dd45386283e7e8e72f73fc3971f91666ff2848",
-      "normalized_sha256": "b5d6d3502292922c307a4099ce4323b204bcee1049d00d8e986290bea3aa603c",
-      "bytes": 11983
+      "sha256": "032665a939f4ac82e3da9af62381c7b88bd2305f16b1b11181e2f041c02c05de",
+      "normalized_sha256": "afd57593ae9111b543a256aeeb77bcda1dc7e9705df8c2546611b463f32df7f1",
+      "bytes": 12368
     },
     "lib/delivery-rejected-sources.js": {
-      "sha256": "ce8b491643a7acd99f7292acab0300cf4af6746d5237be7203a40e7d16ca2063",
-      "normalized_sha256": "7f8025f469b1cdff1295c9aa930154ff7dfe3ebcc31be197d55c42d6cfe8c9a3",
-      "bytes": 2797
+      "sha256": "32fe206241d26a43cd7790f3c19f8004c555a842b19764ed6e5f53633cffc930",
+      "normalized_sha256": "7634310bd9f1514aa152a82c878be6b4a2c67d1dbdf96e4c918b01392fa3f258",
+      "bytes": 4364
     },
     "lib/delivery-review-exceptions.js": {
       "sha256": "bf1260895441950d0a8508cb3ad600ed918531e3257b552b14a95784314e1e49",
@@ -2764,7 +2764,7 @@
     }
   },
   "gateway_footer_sha256": "a41674a21fb36b0fdeff82c7050343a56923f6e7529a61a033df70b0cf97ce56",
-  "checked_at": "2026-11-03T08:01:10.435Z",
+  "checked_at": "2026-11-03T09:04:47.010Z",
   "gateway": {
     "footer_sha256": "a41674a21fb36b0fdeff82c7050343a56923f6e7529a61a033df70b0cf97ce56",
     "script_path": "/_site/icp-footer-20261102.js",
@@ -2782,9 +2782,12 @@
       "commit": "4026699da71e49667a3c065659a22a739967cf72"
     },
     "windows": {
-      "version": "0.5.38",
-      "sequence": 38,
-      "package_sha256": "575159b1ddb89355691c45a9aac21b7393fce5c41ab0609065eabebc01380c84"
+      "version": "0.5.40",
+      "sequence": 40,
+      "package_sha256": "85f80cfc146cfa1231ded55225fd9efa41694102756273bad2be4f1d7ac0558b",
+      "source_commit": "486370c5ba799bdcbb4893926dc9d082e87c3a54",
+      "verified_at": "2026-11-03T09:04:01.667Z",
+      "device_status": "applied"
     }
   }
 }
