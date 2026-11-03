@@ -84,7 +84,10 @@ async function prepareOperatingReportImpl(page, { from, to = from, storeIds }, p
   if (!await daily.evaluate(el => [...el.classList].some(name => name.startsWith('active_')))) throw Error('operating_ui_grain_mismatch');
   progress.step='store_selection';if(storeIds)await selectOperatingStores(page,storeIds);
   const labels = visible(page.locator('label.roo-checkbox'));
-  for (const metric of contract.metrics) await labels.filter({hasText:exact(metric)}).waitFor({state:'visible',timeout:30000});
+  for (const [index,metric] of contract.metrics.entries()) {
+    progress.step='metric_ready_'+index;
+    await labels.filter({hasText:exact(metric)}).waitFor({state:'visible',timeout:30000});
+  }
   let selected=[];
   for(let pass=0,stable=0;pass<6;pass++){
   const available = await labels.evaluateAll(elements => elements.map(el => ({
@@ -127,6 +130,14 @@ async function prepareOperatingReport(page, options) {
   try{return await prepareOperatingReportImpl(page,options,progress);}catch(error){
     if(progress.step==='dates')throw error;
     const trace=['operating_fields_'+progress.step.replace(/-/g,'n')];
+    if(progress.step.startsWith('metric_ready_')) {
+      try {
+        const names=await visible(page.locator('label.roo-checkbox')).allTextContents();
+        trace.push('fields_visible_'+names.length);
+        for(const [index,name] of contract.fields.entries())trace.push('fields_known_'+index+'_'+names.filter(value=>value.trim()===name).length);
+        for(const name of names.filter(value=>!contract.fields.includes(value.trim())).slice(0,4))trace.push('fields_extra_'+Buffer.from(name.trim(),'utf8').toString('hex').slice(0,100));
+      }catch{}
+    }
     for(const [code,lookup] of [['all_stores',()=>page.getByRole('button',{name:'全部门店',exact:true})],['all_business',()=>page.getByRole('button',{name:'全部',exact:true})],['daily',()=>page.getByText('按天',{exact:true})]]){
       try{trace.push('fields_'+code+'_'+Math.min(99,await visible(lookup()).count()));}catch{}
     }
