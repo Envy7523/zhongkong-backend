@@ -16,6 +16,18 @@
 const FC = require('./filter-check');
 const DR = require('./date-range');
 
+// Resolve confirmed menu labels in the current DOM. Mounted portal tabs change
+// wrapperForCssHide indexes, making persisted nth-of-type paths unreliable.
+function selectNavigationCandidate(bucket) {
+  const candidates=(bucket?.exact||[]).filter(c=>c.visible&&c.unique&&c.clickable&&c.selector&&c.rect?.w>0&&c.rect?.h>0);
+  if(!candidates.length||bucket.exactCount>(bucket.exact||[]).length)return null;
+  candidates.sort((a,b)=>a.rect.w*a.rect.h-b.rect.w*b.rect.h);
+  const chosen=candidates[0],x=chosen.rect.x+chosen.rect.w/2,y=chosen.rect.y+chosen.rect.h/2;
+  // Ancestor and leaf hits for one control are equivalent; separate controls
+  // sharing the same label are ambiguous and must stop before any click.
+  return candidates.every(c=>c.frameIndex===chosen.frameIndex&&x>=c.rect.x&&x<=c.rect.x+c.rect.w&&y>=c.rect.y&&y<=c.rect.y+c.rect.h)?chosen.selector:null;
+}
+
 /**
  * 合计行门店数解析（**纯函数，供各 CLI/流程共用；绝不猜**）。
  * 实测口径：门店数量在合计行中**成对出现**（「营业门店数量 / 门店营业天数」两列同为同一数值），
@@ -95,8 +107,14 @@ async function navigateAndQueryReportA({ client, flow, hostCmd, rules, S, ctx, e
     ['nav.target_report', 'nav_target_report', nav.entry_url, []],
   ];
   for (const [key, nm, url, texts] of navSteps) {
-    const sel = S(key);
+    let sel = S(key);
     if (!sel) return fail(`缺少必需选择器：${key}`);
+    if(typeof client.probe==='function'){
+      const label=key==='nav.report_center'?'报表中心':key==='nav.business_report'?'营业报表':(rules.report?.display_name||'综合营业统计');
+      const probe=await client.probe([label],{scopeSelector:key==='nav.report_center'?null:'#report-body-cotent-menu',maxPerText:80});
+      sel=selectNavigationCandidate(probe?.merged?.[label]||probe?.[label]);
+      if(!sel)return fail(`导航控件缺失或不唯一：${label}`);
+    }
     const r = await flow.clickSelectorAndVerify({ selector: sel, purpose: 'nav', expectedUrls: url ? [url] : [], expectedTexts: texts, businessDate: ctx.businessDate, taskId: ctx.taskId, reportType: ctx.reportType, platform: ctx.platform });
     if (!r || !r.ok) return fail(`导航失败：${key}`);
     step(nm, { selector: sel });
@@ -198,4 +216,4 @@ async function navigateAndQueryReportA({ client, flow, hostCmd, rules, S, ctx, e
   return { ok: true, declared_count: declared, declared_dynamic: null, total_store_count: expectStores, total_row_head: (tr.cells || []).slice(0, 9), steps };
 }
 
-module.exports = { navigateAndQueryReportA, assertSequence, parseTotalRowStoreCount, REQUIRED_SEQUENCE };
+module.exports = { navigateAndQueryReportA, assertSequence, parseTotalRowStoreCount, REQUIRED_SEQUENCE, selectNavigationCandidate };
