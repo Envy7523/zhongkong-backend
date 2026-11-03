@@ -1,8 +1,8 @@
 {
-  "root": "/opt/zhongkong/releases/delivery-reliability-20261103",
-  "pid": "3192401",
-  "cwd": "/opt/zhongkong/releases/delivery-reliability-20261103",
-  "backend_commit": "c371eda323c46f3ab1cb4f173121335e8b15a7f2",
+  "root": "/opt/zhongkong/releases/delivery-times-20261103",
+  "pid": "3216885",
+  "cwd": "/opt/zhongkong/releases/delivery-times-20261103",
+  "backend_commit": "79677e781af111a17151967aa2bbe01f3da68baf",
   "frontend_dist": "/opt/zhongkong/frontend-releases/meituan-income-rename-v2-20261103/dist",
   "frontend_index_sha256": "f696291c4a9178d48bb012d91c4d7a293bbebf158af9ab82a2c614fa109eb54b",
   "frontend_entry": [
@@ -1647,9 +1647,9 @@
       "bytes": 720
     },
     "lib/report-sync-plans.js": {
-      "sha256": "11a3df790207a0d37e4a2a2c0e3d18d56814b8b08a373660fec10f6c35493151",
-      "normalized_sha256": "5d9e38e5f01839fd871fe69702f8a6bc0e23e784d097936156ada8e9f2d3106f",
-      "bytes": 12359
+      "sha256": "75bf1733d467940d9f1d9a9b07c69950a8b190df268a81aba8163287eae3790c",
+      "normalized_sha256": "9bc6670c4e9a605bd6b75b71b190492c36bdad18142deed65192d7f236433d9a",
+      "bytes": 15213
     },
     "lib/report.js": {
       "sha256": "3e1641670034d68c5415f4d422d59745e8222f7ffc5f366caab21a9986ae4194",
@@ -2764,7 +2764,7 @@
     }
   },
   "gateway_footer_sha256": "a41674a21fb36b0fdeff82c7050343a56923f6e7529a61a033df70b0cf97ce56",
-  "checked_at": "2026-11-03T09:04:47.010Z",
+  "checked_at": "2026-11-03T12:28:05.389Z",
   "gateway": {
     "footer_sha256": "a41674a21fb36b0fdeff82c7050343a56923f6e7529a61a033df70b0cf97ce56",
     "script_path": "/_site/icp-footer-20261102.js",
@@ -2788,6 +2788,66 @@
       "source_commit": "486370c5ba799bdcbb4893926dc9d082e87c3a54",
       "verified_at": "2026-11-03T09:04:01.667Z",
       "device_status": "applied"
+    },
+    "delivery_plans": {
+      "verified_at": "2026-11-03T12:28:05.389Z",
+      "timezone": "Asia/Shanghai",
+      "plans": [
+        {
+          "report_type": "meituan_delivery_operating",
+          "enabled": 1,
+          "run_time": "03:00",
+          "version": 7
+        },
+        {
+          "report_type": "meituan_delivery_product",
+          "enabled": 1,
+          "run_time": "03:00",
+          "version": 7
+        },
+        {
+          "report_type": "meituan_delivery_settlement",
+          "enabled": 1,
+          "run_time": "01:00",
+          "version": 6
+        },
+        {
+          "report_type": "taobao_flash_operating",
+          "enabled": 1,
+          "run_time": "07:40",
+          "version": 6
+        },
+        {
+          "report_type": "taobao_flash_product",
+          "enabled": 1,
+          "run_time": "07:40",
+          "version": 6
+        },
+        {
+          "report_type": "taobao_flash_settlement",
+          "enabled": 1,
+          "run_time": "07:40",
+          "version": 6
+        },
+        {
+          "report_type": "jd_delivery_operating",
+          "enabled": 1,
+          "run_time": "05:00",
+          "version": 6
+        },
+        {
+          "report_type": "jd_delivery_product",
+          "enabled": 1,
+          "run_time": "06:30",
+          "version": 6
+        },
+        {
+          "report_type": "jd_delivery_settlement",
+          "enabled": 1,
+          "run_time": "02:00",
+          "version": 5
+        }
+      ]
     }
   }
 }
