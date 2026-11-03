@@ -37,19 +37,34 @@ async function selectOperatingDate(page, date) {
 // 仅使用实际界面控件，不持久化站内 token，也不猜测下载接口。
 async function selectOperatingStores(page, storeIds) {
   if (!Array.isArray(storeIds)||!storeIds.length||new Set(storeIds).size!==storeIds.length||storeIds.some(id=>typeof id!=='string'||!/^\d+$/.test(id))) throw Error('operating_download_scope_required');
+  let step='open';
+  try {
   await visible(page.getByRole('button',{name:'自定义门店',exact:true})).click();
+  step='batch';
   await visible(page.getByRole('button',{name:'批量导入门店',exact:false})).click();
+  step='replace';
   await visible(page.getByText('替换已选门店',{exact:true})).click();
   const editor=visible(page.locator('textarea'));
+  step='editor';
+  await editor.waitFor({state:'visible',timeout:20000});
   await editor.fill(storeIds.join('\n'));
-  await visible(page.getByRole('button',{name:'一键导入',exact:true,disabled:false})).press('Enter');
+  step='import_ready';
+  const importer=visible(page.getByRole('button',{name:'一键导入',exact:true,disabled:false}));
+  await importer.waitFor({state:'visible',timeout:20000});
+  await importer.press('Enter');
+  step='import_closed';
   await editor.waitFor({state:'hidden',timeout:20000});
+  step='selected_count';
   await visible(page.getByText(`已选门店（${storeIds.length}）`,{exact:true})).waitFor({state:'visible',timeout:20000});
   const confirm=visible(page.getByRole('button',{name:'确认',exact:true,disabled:false}));
+  step='confirm_ready';
+  await confirm.waitFor({state:'visible',timeout:15000});
   // Keyboard confirmation avoids the platform's floating customer-service iframe.
   await confirm.press('Enter');
+  step='confirm_closed';
   await confirm.waitFor({state:'hidden',timeout:15000});
   if(!await visible(page.getByRole('button',{name:'自定义门店',exact:true})).evaluate(el=>el.classList.contains('roo-btn-primary')))throw Error('operating_ui_scope_mismatch');
+  } catch(error) { error.trace=[...(error.trace||[]),'operating_store_'+step];throw error; }
 }
 
 async function prepareOperatingReportImpl(page, { from, to = from, storeIds }, progress) {

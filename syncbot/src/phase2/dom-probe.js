@@ -914,10 +914,16 @@ function readOverlays(input) {
     const key = `${rect.x},${rect.y},${rect.w},${rect.h},${text.slice(0, 30)}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    // 可点击文案控件（叶子节点，短文本）
+    // Read actual buttons before announcement body labels. A long update notice
+    // can otherwise exhaust the bounded result before its footer close button.
     const controls = [];
-    for (const c of Array.from(el.querySelectorAll('button,a,[role="button"],span,div,i'))) {
-      if (c.children.length > 0) continue;
+    const actionable = Array.from(el.querySelectorAll('button,[role="button"],a'));
+    const candidates = [...actionable, ...Array.from(el.querySelectorAll('span,div,i'))];
+    const seenControls = new Set();
+    for (const c of candidates) {
+      if (seenControls.has(c)) continue;
+      seenControls.add(c);
+      if (c.children.length > 0 && !actionable.includes(c)) continue;
       const t = textOf(c);
       if (!t || t.length > 14) continue;
       const cr = rectOf(c);

@@ -85,7 +85,8 @@ async function navigateAndQueryReportA({ client, flow, hostCmd, rules, S, ctx, e
   if (!a1 || !a1.ok) return fail('入口页 URL 断言失败');
   step('entry', { url: a1.url });
 
-  await flow.dismissOverlays({ allowTexts: (rules.overlay_dismissal || {}).allow_click_texts || [], maxRounds: 3 });
+  const entryOverlays = await flow.dismissOverlays({ allowTexts: (rules.overlay_dismissal || {}).allow_click_texts || [], maxRounds: 3 });
+  if (!entryOverlays || !entryOverlays.ok) return fail('入口公告未清除，停止导航');
   step('dismiss_overlays');
 
   const navSteps = [
@@ -104,7 +105,8 @@ async function navigateAndQueryReportA({ client, flow, hostCmd, rules, S, ctx, e
   const ready = await flow.waitForContent({ texts: ['营业日期', '统计周期'], timeoutMs: 45000, label: 'naq_ready' });
   if (!ready || !ready.ok) return fail('报表页内容未就绪');
   step('content_ready');
-  await flow.dismissOverlays({ allowTexts: (rules.overlay_dismissal || {}).allow_click_texts || [], maxRounds: 3 });
+  const reportOverlays = await flow.dismissOverlays({ allowTexts: (rules.overlay_dismissal || {}).allow_click_texts || [], maxRounds: 3 });
+  if (!reportOverlays || !reportOverlays.ok) return fail('报表公告未清除，停止查询');
 
   const scheme = await flow.selectSavedScheme(String(rules.saved_query.display_name));
   if (!scheme || !scheme.ok) return fail(`未选择查询方案：${(scheme && (scheme.reason || scheme.step)) || '未知'}`);
