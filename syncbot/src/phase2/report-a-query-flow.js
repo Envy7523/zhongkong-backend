@@ -111,7 +111,8 @@ async function navigateAndQueryReportA({ client, flow, hostCmd, rules, S, ctx, e
     if (!sel) return fail(`缺少必需选择器：${key}`);
     if(typeof client.probe==='function'){
       const label=key==='nav.report_center'?'报表中心':key==='nav.business_report'?'营业报表':(rules.report?.display_name||'综合营业统计');
-      const probe=await client.probe([label],{scopeSelector:key==='nav.report_center'?null:'#report-body-cotent-menu',maxPerText:80});
+      const scopeSelector=key==='nav.report_center'?null:key==='nav.business_report'?'#report-body-cotent-menu':'.pop-layer-menu-content';
+      const probe=await client.probe([label],{scopeSelector,maxPerText:80});
       sel=selectNavigationCandidate(probe?.merged?.[label]||probe?.[label]);
       if(!sel)return fail(`导航控件缺失或不唯一：${label}`);
     }
