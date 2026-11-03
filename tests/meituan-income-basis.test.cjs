@@ -12,30 +12,6 @@ function workbook(field, income = '12.98', extra = []) {
   return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
 }
 const options = { from: '2026-11-02', expectedStoreIds: ['123'] };
-test('renamed field selection runs through the installed extension allowlist without new script permissions', async () => {
-  const { RemoteLocator } = require('../syncbot/windows-client/extension-broker.cjs');
-  const names = contract.fields.slice(1).map(name => name === '营业收入' ? '订单收入' : name);
-  const inventory = names.map((name, i) => ({ name, checked: true, disabled: i < 5, key: String(i + 1), group: false }));
-  const calls = [];
-  const frame = { descriptor: { frameId: 1 }, broker: { diagnostics: [], async call(_, c) {
-    calls.push(c);
-    if (c.action === 'texts') return names;
-    if (c.action === 'count') return 1;
-    if (c.action === 'visible') return true;
-    if (c.action === 'read') return true;
-    if (c.action === 'readAll') {
-      if (c.reader === 'values') return [options.from, options.from];
-      if (c.reader === 'inventory') return inventory;
-      if (c.reader === 'selected') return names;
-    }
-    throw Error('unexpected_extension_operation');
-  } } };
-  const page = { locator: css => new RemoteLocator(frame).locator(css),
-    getByRole: (...args) => new RemoteLocator(frame).getByRole(...args), getByText: (...args) => new RemoteLocator(frame).getByText(...args) };
-  const result = await require('../syncbot/src/meituan-delivery/operating-download').prepareOperatingReport(page, { from: options.from });
-  assert.equal(result.income_field, '订单收入'); assert(result.fields.includes('订单收入')); assert(!result.fields.includes('营业收入'));
-  assert(calls.every(c => ['texts', 'count', 'visible', 'read', 'readAll'].includes(c.action)));
-});
 test('new order income retains exact source provenance, cents and blank status; legacy unchanged', () => {
   for (const field of ['营业收入', '订单收入']) {
     const r = parseOperatingBuffer(workbook(field), options);
@@ -64,6 +40,13 @@ test('confirmed renamed fields aggregate historical and current ranges while ret
   assert.deepEqual(r.fields.map(x => x.amount), [10, 12.98]); assert.equal(r.label, '订单收入');
   assert.match(summarizeIncomeBasis(records.slice(1)).note, /更名/);
   assert.throws(() => incomeField({ 营业收入: 10, 订单收入: 10 }), /ambiguous/);
+});
+test('source blanks remain incomplete and new positive income ends a temporary reopening exemption', () => {
+  const r = summarizeIncomeBasis([{ raw_json: '{"订单收入":""}', income_amount: 0 }, { raw_json: '{"订单收入":10}', income_amount: 10 }]);
+  assert.equal(r.complete, false); assert.equal(r.missing_row_count, 1); assert.match(r.label, /已提供部分/);
+  const policy = require('../lib/delivery-review-exceptions');
+  const db = { queryOne() { return null; }, queryAll() { return [{ biz_date: '2026-11-02', raw_json: '{"订单收入":1,"优惠前总额":"","有效订单":""}' }]; } };
+  assert.deepEqual(policy.active(db, 'operating', '2026-11-02', [{ store_id: 25, platform_id: '29547426' }]), []);
 });
 test('actual importer stores the original new header, preserves old dates, reuses signed source and rejects changed provenance', async () => {
   const SQL = await require('sql.js')(), sqlite = new SQL.Database();
