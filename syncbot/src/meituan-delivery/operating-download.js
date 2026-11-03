@@ -87,7 +87,7 @@ async function prepareOperatingReportImpl(page, { from, to = from, storeIds }, p
   // Prefer the original measure while available. A replacement is selected only
   // when the platform actually exposes it; its source label travels with the file.
   progress.step='income_basis';
-  const availableNames = await labels.evaluateAll(elements => elements.map(el => el.textContent.trim()));
+  const availableNames = (await labels.allTextContents()).map(name => name.trim());
   const incomeField = availableNames.includes('营业收入') ? '营业收入' : '订单收入';
   const metrics = contract.metrics.map(name => name === '营业收入' ? incomeField : name);
   const fields = [...contract.identityFields, ...metrics];
