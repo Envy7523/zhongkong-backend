@@ -134,6 +134,8 @@ async function prepareOperatingReport(page, options) {
       try {
         const names=await visible(page.locator('label.roo-checkbox')).allTextContents();
         trace.push('fields_visible_'+names.length);
+        const related=Buffer.from(names.filter(name=>/收入|营业|收款|优惠|实收/.test(name)).map(name=>name.trim()).join('|'),'utf8').toString('hex');
+        for(let offset=0;offset<related.length&&offset<1200;offset+=100)trace.push('fields_related_'+(offset/100)+'_'+related.slice(offset,offset+100));
         for(const [index,name] of contract.fields.entries())trace.push('fields_known_'+index+'_'+names.filter(value=>value.trim()===name).length);
         for(const name of names.filter(value=>!contract.fields.includes(value.trim())).slice(0,4))trace.push('fields_extra_'+Buffer.from(name.trim(),'utf8').toString('hex').slice(0,100));
       }catch{}
