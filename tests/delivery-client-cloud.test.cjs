@@ -36,7 +36,7 @@ test('全店原件上传一次：保留完整来源，闭店ID隔离；重复上
 });
 test('商品空结果须对照营业来源；缺对照或有订单不判通过，已确认全零才可通过',async()=>{
  const db=await database();try{db.run('DELETE FROM store_platforms WHERE store_id=3');const device=sync.enroll(db,{name:'本机',account:'account'}),date='2026-10-20',current=sync.scope(db,date),product=require('../syncbot/src/meituan-delivery/product-contract');sync.importFile(db,analytics,device,body('product',date,Buffer.from(product.fields.join(',')+'\n'),current));const finish=()=>sync.finish(db,device,{type:'product',date,scope_version:current.version});assert.equal(finish().status,'unverified');
- const values={'日期':'20261020','门店名称':'营业店','门店id':'123','省份':'广东','门店所在城市':'深圳','区县市':'龙岗'};sync.importFile(db,analytics,device,body('operating',date,Buffer.from(contract.fields.join(',')+'\n'+contract.fields.map(f=>values[f]??'0').join(',')+'\n'),current));assert.equal(finish().status,'success');const r=db.queryOne('SELECT raw_json FROM meituan_delivery_operation_records'),raw=JSON.parse(r.raw_json);raw.有效订单=1;db.run('UPDATE meituan_delivery_operation_records SET raw_json=?',[JSON.stringify(raw)]);assert.equal(finish().status,'unverified');
+ const values={'日期':'20261020','门店名称':'营业店','门店id':'123','省份':'广东','门店所在城市':'深圳','区县市':'龙岗'};sync.importFile(db,analytics,device,body('operating',date,Buffer.from(contract.fields.join(',')+'\n'+contract.fields.map(f=>values[f]??'0').join(',')+'\n'),current));assert.equal(finish().status,'success');const r=db.queryOne('SELECT raw_json FROM meituan_delivery_operation_records'),raw=JSON.parse(r.raw_json);raw.有效订单=1;db.run('UPDATE meituan_delivery_operation_records SET raw_json=?',[JSON.stringify(raw)]);assert.throws(finish,/operating_database_metric_mismatch/);
  }finally{db.close();}
 });
 test('空原件不能掩盖数据库中同日已有商品数据',async()=>{

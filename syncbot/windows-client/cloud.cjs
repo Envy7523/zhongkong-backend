@@ -4,9 +4,22 @@ const core=require('./core.cjs');
 const PREFIX='/api/internal/syncbot/delivery-client';
 class Cloud{
  constructor(root,{fetchImpl}={}){this.root=root;this.fetch=fetchImpl||fetch;this.credentials=core.read(path.join(root,'cloud-device.json'),null);this.enabled=!!this.credentials;this.outboxFile=path.join(root,'cloud-outbox.json');this.outbox=core.read(this.outboxFile,[]);if(this.enabled){const c=this.credentials,u=new URL(c.origin);if((u.protocol!=='https:'&&!['127.0.0.1','localhost'].includes(u.hostname))||u.username||u.password||u.search||u.hash||u.pathname!=='/'||!/^[a-f0-9]{64}$/.test(c.token||''))throw Error('client_cloud_device_invalid');this.origin=u.origin;if(c.certificateMode==='provisioned'){if(u.protocol!=='https:')throw Error('client_cloud_https_required');if(!fetchImpl)this.fetch=require('./cloud-https.cjs').certifiedFetch(fs.readFileSync(path.join(root,'cloud-server-ca.pem'),'utf8'),{localAddress:c.localAddress});}else if(c.certificateMode)throw Error('client_cloud_certificate_invalid');}}
- async call(route,body){if(!this.enabled)throw Error('client_cloud_not_configured');if(!['/config','/heartbeat','/event','/upload','/finish','/diagnostic-source','/updates/check','/updates/status','/tasks/next','/tasks/result'].includes(route.split('?')[0]))throw Error('client_cloud_endpoint_denied');let response;try{response=await this.fetch(this.origin+PREFIX+route,{method:body===undefined?'GET':'POST',redirect:'error',headers:{Authorization:'Bearer '+this.credentials.token,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(120000)});}catch{throw Error('client_cloud_unreachable');}if([408,425,429,500,502,503,504].includes(response.status))throw Error('client_cloud_unreachable');const data=await response.json().catch(()=>({}));if(!response.ok||data.ok!==true)throw Error(/^[a-z][a-z0-9_:.-]{0,149}$/.test(data.error||'')?data.error:'client_cloud_rejected');return data;}
- async flush(){while(this.outbox.length){await this.call('/event',this.outbox[0]);this.outbox.shift();core.atomic(this.outboxFile,this.outbox);}}
- async event(body){try{await this.flush();await this.call('/event',body);}catch{this.outbox.push(body);core.atomic(this.outboxFile,this.outbox.slice(-100));}}
+ async call(route,body){if(!this.enabled)throw Error('client_cloud_not_configured');if(!['/config','/heartbeat','/event','/upload','/finish','/diagnostic-source','/updates/check','/updates/status','/tasks/next','/tasks/result'].includes(route.split('?')[0]))throw Error('client_cloud_endpoint_denied');if(route.split('?')[0]==='/finish')await this.flush();let response;try{response=await this.fetch(this.origin+PREFIX+route,{method:body===undefined?'GET':'POST',redirect:'error',headers:{Authorization:'Bearer '+this.credentials.token,'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(120000)});}catch{throw Error('client_cloud_unreachable');}if([408,425,429,500,502,503,504].includes(response.status))throw Error('client_cloud_unreachable');const data=await response.json().catch(()=>({}));if(!response.ok||data.ok!==true)throw Object.assign(Error(/^[a-z][a-z0-9_:.-]{0,149}$/.test(data.error||'')?data.error:'client_cloud_rejected'),{httpStatus:response.status});return data;}
+ // call('/finish') flushes this outbox first, including direct proof refreshes.
+ // Otherwise an offline run event can arrive after success and regress the
+ // server's latest state. flush itself only calls /event, so it cannot recurse.
+ async flush(){
+  if(this.flushing)return this.flushing;
+  this.flushing=(async()=>{while(this.outbox.length){const event=this.outbox[0];try{await this.call('/event',event);}catch(error){
+   if(![400,409].includes(error.httpStatus))throw error;
+   // A permanently rejected old diagnostic must not prevent fresh scope reads.
+   // Keep its full local evidence before removing it from the active outbox.
+   const file=path.join(this.root,'blocked-cloud-events.json'),saved=core.read(file,[]);
+   saved.push({at:new Date().toISOString(),reason:error.message,event});core.atomic(file,saved);
+  }this.outbox.shift();core.atomic(this.outboxFile,this.outbox);}})();
+  try{return await this.flushing;}finally{this.flushing=null;}
+ }
+ async event(body){this.outbox.push(body);core.atomic(this.outboxFile,this.outbox);try{await this.flush();}catch{}}
  async config(date,platform='meituan_delivery'){await this.flush();const c=await this.call('/config?date='+encodeURIComponent(date)+'&platform='+encodeURIComponent(platform));if(platform!=='meituan_delivery'&&c.platform!==platform||c.date!==date||!Array.isArray(c.bindings)||!Array.isArray(c.missing)||!/^[a-f0-9]{64}$/.test(c.version||'')||!/^[A-Za-z0-9_-]+$/.test(c.account||'')||c.bindings.some(r=>typeof r.platform_id!=='string'||!/^\d+$/.test(r.platform_id))||new Set(c.bindings.map(r=>r.platform_id)).size!==c.bindings.length)throw Error('client_cloud_scope_invalid');return c;}
  async upload(job,result,scope){
  const sources=job.reportType==='settlement'&&(!job.platform||job.platform==='meituan_delivery')?result.receipts:[result];

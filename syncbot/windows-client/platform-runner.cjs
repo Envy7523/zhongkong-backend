@@ -51,7 +51,7 @@ async function report({root,platform,type,date,scope,extension,downloadDirectory
  const directory=require('./download-directory.cjs').resolveDownloadDirectory({downloadDirectory}),received=fs.readdirSync(directory).filter(name=>canonical(name)===canonical(row[0])).some(name=>{const st=fs.lstatSync(path.join(directory,name));return st.isFile()&&!st.isSymbolicLink()&&st.mtimeMs>=Date.parse(prior.at)-2000;});const permissions=require('./download-diagnostics.cjs').downloadDiagnostics(platform,directory),permissionRetry=!!prior.downloadRetryAt&&!prior.downloadPermissionRetryAt&&(permissions.includes('download_multiple_top_allow')||permissions.includes('download_multiple_default_allow'));if(!received&&(!prior.downloadRequestedAt||(!prior.downloadRetryAt||permissionRetry)&&Date.now()-Date.parse(prior.downloadRequestedAt)>120000))await step('download-file',{filename:row[0],retry:!!prior.downloadRequestedAt,permissionRetry});
  return {filename:row[0],match:name=>canonical(name)===canonical(row[0]),since:Date.parse(prior.at),trace:['download_requested_'+Number(!!core.read(journal,null)?.downloadRequestedAt),'download_retried_'+Number(!!core.read(journal,null)?.downloadRetryAt)]};
 }
-async function settlement({root,platform,date,extension}){
+async function settlement({root,platform,date,extension,downloadDirectory}){
  const flash=platform==='taobao_flash',page=()=>extension.attach({platform}).page;await page().bringToFront();let main=page();
  if(flash){const menu=main.locator('li.cook-menu-item').filter({visible:true,hasText:/^财务下载$/});if(!await menu.count())await navigation(()=>require('../src/taobao-flash/browser-probe').runFlashStep(main,{step:'finance-menu'}));main=page();await navigation(()=>require('../src/taobao-flash/browser-probe').runFlashStep(main,{step:'finance-download'}));}
  else{await main.broker.call(main.descriptor,{action:'openJdStatement'});await waitFor(async()=>page(),p=>new URL(p.url()).pathname==='/v3/financial/statement/newDownload'?p:false,{timeout:45000,error:'jd_statement_navigation_failed'});main=page();}
@@ -61,8 +61,19 @@ async function settlement({root,platform,date,extension}){
  if(!prior){if(!flash){await step('dismiss-guide');await step('completion-date');}await step('custom-date');if(flash)await step('summary');await step('open-date');await step(flash?'select-day':'calendar-day');if(!flash)await step('confirm-date');await step(flash?'export-summary':'export-orders');prior=core.read(journal,null);}
  if(flash){await waitFor(()=>inspect(frame),state=>{const found=state.tableRows.filter(r=>r[1]==='汇总'&&r[2]===date+' - '+date+' 账单汇总'&&r[4]==='导出成功'&&Date.parse(r[0].replace(' ','T')+'+08:00')>=Date.parse(prior.at)-2000);if(found.length>1)throw Error('platform_export_ambiguous');return found[0];});if(!prior.downloadRequestedAt||!prior.downloadRetryAt&&Date.now()-Date.parse(prior.downloadRequestedAt)>120000)await step('download-summary',{retry:!!prior.downloadRequestedAt});return {match:name=>name.endsWith('.xlsx')&&name.includes(date.replaceAll('-','.')+'-'+date.replaceAll('-','.'))&&name.includes('账单汇总'),since:Date.parse(prior.at)};}
  const record=await waitFor(async()=>{await step('refresh-records');return inspect(frame);},state=>{const rows=state.tableRows.filter(r=>/^\d+$/.test(r[0]||'')&&new RegExp('^\\d+_对账单下载_'+date.replaceAll('-','')+'_全部_').test(r[1]||'')&&r[3]==='下载'&&Date.parse(r[2].replace(' ','T')+'+08:00')>=Date.parse(prior.at)-2000);if(rows.length>1)throw Error('platform_export_ambiguous');return rows[0];});
- const jobId=record[0];if(!prior.downloadRequestedAt)await step('download-orders',{jobId});
- const state=await inspect(frame),parts=state.tableRows.filter(r=>new RegExp('^\\d+_对账单下载_'+date.replaceAll('-','')+'_全部_'+jobId+'_\\d+$').test(r[0]||''));if(parts.length!==1)throw Error('platform_download_parts_incomplete');const partId=parts[0][0].split('_').at(-1);if(!core.read(journal,null).partRequestedAt)await step('download-part',{jobId,partId});return {match:name=>name===parts[0][0]+'.zip'||name===parts[0][0]+'_0.xlsx',since:Date.parse(prior.at)};
+ const jobId=record[0];
+ // Navigation above closes the part picker, including after a process restart.
+ // Reopen the same verified export, never replay its export submission.
+ await step('download-orders',{jobId,reopen:!!prior.downloadRequestedAt});
+ const part=await waitFor(()=>inspect(frame),state=>{
+  const parts=state.tableRows.filter(r=>new RegExp('^\\d+_对账单下载_'+date.replaceAll('-','')+'_全部_'+jobId+'_\\d+$').test(r[0]||''));
+  if(parts.length>1)throw Error('platform_download_parts_incomplete');return parts[0];
+ },{timeout:45000,error:'platform_download_parts_incomplete'});
+ const partId=part[0].split('_').at(-1),match=name=>canonical(name)===part[0]+'.zip'||canonical(name)===part[0]+'_0.xlsx';
+ const current=core.read(journal,null),directory=require('./download-directory.cjs').resolveDownloadDirectory({downloadDirectory});
+ const received=fs.readdirSync(directory).filter(match).some(name=>{const st=fs.lstatSync(path.join(directory,name));return st.isFile()&&!st.isSymbolicLink()&&st.mtimeMs>=Date.parse(prior.at)-2000;});
+ if(!received&&(!current.partRequestedAt||!current.partRetryAt&&Date.now()-Date.parse(current.partRequestedAt)>=120000))await step('download-part',{jobId,partId,retry:!!current.partRequestedAt});
+ return {match,since:Date.parse(prior.at)};
 }
 async function runPlatform(options){const {root,platform,type,date,scope}=options;if(!['jd_delivery','taobao_flash'].includes(platform)||!['operating','product','settlement'].includes(type))throw Error('client_platform_invalid');
  const target=path.join(root,'downloads',platform,date,type+'.xlsx'),manifest=target+'.json',parser=platform==='jd_delivery'?require('../src/jd-delivery/source-file').inspectJdBuffer:require('../src/taobao-flash/source-file').inspectFlashBuffer,parse=buffer=>parser(buffer,{type,date,expectedStoreIds:scope.bindings.map(r=>r.platform_id),allowUnmatched:true});

@@ -2,9 +2,10 @@
 const contract=require('./product-contract');
 const {selectOperatingStores,validateJobFilename}=require('./operating-download');
 async function prepareProductReport(frame,{storeIds}){
- await frame.locator('span.tab-text').filter({hasText:/^商品$/}).click();
+ await frame.locator('span.tab-text').filter({visible:true,hasText:/^商品$/}).click();
  const daily=frame.getByText('按天',{exact:true}).filter({visible:true});
  if(!await daily.evaluate(el=>[...el.classList].some(c=>c.startsWith('active_'))))await daily.click();
+ if(!await daily.evaluate(el=>[...el.classList].some(c=>c.startsWith('active_'))))throw Error('product_ui_grain_mismatch');
  await selectOperatingStores(frame,storeIds);
  const labels=frame.locator('label.roo-checkbox').filter({visible:true});
  for(const metric of contract.metrics)await labels.filter({hasText:new RegExp('^'+metric+'$')}).waitFor({state:'visible'});

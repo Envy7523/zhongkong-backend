@@ -1,7 +1,7 @@
 'use strict';
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function visiblePage(page){await page.bringToFront();for(let i=0;i<12;i++){const health=await page.broker.call(page.descriptor,{action:'documentHealth'});if(health.visibility==='visible')return;await pause(200);}throw Error('client_browser_not_visible');}
-async function runJdStepImpl(page,{step,date,jobId,partId,root}){
+async function runJdStepImpl(page,{step,date,jobId,partId,root,reopen=false,retry=false}){
  if(new URL(page.url()).origin!=='https://store.jddj.com')throw Error('jd_origin_invalid');
  await visiblePage(page);
  if(step==='dismiss-guide'){
@@ -34,23 +34,29 @@ async function runJdStepImpl(page,{step,date,jobId,partId,root}){
   const prior=JSON.parse(fs.readFileSync(journal,'utf8'));
   const state=await page.broker.call(page.descriptor,{action:'inspectJdReport'});
   const records=state.tableRows.filter(r=>r[0]===jobId&&new RegExp('^\\d+_对账单下载_'+date.replaceAll('-','')+'_全部_').test(r[1])&&r[3]==='下载');
-  if(records.length!==1||Date.parse(records[0][2].replace(' ','T')+'+08:00')<Date.parse(prior.at)-2000)throw Error('jd_download_record_mismatch');
+  const created=records.length===1?Date.parse(records[0][2].replace(' ','T')+'+08:00'):NaN,submitted=Date.parse(prior.at);
+  if(records.length!==1||!Number.isFinite(created)||!Number.isFinite(submitted)||created<submitted-2000)throw Error('jd_download_record_mismatch');
   const merchantId=records[0][1].split('_')[0];
+  if(prior.jobId&&prior.jobId!==jobId||prior.merchantId&&prior.merchantId!==merchantId)throw Error('jd_download_record_mismatch');
   const row=page.locator('tr').filter({visible:true,has:page.getByText(jobId,{exact:true})});
   if(await row.count()!==1)throw Error('jd_download_record_mismatch');
-  if(prior.downloadRequestedAt)throw Error('jd_download_already_requested');
-  fs.writeFileSync(journal,JSON.stringify({...prior,jobId,merchantId,downloadRequestedAt:new Date().toISOString()},null,2));
+  // This link opens the existing export's part picker; it does not create a new
+  // export. A new page/session must be able to reopen the same verified picker.
+  if(prior.downloadRequestedAt&&!reopen)throw Error('jd_download_already_requested');
+  fs.writeFileSync(journal,JSON.stringify({...prior,jobId,merchantId,...(prior.downloadRequestedAt?{pickerReopenedAt:new Date().toISOString()}:{downloadRequestedAt:new Date().toISOString()})},null,2));
   await row.getByRole('link',{name:'下载',exact:true}).click();
  }
  else if(step==='download-part'){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date||'')||!/^\d+$/.test(jobId||'')||!/^\d+$/.test(partId||''))throw Error('jd_download_parameters_invalid');
   const fs=require('node:fs'),path=require('node:path'),journal=path.join(root||path.join(process.env.LOCALAPPDATA,'EtaigongDeliveryCollector'),'jd-export-tests',date+'-orders.json'),prior=JSON.parse(fs.readFileSync(journal,'utf8'));
-  if(prior.jobId!==jobId||prior.partRequestedAt)throw Error('jd_download_record_mismatch');
+  if(prior.jobId!==jobId||prior.partId&&prior.partId!==partId)throw Error('jd_download_record_mismatch');
+  if(prior.partRequestedAt&&(!retry||prior.partRetryAt||!Number.isFinite(Date.parse(prior.partRequestedAt))||Date.now()-Date.parse(prior.partRequestedAt)<120000))throw Error('jd_download_already_requested');
   const modal=page.locator('.dj-modal').filter({visible:true,hasText:'任务'+jobId+'为多下载项：'});
   if(!/^\d+$/.test(prior.merchantId||''))throw Error('jd_download_merchant_missing');
-  const row=modal.locator('tr').filter({hasText:prior.merchantId+'_对账单下载_'+date.replaceAll('-','')+'_全部_'+jobId+'_'+partId});
+  const filename=prior.merchantId+'_对账单下载_'+date.replaceAll('-','')+'_全部_'+jobId+'_'+partId;
+  const row=modal.locator('tr').filter({has:page.getByText(filename,{exact:true})});
   if(await row.count()!==1)throw Error('jd_download_part_mismatch');
-  fs.writeFileSync(journal,JSON.stringify({...prior,partId,partRequestedAt:new Date().toISOString()},null,2));
+  fs.writeFileSync(journal,JSON.stringify({...prior,partId,...(prior.partRequestedAt?{partRetryAt:new Date().toISOString()}:{partRequestedAt:new Date().toISOString()})},null,2));
   await row.getByRole('link',{name:'下载',exact:true}).click();
  }
  else if(step==='export-orders'){
