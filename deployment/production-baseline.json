@@ -1,17 +1,16 @@
 {
-  "root": "/opt/zhongkong/releases/attendance-sync-request-20261102",
-  "pid": "2979748",
-  "cwd": "/opt/zhongkong/releases/attendance-sync-request-20261102",
-  "backend_commit": "984673ecea77f9386c490efd2a1e621efb2c58cd",
-  "frontend_dist": "/opt/zhongkong/frontend-releases/roster-8b6c2a996c31-20261102/dist",
-  "frontend_index_sha256": "f8f0402165d324bd038b1230d1bc4d2b79951b2f7c4f9cbb9940e1ac35c61d27",
+  "root": "/opt/zhongkong/releases/meituan-income-rename-v4-20261103",
+  "pid": "3185842",
+  "cwd": "/opt/zhongkong/releases/meituan-income-rename-v4-20261103",
+  "backend_commit": "05cd731813b9c255859738cde3cbf985ff6727b1",
+  "frontend_dist": "/opt/zhongkong/frontend-releases/meituan-income-rename-v2-20261103/dist",
+  "frontend_index_sha256": "f696291c4a9178d48bb012d91c4d7a293bbebf158af9ab82a2c614fa109eb54b",
   "frontend_entry": [
-    "/assets/index-C3Cbs2BN.js"
+    "/assets/index-PhfwzgLy.js"
   ],
   "frontend_manifest": {
-    "commit": "8b6c2a996c3104a2b853a41447453e2a77abf476",
-    "published_at": "2026-11-02T03:42:23.992523+00:00",
-    "backend_pid": "2979748"
+    "source_commit": "2d8b3e598526615a6f67dd0fea99074260eae76e",
+    "published_at": "2026-11-03T07:53:13.297527+00:00"
   },
   "sources": {
     "frontend/src/App.vue": {
@@ -110,9 +109,10 @@
       "bytes": 2314
     },
     "frontend/src/components/MeituanOperatingSource.vue": {
-      "sha256": "96456210c20aa08733aa6133eafb5954b76e72773173060e7de26ea1c0ca7572",
-      "normalized_sha256": "00cf986b67c71354d2458471a8cec0e58371bf66276202a40558c0e729a44c32",
-      "bytes": 3927
+      "sha256": "18c5dfd4f6fd449fe83d0566356c74857103011ae988b9a5f1523a7d4bd41dd2",
+      "normalized_sha256": "8a0e5b9cef5a56e9ae7f9d7483e2669586226464ce058c3b8caa48746adf5c7a",
+      "bytes": 4456,
+      "source": "active_frontend_release_snapshot"
     },
     "frontend/src/components/MeituanSettlement.vue": {
       "sha256": "76697d40a9d5871dc2cf161f65947bbafff160826e489e4923167347590cc03a",
@@ -635,9 +635,10 @@
       "bytes": 30507
     },
     "frontend/src/views/analysis/BusinessAnalytics.vue": {
-      "sha256": "08ef7d26c1732ecc2ab5ece2cde0a880a37dfb3018f6def95799382262d7cc0f",
-      "normalized_sha256": "08ef7d26c1732ecc2ab5ece2cde0a880a37dfb3018f6def95799382262d7cc0f",
-      "bytes": 295757
+      "sha256": "51e75a43e8856d56e7b1cfab1559757ed68dfbb4d069d4fe8cffbef5197fd1b4",
+      "normalized_sha256": "51e75a43e8856d56e7b1cfab1559757ed68dfbb4d069d4fe8cffbef5197fd1b4",
+      "bytes": 296705,
+      "source": "active_frontend_release_snapshot"
     },
     "frontend/src/views/analysis/DeliveryFeeRules.vue": {
       "sha256": "561d46563307adb03ce57da3e147daadaa9e93206f0ba1a42dd56b24baa57513",
@@ -1061,9 +1062,9 @@
       "bytes": 10910
     },
     "lib/business-analytics.js": {
-      "sha256": "a794348162b2b8814b938fe3531f27a0584e84a33d6d9957f33e912051a33ed6",
-      "normalized_sha256": "aee6c87f9020c9dd33ef87d8f143b3b2f7d72b0024917f920e71fac00a48e93a",
-      "bytes": 332132
+      "sha256": "28115ec962480a8c53985fe9aea7dbed4a47865777a48db5f17d7e3ff0a06c42",
+      "normalized_sha256": "a34dc90d67384295cb77b2d4b39c116ba8bdbcb3c0c2cc990924116b4e4b95b0",
+      "bytes": 332651
     },
     "lib/business-ledger-router.js": {
       "sha256": "da77ea1e46b72ce15d0608f1e2134e349e6ded9a3821ecc28c458cb782c29f1b",
@@ -1141,9 +1142,9 @@
       "bytes": 7519
     },
     "lib/delivery-client-sync.js": {
-      "sha256": "8b5118c0a67d43e96b0d884a8e598fbe40d25961eadfc064af58e010a9af9ae6",
-      "normalized_sha256": "091f57ff072e130dbc5277c18442ec70ed60c7adcac88a939b9b8fc65c494357",
-      "bytes": 22674
+      "sha256": "3a3a8288a9f085525a5849a497dc8eca54eedadb2e9f33bf9f636a616aade61b",
+      "normalized_sha256": "3a3a8288a9f085525a5849a497dc8eca54eedadb2e9f33bf9f636a616aade61b",
+      "bytes": 22601
     },
     "lib/delivery-client-tasks.js": {
       "sha256": "7906684197264db0561e7fe3252e4c2c813697a305065a314ded020225f20a0c",
@@ -1171,9 +1172,9 @@
       "bytes": 2797
     },
     "lib/delivery-review-exceptions.js": {
-      "sha256": "7fb133050e6aca4c002b0ed0c3a489fe48de9de740919f0b35a97ac61650f02d",
-      "normalized_sha256": "43a261724765e3baceff200dc0041bbfafa249414b02bfcddf5f11ff7276c042",
-      "bytes": 4178
+      "sha256": "bf1260895441950d0a8508cb3ad600ed918531e3257b552b14a95784314e1e49",
+      "normalized_sha256": "63d06cccf5e11eb498b75c6c3fbc43bb8d5375c9c15e798075a2a53d905c8dbf",
+      "bytes": 4326
     },
     "lib/delivery-source-expansion.js": {
       "sha256": "3d209e1a4d7b6d8b52e3f1a56fa24b0562219d11dd9b1112938d2b45bed9c233",
@@ -1346,9 +1347,9 @@
       "bytes": 16323
     },
     "lib/item-update-evidence.js": {
-      "sha256": "914d968858949b1a09d645ff8d61bdfcc86351a696be7c474c3e8a062cb7fa7e",
-      "normalized_sha256": "62c8047860b14ad78e87487cf4a37c9453d288e00f67572c9ca7a1316130f23e",
-      "bytes": 6655
+      "sha256": "55e7fb80090a38aa5ddafc66e13033abf78473dc1cb132ed3663724a32e0e1e3",
+      "normalized_sha256": "1487498d6dc909ac8edbbf2ff0d74908440470076d0e3c5b29f64d45ac733056",
+      "bytes": 7720
     },
     "lib/knowledge-banners.js": {
       "sha256": "19adb774fc40f1fbbee96aac3189faa0ffb67079eeb9d51dfc3dfedb7b7d4e71",
@@ -1386,9 +1387,9 @@
       "bytes": 1621
     },
     "lib/meituan-delivery-sync.js": {
-      "sha256": "375348f370a381f3132373ca38258b3af5ba52f52d3ea4896776662c954ea70c",
-      "normalized_sha256": "ee3f17df9b6400fcd4c46bab1deba87079db4ffac231a63b3f3865ff2c45bfb0",
-      "bytes": 9495
+      "sha256": "46b5e8b488d92893df508ba22d9e1bbe96f2aaca2acb9d8ca10670aef8cf02d8",
+      "normalized_sha256": "46b5e8b488d92893df508ba22d9e1bbe96f2aaca2acb9d8ca10670aef8cf02d8",
+      "bytes": 9737
     },
     "lib/meituan-group-breakdown.js": {
       "sha256": "2c4072cc40ed0a1d19e59a77e08695af2535be79f441f4fffaf2ff3f798ba35b",
@@ -1399,6 +1400,11 @@
       "sha256": "9ba867adf6256213bff5b6e7182ab32ed2f434a9d116fd140068a19beddfa10a",
       "normalized_sha256": "fa1c4de156bafddb2166504bb69e5c2cf16166bee74c9fc949b084d6a99535d5",
       "bytes": 3553
+    },
+    "lib/meituan-income-basis.js": {
+      "sha256": "00ed1b038667bc1e02e8462be1ac7d07721f436e405d92d4c4166eb116fc0191",
+      "normalized_sha256": "00ed1b038667bc1e02e8462be1ac7d07721f436e405d92d4c4166eb116fc0191",
+      "bytes": 2285
     },
     "lib/meituan-oneclick.js": {
       "sha256": "95161bbed7af3c97f891084c0b4a9a8683f0cb67698c28a7e2a51614d084a6b8",
@@ -2086,9 +2092,9 @@
       "bytes": 8995
     },
     "syncbot/src/meituan-delivery/operating-file.js": {
-      "sha256": "7cbcb37f79dbe889c01bdc6ec4667f04fc61d1eee69fde6c638c3c742f8eccef",
-      "normalized_sha256": "9e8151a9638d64e7fe11abfff9b324c697e0971d351de1299661df2b9119887f",
-      "bytes": 8196
+      "sha256": "568bbf8a1816750ebbf471b125ec541a533c52845954e2e886de0514955b9446",
+      "normalized_sha256": "568bbf8a1816750ebbf471b125ec541a533c52845954e2e886de0514955b9446",
+      "bytes": 8357
     },
     "syncbot/src/meituan-delivery/platform-access.js": {
       "sha256": "69bcca033b6403018737910b9cd3e5e7056d28da05711e3a8469e2b736808963",
@@ -2758,12 +2764,27 @@
     }
   },
   "gateway_footer_sha256": "a41674a21fb36b0fdeff82c7050343a56923f6e7529a61a033df70b0cf97ce56",
-  "checked_at": "2026-11-02T08:16:07.623Z",
+  "checked_at": "2026-11-03T08:01:10.435Z",
   "gateway": {
     "footer_sha256": "a41674a21fb36b0fdeff82c7050343a56923f6e7529a61a033df70b0cf97ce56",
     "script_path": "/_site/icp-footer-20261102.js",
     "filing": "粤ICP备2026169803号",
     "owner": "domain_nginx",
     "local_preview": "vite_serve_only"
+  },
+  "collection_runtime": {
+    "cashier_schedule": {
+      "directory": "/opt/zhongkong-sync-bot/releases/cashier-3062b37-20261103",
+      "commit": "3062b37a0a31b3e05cf729499f8d8ad4100de302"
+    },
+    "browser_host": {
+      "directory": "/opt/zhongkong-sync-bot/releases/cashier-4026699-20261103",
+      "commit": "4026699da71e49667a3c065659a22a739967cf72"
+    },
+    "windows": {
+      "version": "0.5.38",
+      "sequence": 38,
+      "package_sha256": "575159b1ddb89355691c45a9aac21b7393fce5c41ab0609065eabebc01380c84"
+    }
   }
 }
